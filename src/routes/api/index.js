@@ -4,6 +4,7 @@ import episodeRoutes from './episodes.js';
 import settingsRoutes from './settings.js';
 import setupRoutes from './setup.js';
 import showRoutes from './shows.js';
+import statsRoutes from './stats.js';
 import statusRoutes from './status.js';
 
 /**
@@ -24,5 +25,6 @@ export default async function apiRoutes(fastify, options) {
   await fastify.register(showRoutes, services);
   await fastify.register(episodeRoutes, services);
   await fastify.register(activityRoutes, services);
+  await fastify.register(statsRoutes, services);
   await fastify.register(settingsRoutes, services);
 }

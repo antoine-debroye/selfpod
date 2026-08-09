@@ -1,0 +1,102 @@
+<%
+  const entries = it.entries || [];
+  const kindLabels = { download: 'Download', stream: 'Stream', cover: 'Artwork', feed: 'Feed check' };
+  /* On one episode's own page every row would name the same episode, so the column
+     is dropped and the range detail moves into the "What" cell instead. */
+  const showEpisode = it.hideEpisode !== true;
+%>
+<div id="access-log">
+  <% if (!entries.length) { %>
+    <div class="empty">
+      <div class="empty__title"><%= it.failuresOnly ? 'No failures recorded' : 'Nothing here yet' %></div>
+      <p class="empty__hint">
+        <% if (it.failuresOnly) { %>
+          No request for an episode, a feed or artwork has failed. This is the good outcome.
+        <% } else { %>
+          As soon as a podcast app fetches your feed or downloads an episode, it appears here.
+          Nothing is recorded for pages you view yourself in SelfPod.
+        <% } %>
+      </p>
+    </div>
+  <% } else { %>
+    <div class="table-scroll">
+      <table class="ep-table log-table">
+        <thead>
+          <tr>
+            <th scope="col">When</th>
+            <th scope="col">What</th>
+            <% if (showEpisode) { %><th scope="col">Episode</th><% } %>
+            <th scope="col">App</th>
+            <th scope="col">Sent</th>
+            <th scope="col">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% for (const row of entries) { %>
+            <tr<%~ row.ok && !row.incomplete ? '' : ' class="is-missing"' %>>
+              <td class="ep-date mono" title="<%= it.helpers.formatDateTime(row.requestedAt) %>">
+                <%= it.helpers.relativeTime(row.requestedAt) %>
+              </td>
+              <td>
+                <span class="badge badge-mute badge--tight"><%= kindLabels[row.kind] || row.kind %></span>
+                <% if (!showEpisode && row.rangeHeader) { %>
+                  <div class="log-range mono"><%= row.rangeHeader %></div>
+                <% } %>
+              </td>
+              <% if (showEpisode) { %>
+              <td>
+                <div class="ep-title">
+                  <% if (row.episodeTitle) { %>
+                    <% if (row.showSlug) { %>
+                      <a href="/shows/<%= encodeURIComponent(row.showSlug) %>/episodes/<%= encodeURIComponent(row.episode_id) %>"><%= row.episodeTitle %></a>
+                    <% } else { %>
+                      <%= row.episodeTitle %>
+                    <% } %>
+                  <% } else { %>
+                    <span class="dim"><%= row.showTitle || 'unknown show' %></span>
+                  <% } %>
+                  <% if (row.rangeHeader) { %>
+                    <small class="mono">range <%= row.rangeHeader %></small>
+                  <% } else if (row.episodeTitle) { %>
+                    <small><%= row.showTitle %></small>
+                  <% } %>
+                </div>
+              </td>
+              <% } %>
+              <td class="dim"><%= row.client || 'Unknown' %></td>
+              <td class="size">
+                <%= it.helpers.formatBytes(row.bytesSent) %><%
+                %><% if (row.totalBytes && row.bytesSent !== null && row.bytesSent < row.totalBytes) { %><%
+                  %><small class="dim"> of <%= it.helpers.formatBytes(row.totalBytes) %></small><%
+                %><% } %>
+              </td>
+              <td>
+                <% if (!row.ok) { %>
+                  <span class="badge badge-err badge--tight"><span class="d" aria-hidden="true"></span><%= row.statusCode %></span>
+                <% } else if (row.incomplete) { %>
+                  <span class="badge badge-warn badge--tight"><span class="d" aria-hidden="true"></span>Partial</span>
+                <% } else { %>
+                  <span class="badge badge-ok badge--tight"><span class="d" aria-hidden="true"></span><%= row.statusCode %></span>
+                <% } %>
+                <% if (row.error) { %>
+                  <div class="log-error"><%= row.error %></div>
+                <% } %>
+              </td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+
+    <% if (it.hasMore) { %>
+      <div class="log-more">
+        <button class="btn btn-ghost btn-sm" type="button"
+                hx-get="/ui/stats/log?offset=<%= it.nextOffset %><%= it.showFilter ? '&showId=' + encodeURIComponent(it.showFilter) : '' %><%= it.failuresOnly ? '&failuresOnly=1' : '' %>"
+                hx-target="#access-log" hx-swap="outerHTML">
+          Show older
+        </button>
+        <span class="dim"><%= entries.length %> of <%= it.total %></span>
+      </div>
+    <% } %>
+  <% } %>
+</div>

@@ -23,13 +23,14 @@
     </div>
   <% } else { %>
     <div class="table-scroll">
-      <table class="ep-table">
+      <table class="ep-table ep-table--pinned">
         <thead>
           <tr>
             <th scope="col">Title</th>
             <th scope="col">Published</th>
             <th scope="col">Duration</th>
             <th scope="col">Size</th>
+            <th scope="col" title="Whole-file downloads / partial streams">Fetches</th>
             <th scope="col">Status</th>
             <th scope="col"><span class="sr-only">Actions</span></th>
           </tr>
@@ -43,6 +44,12 @@
     </div>
 
     <p class="help-note" style="margin-top:14px">
+      <strong>Fetches</strong> counts whole-file downloads first, then partial streams — a download is an app
+      saving the episode, a stream is a player seeking through it. Neither means someone listened.
+      <a href="/stats?showId=<%= encodeURIComponent(show.slug) %>">See the full access log</a>.
+    </p>
+
+    <p class="help-note" style="margin-top:10px">
       <strong>Remove from feed</strong> keeps the audio file and can be undone — a rescan will not bring the
       episode back on its own. <strong>Delete file</strong> erases the audio from disk and cannot be undone.
       <% if (removed.length) { %>

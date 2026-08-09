@@ -1,5 +1,6 @@
 import { SHOW_STATUS } from '../constants.js';
 import { coverUrl, feedUrl, mediaUrl } from '../lib/urls.js';
+import { NO_ACCESS } from './stats.js';
 
 /**
  * Turns database rows into the shape the API returns and the templates render.
@@ -8,7 +9,7 @@ import { coverUrl, feedUrl, mediaUrl } from '../lib/urls.js';
  * can never drift: a field the dashboard relies on is the same field an API
  * consumer sees.
  */
-export function createPresenters({ settings, shows, episodes, covers, activity }) {
+export function createPresenters({ settings, shows, episodes, covers, activity, stats }) {
   function presentShow(show, { includeEpisodes = false } = {}) {
     const baseUrl = settings.publicBaseUrl();
     const counts = episodes.counts(show.id);
@@ -99,13 +100,27 @@ export function createPresenters({ settings, shows, episodes, covers, activity }
         : null,
       createdAt: show.created_at,
       updatedAt: show.updated_at,
-      ...(includeEpisodes
-        ? { episodes: episodes.listByShow(show.id).map((episode) => presentEpisode(episode, show)) }
-        : {}),
+      stats: stats?.forShow(show.id) ?? null,
+      ...(includeEpisodes ? { episodes: presentEpisodesOf(show) } : {}),
     };
   }
 
-  function presentEpisode(episode, show) {
+  /**
+   * Every episode of a show, with its access counts attached.
+   *
+   * The counts are fetched as one grouped query rather than per episode: a show
+   * with 300 episodes would otherwise issue 300 queries to render one page.
+   */
+  function presentEpisodesOf(show) {
+    const access = stats?.forShowEpisodes(show.id) ?? {};
+    return episodes
+      .listByShow(show.id)
+      // An episode with no rows gets an explicit zero rather than being left to
+      // fall through to a per-episode lookup, which would reintroduce the N+1.
+      .map((episode) => presentEpisode(episode, show, { access: access[episode.id] ?? NO_ACCESS }));
+  }
+
+  function presentEpisode(episode, show, { access } = {}) {
     const baseUrl = settings.publicBaseUrl();
     const tokenPath = `${encodeURIComponent(show.slug)}/${encodeURIComponent(show.feed_token)}`;
     return {
@@ -133,6 +148,9 @@ export function createPresenters({ settings, shows, episodes, covers, activity }
         : null,
       localMediaUrl: `/media/${tokenPath}/${encodeURIComponent(episode.id)}/${encodeURIComponent(episode.filename)}`,
       updatedAt: episode.updated_at,
+      // Supplied by the caller when a whole list is being presented; looked up
+      // otherwise, so a single episode still carries its numbers.
+      stats: access ?? stats?.forEpisode(episode.id) ?? null,
     };
   }
 

@@ -30,6 +30,12 @@ regenerate button.
   `flac`. Nothing is converted; files are served exactly as you left them.
 - **Keeps your feeds private.** Each show has its own unguessable token in its
   URL, rotatable if it ever leaks. No account needed in the podcast app.
+- **Counts downloads and plays, per episode and per show.** Whole-file downloads
+  and partial streams are counted separately, alongside a request-by-request log
+  naming the app that asked (“Pocket Casts”, “Apple Podcasts”). Failed requests
+  are shown first, so an episode that will not download in someone's podcast app
+  is visible here instead of only on their phone. No IP addresses are stored, and
+  your own visits to the admin interface are never counted.
 - **Tells you when something is wrong.** Every scan is logged in plain language —
   a permission problem names the exact path and the UID SelfPod runs as. You
   should never have to read container logs over SSH to find out why an episode
@@ -280,6 +286,36 @@ what actually guarantees correctness.
 If SelfPod notices the watcher isn't reporting changes that the periodic scan
 keeps finding, it switches itself to polling and says so in the UI. That message
 is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
+
+## Statistics, and what they honestly mean
+
+**Statistics** in the sidebar records every request a podcast app makes, and shows
+it three ways: totals for the instance, a row per show, and a per-episode count in
+each show's episode table. Each episode's own page carries its numbers and its own
+request log.
+
+Two figures are counted separately, because merging them makes both meaningless:
+
+- a **download** is a request for the whole file — an app fetching an episode for
+  offline listening;
+- a **stream** is a range request — a player starting playback without downloading
+  first, or seeking. One listener scrubbing through an episode generates many.
+
+Neither is a *listen*. No podcast server can know whether a downloaded episode was
+ever played, and SelfPod does not pretend to. Take the download figure as "how many
+apps asked for this", nothing more.
+
+**Failures are the useful half.** A request SelfPod could not serve is recorded with
+its status code and a plain-language reason — `Permission denied reading … as UID
+3000`, or `episode.m4a is not on disk` — and surfaced at the top of the page. This
+is the situation that used to be invisible: the file looked fine in the admin UI and
+failed only in someone's podcast app.
+
+What is deliberately **not** recorded: no IP addresses, no raw user agents (only a
+coarse app family), and never the feed token, which appears in every one of these
+URLs and is a credential. Requests you make yourself while signed in — including
+previewing an episode in the editor — are excluded, so the numbers stay yours. The
+log keeps a year of history and trims itself daily.
 
 ## Locked out?
 

@@ -17,13 +17,33 @@ import { SETTING_KEYS } from './settings.js';
  * ticks to pile up, and the interval is re-read every tick so a change in the UI
  * takes effect without a restart.
  */
-export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity }) {
+export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats }) {
   let timer = null;
   let running = false;
   let stopped = true;
   let lastRunAt = null;
   let nextRunAt = null;
   let sessionCleanup = null;
+  let lastTrimDay = null;
+
+  /**
+   * Keeps the access log bounded.
+   *
+   * Once a day rather than every tick: with a one-minute rescan interval this
+   * would otherwise be 1,440 pointless DELETEs, and the log is a year deep, so
+   * the exact hour it happens is irrelevant.
+   */
+  function trimAccessLog() {
+    if (!stats) return;
+    const today = new Date().toISOString().slice(0, 10);
+    if (lastTrimDay === today) return;
+    lastTrimDay = today;
+    try {
+      stats.trim();
+    } catch (err) {
+      logger?.warn({ err }, 'could not trim the media access log');
+    }
+  }
 
   function scheduleNext() {
     if (stopped) return;
@@ -62,6 +82,7 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
       }
 
       sessionCleanup?.();
+      trimAccessLog();
     } catch (err) {
       logger?.error({ err }, 'scheduled rescan failed');
     } finally {

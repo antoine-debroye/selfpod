@@ -3,7 +3,8 @@ import { notFound } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
 import { MIN_PASSWORD_LENGTH } from '../../routes/api/setup.js';
-import { feedQrSvg } from '../lib/qr.js';
+import { subscribeQrCodes } from '../lib/qr.js';
+import { DEFAULT_SUBSCRIBE_TARGET } from '../lib/subscribe-links.js';
 
 /**
  * htmx fragment endpoints.
@@ -167,7 +168,8 @@ export default async function fragmentRoutes(fastify, services) {
       reply.header('HX-Reswap', 'outerHTML');
       return reply.view('partials/feed-box.eta', {
         show: presented,
-        qrSvg: await feedQrSvg(presented.feedUrl),
+        subscribeCodes: await subscribeQrCodes(presented.feedUrl),
+        defaultSubscribeTarget: DEFAULT_SUBSCRIBE_TARGET,
         helpers: fastify.viewHelpers,
       });
     });
@@ -367,6 +369,25 @@ export default async function fragmentRoutes(fastify, services) {
         showFilter: filtered?.slug ?? null,
         hasMore: offset + entries.length < total,
         nextOffset: offset + entries.length,
+        helpers: fastify.viewHelpers,
+      });
+    });
+
+    /* ----------------------------------------------------------- statistics */
+
+    scoped.get('/ui/stats/log', async (request, reply) => {
+      const filter = services.logFilter(request);
+      const limit = services.logPageSize;
+      const entries = services.stats.list({ ...filter.query, limit, offset: filter.offset });
+      const total = services.stats.count(filter.query);
+
+      return reply.view('partials/access-log.eta', {
+        entries,
+        total,
+        showFilter: filter.slug,
+        failuresOnly: filter.query.failuresOnly,
+        hasMore: filter.offset + entries.length < total,
+        nextOffset: filter.offset + entries.length,
         helpers: fastify.viewHelpers,
       });
     });

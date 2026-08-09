@@ -18,6 +18,27 @@
   <td class="ep-date mono"><%= it.helpers.formatDate(episode.pubDate) %></td>
   <td class="dur"><%= it.helpers.formatDuration(episode.durationSeconds) %></td>
   <td class="size"><%= it.helpers.formatBytes(episode.fileSizeBytes) %></td>
+  <%
+    /* Downloads and streams are shown side by side rather than summed: one listener
+       seeking through an episode produces many streams, so a single combined figure
+       would read as popularity it does not represent. */
+    const access = episode.stats || { downloads: 0, streams: 0, failures: 0 };
+  %>
+  <td class="ep-reach">
+    <% if (access.downloads || access.streams) { %>
+      <span class="reach mono" title="<%= access.downloads %> download<%= access.downloads === 1 ? '' : 's' %>, <%= access.streams %> stream<%= access.streams === 1 ? '' : 's' %><%= access.lastAt ? ' — last ' + it.helpers.relativeTime(access.lastAt) : '' %>">
+        <%= access.downloads %><span class="reach__sep" aria-hidden="true">/</span><span class="reach__s"><%= access.streams %></span>
+      </span>
+    <% } else { %>
+      <span class="dim">—</span>
+    <% } %>
+    <% if (access.failures) { %>
+      <a class="badge badge-err badge--tight" href="/stats?showId=<%= encodeURIComponent(show.slug) %>&failuresOnly=1"
+         title="<%= access.failures %> failed request<%= access.failures === 1 ? '' : 's' %> for this episode">
+        <span class="d" aria-hidden="true"></span><%= access.failures %>
+      </a>
+    <% } %>
+  </td>
   <td><span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span></td>
   <td>
     <div class="actions">

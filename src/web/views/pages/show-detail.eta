@@ -43,14 +43,23 @@
 <div class="detail-grid">
   <div class="detail-left">
     <%~ include('../partials/cover-box', { show, helpers: it.helpers }) %>
-    <%~ include('../partials/feed-box', { show, qrSvg: it.qrSvg, helpers: it.helpers }) %>
+    <%~ include('../partials/feed-box', { show, subscribeCodes: it.subscribeCodes, defaultSubscribeTarget: it.defaultSubscribeTarget, helpers: it.helpers }) %>
   </div>
 
   <div class="detail-right">
     <%~ include('../partials/show-meta-form', { show, helpers: it.helpers }) %>
-    <%~ include('../partials/episode-table', { show, episodes: show.episodes, helpers: it.helpers }) %>
+    <%~ include('../partials/show-reach', { show, helpers: it.helpers }) %>
+  </div>
+</div>
 
-    <section class="form-card danger-zone">
+<%
+  /* The episode table is the densest thing on this page and now carries fetch
+     counts as well, which does not fit in a 600px column beside the artwork. It
+     sits below the two-column grid so it gets the full width. */
+%>
+<%~ include('../partials/episode-table', { show, episodes: show.episodes, helpers: it.helpers }) %>
+
+<section class="form-card danger-zone">
       <div class="ftitle">Danger zone</div>
       <div class="fdesc">Removing a show never touches your audio unless you explicitly ask it to.</div>
       <div class="set-row" style="border-bottom:none">
@@ -63,5 +72,3 @@
                 hx-target="#modal-root" hx-swap="innerHTML">Remove show…</button>
       </div>
     </section>
-  </div>
-</div>

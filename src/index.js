@@ -19,6 +19,7 @@ import { createPresenters } from './services/presenters.js';
 import { createScanner } from './services/scanner.js';
 import { createScheduler } from './services/scheduler.js';
 import { createSettings } from './services/settings.js';
+import { createStats } from './services/stats.js';
 import { createShows } from './services/shows.js';
 import { createWatcher } from './services/watcher.js';
 import { SCAN_TRIGGER } from './constants.js';
@@ -102,14 +103,17 @@ async function main() {
     db, config, settings, events, logger,
     shows, episodes, covers, metadata, activity, health,
   });
+  const stats = createStats({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
-  const scheduler = createScheduler({ settings, events, logger, scanner, episodes, watcher, activity });
+  const scheduler = createScheduler({
+    settings, events, logger, scanner, episodes, watcher, activity, stats,
+  });
 
-  const presenters = createPresenters({ settings, shows, episodes, covers, activity });
+  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats });
 
   const services = {
     config, logger, db, events, settings, health, activity, covers, metadata,
-    shows, episodes, feeds, scanner, watcher, scheduler,
+    shows, episodes, feeds, scanner, watcher, scheduler, stats,
     ...presenters,
   };
 

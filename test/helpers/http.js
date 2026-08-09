@@ -16,6 +16,7 @@ import { createMetadata } from '../../src/services/metadata.js';
 import { createPresenters } from '../../src/services/presenters.js';
 import { createScanner } from '../../src/services/scanner.js';
 import { createSettings } from '../../src/services/settings.js';
+import { createStats } from '../../src/services/stats.js';
 import { createShows } from '../../src/services/shows.js';
 import { copyFile } from 'node:fs/promises';
 import { FIXTURE_DIR, silentLogger } from './harness.js';
@@ -60,11 +61,12 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
     shows, episodes, covers, metadata, activity, health,
   });
 
-  const presenters = createPresenters({ settings, shows, episodes, covers, activity });
+  const stats = createStats({ db, logger: silentLogger });
+  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats });
 
   const services = {
     config, logger: silentLogger, db, events, settings, health, activity, covers, metadata,
-    shows, episodes, feeds, scanner, ...presenters,
+    shows, episodes, feeds, scanner, stats, ...presenters,
     watcher: { status: () => ({ mode: 'events', enabled: true, degraded: false, lastEventAt: null }), restart: async () => {} },
     scheduler: { status: () => ({ running: false, intervalSeconds: 300, lastRunAt: null, nextRunAt: null }) },
   };

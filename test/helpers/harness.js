@@ -15,6 +15,7 @@ import { createHealth } from '../../src/services/health.js';
 import { createMetadata } from '../../src/services/metadata.js';
 import { createScanner } from '../../src/services/scanner.js';
 import { createSettings } from '../../src/services/settings.js';
+import { createStats } from '../../src/services/stats.js';
 import { createShows } from '../../src/services/shows.js';
 
 export const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'audio');
@@ -57,6 +58,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   const shows = createShows({ db, config, events, logger: silentLogger, settings });
   const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger: silentLogger });
+  const stats = createStats({ db, logger: silentLogger });
   const scanner = createScanner({
     db, config, settings, events, logger: silentLogger,
     shows, episodes, covers, metadata, activity, health,
@@ -64,7 +66,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
 
   return {
     config, db, events, settings, health, activity, covers, metadata,
-    shows, episodes, feeds, scanner,
+    shows, episodes, feeds, scanner, stats,
     dataDir,
 
     /** Copies a fixture into a show folder, optionally under a different name. */

@@ -1,0 +1,176 @@
+<%
+  const o = it.overview;
+  const rows = it.showStats || [];
+  const busiest = it.busiest || [];
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">
+      <% if (o.lastAt) { %>last request <%= it.helpers.relativeTime(o.lastAt) %><% } else { %>no requests recorded yet<% } %>
+    </div>
+    <h1>Statistics</h1>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-card__n"><%= o.downloads.toLocaleString('en') %></div>
+    <div class="stat-card__l">Downloads</div>
+    <div class="stat-card__h">whole-file fetches — an app saving an episode for offline listening</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__n"><%= o.streams.toLocaleString('en') %></div>
+    <div class="stat-card__l">Streams</div>
+    <div class="stat-card__h">partial fetches — a player starting playback or seeking</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__n"><%= it.helpers.formatBytes(o.bytes) %></div>
+    <div class="stat-card__l">Audio served</div>
+    <div class="stat-card__h">total sent to subscribers</div>
+  </div>
+  <div class="stat-card<%= o.failures ? ' stat-card--bad' : '' %>">
+    <div class="stat-card__n"><%= o.failures.toLocaleString('en') %></div>
+    <div class="stat-card__l">Failed requests</div>
+    <div class="stat-card__h">
+      <% if (o.failures) { %>something a subscriber asked for could not be served<% } else { %>nothing has failed<% } %>
+    </div>
+  </div>
+</div>
+
+<p class="help-note" style="margin:16px 0 18px">
+  These are <strong>requests, not listens</strong> — no podcast server can know whether someone actually
+  played an episode, and SelfPod does not pretend otherwise. Requests you make yourself from this admin
+  interface are not counted. SelfPod records the app family (“Pocket Casts”, “Apple Podcasts”) but
+  deliberately stores neither IP addresses nor feed tokens.
+</p>
+
+<% if (it.failures.length) { %>
+  <div class="notice err" style="margin-bottom:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div>
+      <strong><%= it.failures.length === 1 ? 'One request failed' : it.failures.length + ' recent requests failed' %>.</strong>
+      A subscriber asked for something and did not get it.
+      <ul class="notice__list">
+        <% for (const row of it.failures.slice(0, 5)) { %>
+          <li>
+            <%= it.helpers.relativeTime(row.requestedAt) %> —
+            <%= row.episodeTitle || row.showTitle || 'unknown' %>
+            <span class="mono">(<%= row.statusCode %>)</span>
+            <% if (row.error) { %><br><span class="dim"><%= row.error %></span><% } %>
+          </li>
+        <% } %>
+      </ul>
+    </div>
+  </div>
+<% } %>
+
+<div class="form-card" style="margin-bottom:18px">
+  <div class="ftitle">Per show</div>
+  <div class="fdesc">Downloads and streams counted separately, plus how often podcast apps checked the feed.</div>
+  <% if (!rows.length) { %>
+    <div class="empty"><div class="empty__title">No shows yet</div></div>
+  <% } else { %>
+    <div class="table-scroll">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th scope="col">Show</th>
+            <th scope="col">Downloads</th>
+            <th scope="col">Streams</th>
+            <th scope="col">Served</th>
+            <th scope="col">Feed checks</th>
+            <th scope="col">Apps</th>
+            <th scope="col">Failures</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% for (const row of rows) { %>
+            <tr>
+              <td>
+                <div class="ep-title">
+                  <a href="/shows/<%= encodeURIComponent(row.slug) %>"><%= row.title %></a>
+                  <small><%= row.episodesTouched %> episode<%= row.episodesTouched === 1 ? '' : 's' %> fetched</small>
+                </div>
+              </td>
+              <td class="mono"><%= row.downloads.toLocaleString('en') %></td>
+              <td class="mono"><%= row.streams.toLocaleString('en') %></td>
+              <td class="size"><%= it.helpers.formatBytes(row.bytes) %></td>
+              <td class="mono"><%= row.feedFetches.toLocaleString('en') %></td>
+              <td class="dim"><%= row.clients.length ? row.clients.map((c) => c.client).join(', ') : '—' %></td>
+              <td>
+                <% if (row.failures) { %>
+                  <a class="badge badge-err badge--tight" href="/stats?showId=<%= encodeURIComponent(row.slug) %>&failuresOnly=1"><span class="d" aria-hidden="true"></span><%= row.failures %></a>
+                <% } else { %>
+                  <span class="dim">none</span>
+                <% } %>
+              </td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</div>
+
+<% if (busiest.length) { %>
+  <div class="form-card" style="margin-bottom:18px">
+    <div class="ftitle">Most fetched episodes</div>
+    <div class="fdesc">Across every show, by downloads then streams.</div>
+    <div class="table-scroll">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th scope="col">Episode</th>
+            <th scope="col">Downloads</th>
+            <th scope="col">Streams</th>
+            <th scope="col">Served</th>
+            <th scope="col">Last fetched</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% for (const row of busiest) { %>
+            <tr>
+              <td>
+                <div class="ep-title">
+                  <a href="/shows/<%= encodeURIComponent(row.showSlug) %>/episodes/<%= encodeURIComponent(row.episodeId) %>"><%= row.title %></a>
+                  <small><%= row.showTitle %></small>
+                </div>
+              </td>
+              <td class="mono"><%= row.downloads.toLocaleString('en') %></td>
+              <td class="mono"><%= row.streams.toLocaleString('en') %></td>
+              <td class="size"><%= it.helpers.formatBytes(row.bytes) %></td>
+              <td class="ep-date mono"><%= it.helpers.relativeTime(row.lastAt) %></td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+<% } %>
+
+<div class="form-card">
+  <div class="episode-table__head" style="justify-content:space-between">
+    <div>
+      <div class="ftitle" style="margin:0">Access log</div>
+      <div class="fdesc" style="margin:2px 0 0"><%= it.total.toLocaleString('en') %> request<%= it.total === 1 ? '' : 's' %> recorded</div>
+    </div>
+    <form class="inline-form" method="get" action="/stats">
+      <label class="sr-only" for="log-show">Filter by show</label>
+      <select id="log-show" name="showId"
+              hx-get="/ui/stats/log" hx-include="closest form" hx-target="#access-log" hx-swap="outerHTML">
+        <option value="">All shows</option>
+        <% for (const show of it.shows) { %>
+          <option value="<%= show.slug %>"<%= it.showFilter === show.slug ? ' selected' : '' %>><%= show.title %></option>
+        <% } %>
+      </select>
+      <label class="check-inline">
+        <input type="checkbox" name="failuresOnly" value="1"<%= it.failuresOnly ? ' checked' : '' %>
+               hx-get="/ui/stats/log" hx-include="closest form" hx-target="#access-log" hx-swap="outerHTML">
+        Failures only
+      </label>
+      <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+    </form>
+  </div>
+
+  <%~ include('../partials/access-log', it) %>
+</div>

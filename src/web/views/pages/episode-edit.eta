@@ -53,3 +53,52 @@
 </div>
 
 <%~ include('../partials/episode-form', { episode, show, helpers: it.helpers }) %>
+
+<%
+  /* Per-file statistics. The log below is the answer to "did this episode actually
+     download?" — the question that used to require a screenshot of someone's phone. */
+  const reach = episode.stats || { downloads: 0, streams: 0, failures: 0, bytes: 0, lastAt: null };
+%>
+<section class="form-card">
+  <div class="episode-table__head" style="justify-content:space-between">
+    <div>
+      <div class="ftitle" style="margin:0">This episode's reach</div>
+      <div class="fdesc" style="margin:2px 0 0">
+        <% if (reach.lastAt) { %>
+          Last fetched <%= it.helpers.relativeTime(reach.lastAt) %>.
+        <% } else { %>
+          No podcast app has fetched this episode yet.
+        <% } %>
+      </div>
+    </div>
+    <a class="btn btn-ghost btn-sm" href="/stats?showId=<%= encodeURIComponent(show.slug) %>">All shows</a>
+  </div>
+
+  <div class="reach-row">
+    <div class="reach-stat">
+      <div class="reach-stat__n"><%= reach.downloads.toLocaleString('en') %></div>
+      <div class="reach-stat__l">downloads</div>
+    </div>
+    <div class="reach-stat">
+      <div class="reach-stat__n"><%= reach.streams.toLocaleString('en') %></div>
+      <div class="reach-stat__l">streams</div>
+    </div>
+    <div class="reach-stat">
+      <div class="reach-stat__n"><%= it.helpers.formatBytes(reach.bytes) %></div>
+      <div class="reach-stat__l">served</div>
+    </div>
+    <div class="reach-stat<%= reach.failures ? ' reach-stat--bad' : '' %>">
+      <div class="reach-stat__n"><%= reach.failures.toLocaleString('en') %></div>
+      <div class="reach-stat__l">failed</div>
+    </div>
+  </div>
+
+  <div style="margin-top:18px">
+    <%~ include('../partials/access-log', {
+      entries: it.episodeLog,
+      total: it.episodeLogTotal,
+      hideEpisode: true,
+      helpers: it.helpers,
+    }) %>
+  </div>
+</section>

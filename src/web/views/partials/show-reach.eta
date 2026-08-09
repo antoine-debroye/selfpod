@@ -1,0 +1,68 @@
+<%
+  const show = it.show;
+  const s = show.stats || { downloads: 0, streams: 0, failures: 0, bytes: 0, feedFetches: 0, clients: [] };
+  const anything = s.downloads || s.streams || s.feedFetches || s.failures;
+%>
+<section class="form-card reach-card">
+  <div class="episode-table__head" style="justify-content:space-between">
+    <div>
+      <div class="ftitle" style="margin:0">Reach</div>
+      <div class="fdesc" style="margin:2px 0 0">
+        <% if (s.lastAt) { %>
+          Last episode fetch <%= it.helpers.relativeTime(s.lastAt) %>.
+        <% } else if (s.feedLastAt) { %>
+          A podcast app last checked this feed <%= it.helpers.relativeTime(s.feedLastAt) %>, but no episode has been fetched yet.
+        <% } else { %>
+          Nothing has requested this feed yet.
+        <% } %>
+      </div>
+    </div>
+    <a class="btn btn-ghost btn-sm" href="/stats?showId=<%= encodeURIComponent(show.slug) %>">Access log</a>
+  </div>
+
+  <% if (!anything) { %>
+    <p class="help-note" style="margin:12px 0 0">
+      Subscribe from a podcast app using the feed URL above and the numbers start here. SelfPod counts
+      requests from podcast apps, not your own visits to this page.
+    </p>
+  <% } else { %>
+    <div class="reach-row">
+      <div class="reach-stat">
+        <div class="reach-stat__n"><%= s.downloads.toLocaleString('en') %></div>
+        <div class="reach-stat__l">downloads</div>
+      </div>
+      <div class="reach-stat">
+        <div class="reach-stat__n"><%= s.streams.toLocaleString('en') %></div>
+        <div class="reach-stat__l">streams</div>
+      </div>
+      <div class="reach-stat">
+        <div class="reach-stat__n"><%= it.helpers.formatBytes(s.bytes) %></div>
+        <div class="reach-stat__l">served</div>
+      </div>
+      <div class="reach-stat">
+        <div class="reach-stat__n"><%= s.feedFetches.toLocaleString('en') %></div>
+        <div class="reach-stat__l">feed checks</div>
+      </div>
+      <div class="reach-stat<%= s.failures ? ' reach-stat--bad' : '' %>">
+        <div class="reach-stat__n"><%= s.failures.toLocaleString('en') %></div>
+        <div class="reach-stat__l">failed</div>
+      </div>
+    </div>
+
+    <% if (s.clients.length) { %>
+      <div class="reach-clients">
+        Fetched by
+        <% for (const c of s.clients) { %>
+          <span class="badge badge-mute badge--tight"><%= c.client %> <span class="mono">×<%= c.n %></span></span>
+        <% } %>
+      </div>
+    <% } %>
+
+    <% if (s.failures) { %>
+      <p class="help-note help-note--bad" style="margin:12px 0 0">
+        <%= s.failures %> request<%= s.failures === 1 ? '' : 's' %> for this show failed. That is a subscriber
+        who did not get an episode — <a href="/stats?showId=<%= encodeURIComponent(show.slug) %>&failuresOnly=1">see why</a>.
+      </p>
+    <% } %>
+  <% } %>
+</section>

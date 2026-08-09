@@ -3,7 +3,8 @@ import { notFound } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
 import { MIN_PASSWORD_LENGTH } from '../../routes/api/setup.js';
-import { feedQrSvg } from '../lib/qr.js';
+import { subscribeQrCodes } from '../lib/qr.js';
+import { DEFAULT_SUBSCRIBE_TARGET } from '../lib/subscribe-links.js';
 
 const APP_LAYOUT = { layout: 'layouts/app.eta' };
 const BARE_LAYOUT = { layout: 'layouts/bare.eta' };
@@ -290,7 +291,8 @@ export default async function pageRoutes(fastify, services) {
         activeSlug: show.slug,
         crumbs: [{ label: 'Dashboard', href: '/' }, { label: show.title }],
         show: presented,
-        qrSvg: await feedQrSvg(presented.feedUrl),
+        subscribeCodes: await subscribeQrCodes(presented.feedUrl),
+        defaultSubscribeTarget: DEFAULT_SUBSCRIBE_TARGET,
         topbarActions: showActions(show.slug),
       }),
       APP_LAYOUT,
@@ -319,6 +321,8 @@ export default async function pageRoutes(fastify, services) {
         ],
         show: presentShow(show),
         episode: presentEpisode(episode, show),
+        episodeLog: services.stats.list({ episodeId: episode.id, limit: 15 }),
+        episodeLogTotal: services.stats.count({ episodeId: episode.id }),
       }),
       APP_LAYOUT,
     );
@@ -370,6 +374,65 @@ export default async function pageRoutes(fastify, services) {
       APP_LAYOUT,
     );
   });
+
+  /* ----------------------------------------------------------- statistics */
+
+  /**
+   * Downloads, streams and — the reason this page earns its place in the nav —
+   * every request that failed. An episode that will not download in a podcast app
+   * was previously invisible to SelfPod; now it is a row here with a reason.
+   */
+  fastify.get('/stats', guarded, async (request, reply) =>
+    reply.view('pages/stats.eta', shell(request, statsContext(request)), APP_LAYOUT),
+  );
+
+  const LOG_PAGE_SIZE = 40;
+
+  function statsContext(request) {
+    const filter = logFilter(request);
+    const entries = services.stats.list({ ...filter.query, limit: LOG_PAGE_SIZE, offset: filter.offset });
+    const total = services.stats.count(filter.query);
+
+    return {
+      title: 'Statistics',
+      active: 'stats',
+      crumbs: [{ label: 'Statistics' }],
+      overview: services.stats.overview(),
+      showStats: shows.list().map((show) => ({
+        id: show.id,
+        slug: show.slug,
+        title: show.title,
+        ...services.stats.forShow(show.id),
+      })),
+      busiest: services.stats.busiest(10),
+      failures: services.stats.recentFailures(6),
+      entries,
+      total,
+      showFilter: filter.slug,
+      failuresOnly: filter.query.failuresOnly,
+      hasMore: filter.offset + entries.length < total,
+      nextOffset: filter.offset + entries.length,
+    };
+  }
+  services.statsContext = statsContext;
+  services.logPageSize = LOG_PAGE_SIZE;
+
+  /** Shared by the page and its htmx fragment so both filter identically. */
+  function logFilter(request) {
+    const query = request.query ?? {};
+    const slug = query.showId ? String(query.showId) : null;
+    const show = slug ? (shows.getBySlug(slug) ?? shows.get(slug)) : null;
+    const offset = Number.parseInt(query.offset ?? '0', 10);
+    return {
+      slug: show?.slug ?? null,
+      offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
+      query: {
+        showId: show?.id ?? null,
+        failuresOnly: query.failuresOnly === '1' || query.failuresOnly === 'true' || query.failuresOnly === 'on',
+      },
+    };
+  }
+  services.logFilter = logFilter;
 
   /* -------------------------------------------------------------- settings */
 

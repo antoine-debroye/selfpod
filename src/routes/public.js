@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { EPISODE_STATUS, SHOW_STATUS } from '../constants.js';
+import { ACCESS_KIND } from '../services/stats.js';
 import { notFound } from '../lib/errors.js';
 import { isSafeFilename } from '../lib/slug.js';
 import { tokensMatch } from '../lib/tokens.js';
@@ -14,7 +15,62 @@ import { VERSION } from '../version.js';
  * credential (spec §12.2). A token that doesn't match its slug returns a plain
  * 404 rather than a 403, so the response never reveals whether a show exists.
  */
-export default async function publicRoutes(fastify, { config, settings, shows, episodes, feeds, covers, health }) {
+export default async function publicRoutes(fastify, { config, settings, shows, episodes, feeds, covers, health, stats }) {
+  /**
+   * Records how a media response actually ended.
+   *
+   * Waiting for the response to finish rather than recording in the handler is what
+   * makes the numbers trustworthy: only by then is the real status code known, and
+   * only then can a transfer that died halfway be told apart from one that
+   * completed. A handler-time log would count every attempt as a success — which is
+   * precisely the case the owner needs to see.
+   *
+   * `close` always fires, `finish` only on a complete response, so a `close`
+   * without a preceding `finish` is a client that hung up mid-download. The `done`
+   * latch means one response can only ever produce one row, whatever order and
+   * however many times those events arrive.
+   */
+  /**
+   * True when this request came from the owner's own admin session.
+   *
+   * The episode editor previews audio through this very route, and the dashboard
+   * shows artwork through it, so without this check the owner clicking play would
+   * inflate their own figures — and the statistics page says in as many words that
+   * it does not. A podcast app never carries the session cookie.
+   */
+  function isOwnRequest(request) {
+    try {
+      return Boolean(fastify.isAuthenticated?.(request));
+    } catch {
+      return false;
+    }
+  }
+
+  function trackAccess(request, reply, extra) {
+    if (isOwnRequest(request)) return;
+    let done = false;
+    const settle = (aborted) => {
+      if (done) return;
+      done = true;
+      stats?.record({
+        kind: extra.kind,
+        episodeId: extra.episodeId ?? null,
+        showId: extra.showId ?? null,
+        statusCode: reply.statusCode,
+        // On an abort the Content-Length header describes what was promised, not
+        // what arrived, so claiming it as "sent" would be a lie.
+        bytesSent: aborted ? null : Number(reply.getHeader('content-length')) || null,
+        totalBytes: extra.totalBytes ?? null,
+        rangeHeader: request.headers.range ?? null,
+        userAgent: request.headers['user-agent'] ?? null,
+        error: aborted
+          ? 'The app disconnected before the transfer finished, so this download is incomplete.'
+          : (extra.error ?? null),
+      });
+    };
+    reply.raw.once('finish', () => settle(false));
+    reply.raw.once('close', () => settle(!reply.raw.writableFinished));
+  }
   /**
    * Resolves a slug+token pair to a show, or 404s. Both the "wrong token" and
    * "no such show" cases return exactly the same response.
@@ -79,6 +135,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       .header('etag', built.etag)
       // Short: a podcast app polling every few minutes should see edits quickly.
       .header('cache-control', 'public, max-age=60, must-revalidate');
+    trackAccess(request, reply, { kind: ACCESS_KIND.FEED, showId: show.id });
     return built.xml;
   });
 
@@ -93,9 +150,10 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     if (!show.cover_filename) throw notFound('No artwork for this show.', 'no_cover');
 
     const path = join(shows.dirFor(show), show.cover_filename);
-    let stats;
+    // Named for what it is, and to avoid shadowing the stats service.
+    let coverStats;
     try {
-      stats = await stat(path);
+      coverStats = await stat(path);
     } catch {
       throw notFound('No artwork for this show.', 'no_cover');
     }
@@ -113,11 +171,15 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       // well-behaved caches from re-downloading unchanged art anyway.
       .header('cache-control', 'public, max-age=3600');
     if (etag) reply.header('etag', etag);
-    void stats;
 
     // Opting out of the static plugin's own content-type, caching and ETag is
     // what lets the headers above survive: left to itself it would send
     // `public, max-age=0` and a size/mtime ETag instead of a content hash.
+    trackAccess(request, reply, {
+      kind: ACCESS_KIND.COVER,
+      showId: show.id,
+      totalBytes: coverStats.size,
+    });
     return reply.sendFile(show.cover_filename, shows.dirFor(show), {
       cacheControl: false,
       contentType: false,
@@ -148,14 +210,30 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     // Defence in depth: the resolved path must still be inside the show folder.
     if (!absolute.startsWith(resolve(showDir))) throw notFound('No episode here.', 'not_found');
 
-    let stats;
+    let fileStats;
     try {
-      stats = await stat(absolute);
+      fileStats = await stat(absolute);
     } catch (err) {
       request.log.warn(
         { file: episode.filename, code: err.code },
         'a subscriber requested an episode whose file could not be read',
       );
+      // Recorded before throwing: a subscriber failing to download is exactly the
+      // event the owner needs to see, and it was previously invisible here.
+      if (!isOwnRequest(request)) {
+        stats?.record({
+          kind: ACCESS_KIND.DOWNLOAD,
+          episodeId: episode.id,
+          showId: show.id,
+          statusCode: 404,
+          rangeHeader: request.headers.range ?? null,
+          userAgent: request.headers['user-agent'] ?? null,
+          error:
+            err.code === 'EACCES'
+              ? `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`
+              : `${episode.filename} is not on disk.`,
+        });
+      }
       throw notFound(
         'That episode file is not readable right now.',
         err.code === 'EACCES' ? 'permission_denied' : 'file_missing',
@@ -173,7 +251,17 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       .header('cache-control', 'private, max-age=86400')
       .header('content-disposition', contentDisposition(episode.filename));
 
-    void stats;
+    // A range request is a player streaming or seeking; a plain GET is an app
+    // fetching the episode for offline listening. They are counted separately
+    // because conflating them makes the download figure meaningless.
+    const kind = request.headers.range ? ACCESS_KIND.STREAM : ACCESS_KIND.DOWNLOAD;
+    trackAccess(request, reply, {
+      kind,
+      episodeId: episode.id,
+      showId: show.id,
+      totalBytes: fileStats.size,
+    });
+
     // Range handling (206 responses, `Accept-Ranges`, 416 for an unsatisfiable
     // range) comes from the static plugin — hand-rolling it is how seeking breaks.
     // Only its content-type and caching are overridden.
