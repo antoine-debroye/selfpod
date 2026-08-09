@@ -1030,7 +1030,9 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
     transition: transform .2s;
     z-index: 60;
   }
-  body.nav-open .sidebar { transform: none; }
+  /* translateX(0), not `none`: transitioning between a translate and `none`
+     does not interpolate reliably, which leaves the drawer stuck off-screen. */
+  body.nav-open .sidebar { transform: translateX(0); }
   body.nav-open .nav-scrim { display: block; }
   .nav-toggle { display: inline-flex; }
 
