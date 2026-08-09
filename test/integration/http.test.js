@@ -273,6 +273,30 @@ describe('media serving (spec §8.4)', () => {
     assert.match(response.headers['content-type'], /audio\/x-m4a/);
   });
 
+  it('serves an episode whose filename is longer than a route parameter default', async () => {
+    // Fastify rejects path parameters over 100 characters with a 414 before the
+    // handler runs. Real episode titles pass that easily, and the symptom in a
+    // podcast app is "requested URL too long" with nothing in SelfPod's own logs —
+    // it took a screenshot from a phone to find it.
+    const longName =
+      '2026-08-03-Bulletin météo : forte dépression sur Ceuta, retour à la normale annoncé depuis Madrid.m4a';
+    assert.ok(longName.length > 100, 'the fixture must actually exceed the default limit');
+
+    await server.addAudio('long-names', 'sample.m4a', longName);
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('long-names');
+    const built = server.feeds.build(show.id);
+    const url = built.xml.match(/<enclosure url="([^"]+)"/)[1].replace(/&amp;/g, '&');
+    const path = url.replace('https://podcast.example.com', '');
+
+    const response = await server.app.inject({ method: 'GET', url: path });
+    assert.equal(response.statusCode, 200, 'a long filename must not produce a 414');
+    assert.match(response.headers['content-type'], /audio\/x-m4a/);
+
+    const ranged = await server.app.inject({ method: 'GET', url: path, headers: { range: 'bytes=0-49' } });
+    assert.equal(ranged.statusCode, 206, 'seeking must work for these too');
+  });
+
   it('resolves by episode id and ignores a mismatched filename in the URL', async () => {
     const show = await seedShow('routing-show', 'sample.mp3');
     const episode = server.episodes.listByShow(show.id)[0];

@@ -29,6 +29,15 @@ export async function buildApp(services) {
     // rate limiting deliberately does not use it.
     trustProxy: true,
     bodyLimit: 2 * 1024 * 1024, // form posts only; uploads stream via multipart
+
+    // Episode filenames are route parameters, and Fastify rejects any parameter
+    // over 100 characters with a 414 before the handler ever runs. Real episode
+    // titles blow through that easily — "2026-08-03-Bulletin météo : forte
+    // dépression sur Ceuta, retour à la normale annoncé depuis Madrid.m4a" is 106 —
+    // and the failure surfaces in a podcast app as "requested URL too long", with
+    // nothing in SelfPod's own logs to explain it. 512 comfortably exceeds the
+    // 255-byte filename ceiling of every filesystem this runs on.
+    maxParamLength: 512,
   });
 
   await fastify.register(errorHandlerPlugin);

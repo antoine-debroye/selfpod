@@ -1,5 +1,7 @@
 <%
   const show = it.show;
+  const codes = it.subscribeCodes || [];
+  const defaultTarget = it.defaultSubscribeTarget || 'apple';
 %>
 <div class="feed-box" id="feed-box">
   <div class="lab">Feed URL · token-protected</div>
@@ -13,13 +15,46 @@
       </button>
     </div>
 
-    <div class="feed-box__qr-row">
-      <div class="qr"><%~ it.qrSvg || '' %></div>
-      <p class="feed-box__qr-hint">
-        Scan with your phone's camera, or paste the URL into your podcast app's
-        <span class="mono">Add by URL</span> flow.
-      </p>
-    </div>
+    <% if (codes.length) { %>
+      <%
+        /* The QR carries the chosen app's "subscribe to this feed" scheme, not the
+           https feed URL. A phone camera hands an https URL to the browser, which
+           shows the raw XML and offers no way onward to a podcast app — so a plain
+           URL, the obvious choice, is the one thing that does not work. */
+      %>
+      <div class="subscribe" data-subscribe data-default="<%= defaultTarget %>">
+        <div class="subscribe__label" id="subscribe-label-<%= show.id %>">Add to</div>
+        <div class="subscribe__apps" role="radiogroup" aria-labelledby="subscribe-label-<%= show.id %>">
+          <% for (const code of codes) { %>
+            <button class="subscribe__app<%= code.id === defaultTarget ? ' is-active' : '' %>"
+                    type="button" role="radio"
+                    aria-checked="<%= code.id === defaultTarget ? 'true' : 'false' %>"
+                    data-subscribe-target="<%= code.id %>"><%= code.label %></button>
+          <% } %>
+        </div>
+
+        <div class="subscribe__body">
+          <% for (const code of codes) { %>
+            <div class="subscribe__pane<%= code.id === defaultTarget ? ' is-active' : '' %>"
+                 data-subscribe-pane="<%= code.id %>"<%= code.id === defaultTarget ? '' : ' hidden' %>>
+              <div class="qr"><%~ code.svg %></div>
+              <div class="subscribe__hint">
+                <% if (code.id === 'url') { %>
+                  <p>Paste this into your app's <span class="mono">Add by URL</span> box. Scanning this
+                    one opens the feed in a browser rather than a podcast app, which is why it is not
+                    the default.</p>
+                <% } else { %>
+                  <p>Scan with your phone's camera — it opens <strong><%= code.label %></strong> and
+                    subscribes.</p>
+                  <a class="subscribe__open" href="<%= code.url %>">Open in <%= code.label %></a>
+                  <p class="subscribe__aside">That link works if you are reading this on the phone itself.</p>
+                <% } %>
+              </div>
+            </div>
+          <% } %>
+        </div>
+      </div>
+    <% } %>
   <% } else { %>
     <div class="notice warn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>

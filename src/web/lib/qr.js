@@ -11,6 +11,21 @@ import QRCode from 'qrcode';
  */
 const cache = new Map();
 
+/**
+ * One QR per podcast app, so the code can carry that app's subscribe scheme rather
+ * than a plain feed URL. All of them are rendered inline and the page shows one at a
+ * time — cheap, since a QR SVG is a couple of kilobytes, and it keeps the switch
+ * instant with no extra request.
+ */
+export async function subscribeQrCodes(feedUrl, { size = 200 } = {}) {
+  if (!feedUrl) return [];
+  const { buildSubscribeLinks } = await import('./subscribe-links.js');
+  const links = buildSubscribeLinks(feedUrl);
+  return Promise.all(
+    links.map(async (link) => ({ ...link, svg: await feedQrSvg(link.url, { size }) })),
+  );
+}
+
 export async function feedQrSvg(url, { size = 200 } = {}) {
   if (!url) return null;
   const key = `${url}|${size}`;

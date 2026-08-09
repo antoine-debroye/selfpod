@@ -648,3 +648,66 @@
 
   syncSubcategories();
 })();
+
+/**
+ * Subscribe-app switcher on the show page.
+ *
+ * Each app gets its own QR because each wants its own "subscribe to this feed" URL
+ * scheme. The choice is remembered, since someone with one podcast app will want the
+ * same one every time.
+ */
+(function () {
+  'use strict';
+
+  var STORAGE_KEY = 'selfpod.subscribeTarget';
+
+  function apply(root, id) {
+    var buttons = root.querySelectorAll('[data-subscribe-target]');
+    var panes = root.querySelectorAll('[data-subscribe-pane]');
+    var matched = false;
+    Array.prototype.forEach.call(panes, function (pane) {
+      var isMatch = pane.getAttribute('data-subscribe-pane') === id;
+      pane.hidden = !isMatch;
+      pane.classList.toggle('is-active', isMatch);
+      if (isMatch) matched = true;
+    });
+    if (!matched) return false;
+    Array.prototype.forEach.call(buttons, function (button) {
+      var isMatch = button.getAttribute('data-subscribe-target') === id;
+      button.classList.toggle('is-active', isMatch);
+      button.setAttribute('aria-checked', isMatch ? 'true' : 'false');
+    });
+    return true;
+  }
+
+  function restore(root) {
+    var saved = null;
+    try {
+      saved = window.localStorage.getItem(STORAGE_KEY);
+    } catch (err) {
+      saved = null;
+    }
+    if (saved) apply(root, saved);
+  }
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-subscribe-target]');
+    if (!button) return;
+    var root = button.closest('[data-subscribe]');
+    var id = button.getAttribute('data-subscribe-target');
+    if (!apply(root, id)) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, id);
+    } catch (err) {
+      /* private browsing — the choice just won't persist */
+    }
+  });
+
+  function init() {
+    var root = document.querySelector('[data-subscribe]');
+    if (root) restore(root);
+  }
+
+  document.addEventListener('htmx:afterSettle', init);
+  init();
+})();
