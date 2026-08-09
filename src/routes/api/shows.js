@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { rename, stat, unlink } from 'node:fs/promises';
+import { stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
@@ -11,6 +11,7 @@ import {
   SUPPORTED_EXTENSIONS_LABEL,
 } from '../../constants.js';
 import { badRequest, conflict, notFound, payloadTooLarge, unprocessable } from '../../lib/errors.js';
+import { moveIntoPlace } from '../../lib/move.js';
 import { sanitiseUploadFilename } from '../../lib/slug.js';
 import { newId } from '../../lib/tokens.js';
 
@@ -199,7 +200,9 @@ export default async function showRoutes(fastify, services) {
           });
           continue;
         }
-        await rename(tmpPath, join(showDir, target));
+        // Not a plain rename: the staging directory and the show folder are often
+        // on different filesystems, which is the normal NAS layout.
+        await moveIntoPlace(tmpPath, join(showDir, target));
         accepted.push({ filename: target, mimeType: audioMimeType(target) });
       } catch (err) {
         await unlink(tmpPath).catch(() => {});
