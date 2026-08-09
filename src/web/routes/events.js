@@ -11,8 +11,28 @@ import { EVENTS } from '../../lib/events.js';
  */
 const HEARTBEAT_MS = 25_000;
 
+/**
+ * There is one admin, so a handful of open tabs is the realistic maximum. The cap
+ * exists so a client reconnecting in a loop cannot pile up listeners and timers;
+ * refusing the stream only costs live progress updates, which everything degrades
+ * without anyway.
+ */
+const MAX_CLIENTS = 24;
+let clients = 0;
+
 export default async function eventRoutes(fastify, { events, logger }) {
   fastify.get('/ui/events', { preHandler: fastify.requireAdminPage }, async (request, reply) => {
+    if (clients >= MAX_CLIENTS) {
+      logger?.warn({ clients }, 'refused an SSE connection: too many already open');
+      return reply.status(503).send({
+        error: {
+          message: 'Too many live update streams are already open. Close some SelfPod tabs and reload.',
+          code: 'too_many_streams',
+        },
+      });
+    }
+    clients += 1;
+
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-store, no-transform',
@@ -72,7 +92,11 @@ export default async function eventRoutes(fastify, { events, logger }) {
       reply.raw.write(': ping\n\n');
     }, HEARTBEAT_MS);
 
+    let cleanedUp = false;
     const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clients -= 1;
       clearInterval(heartbeat);
       events.off(EVENTS.SCAN_STARTED, onScanStarted);
       events.off(EVENTS.SCAN_PROGRESS, onScanProgress);

@@ -15,7 +15,6 @@ export default async function statusRoutes(fastify, { settings, health, watcher,
       version: VERSION,
       status: health.hasErrors() ? 'degraded' : 'ok',
       setupComplete: settings.setupComplete(),
-      mustChangePassword: settings.mustChangePassword(),
       hasPublicBaseUrl: settings.hasPublicBaseUrl(),
       authenticated,
       // The banner has to be visible to whoever can reach the app, otherwise a
@@ -33,6 +32,9 @@ export default async function statusRoutes(fastify, { settings, health, watcher,
     const lastGlobalScan = activity.latestGlobal();
     return {
       ...base,
+      // Only shared with an authenticated admin: telling an anonymous visitor that
+      // the instance is still on its generated password is an invitation.
+      mustChangePassword: settings.mustChangePassword(),
       publicBaseUrl: settings.publicBaseUrl(),
       timeZone: config.timeZone,
       puid: config.runtimeUid ?? config.puid,

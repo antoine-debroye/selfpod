@@ -56,7 +56,7 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
           note: `${swept.length} episode${swept.length === 1 ? '' : 's'} dropped from feeds after the missing-file grace period`,
           warnings: swept.map((row) => ({
             file: row.filename,
-            message: `\`${row.filename}\` has been missing longer than the grace period, so it has been dropped from the feed. Put the file back and it will return with the same episode identity.`,
+            message: `\`${row.filename}\` has been missing longer than the grace period, so it has been dropped from the feed. Put the file back and it returns automatically, with the same episode identity — subscribers keep their played state.`,
           })),
         });
       }

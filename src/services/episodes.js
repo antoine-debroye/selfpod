@@ -32,6 +32,7 @@ export function createEpisodes({ db, config, events, shows, logger }) {
        SUM(CASE WHEN status = 'active'  THEN 1 ELSE 0 END) AS active,
        SUM(CASE WHEN status = 'missing' THEN 1 ELSE 0 END) AS missing,
        SUM(CASE WHEN status = 'removed' THEN 1 ELSE 0 END) AS removed,
+       SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired,
        COUNT(*) AS total
      FROM episodes WHERE show_id = ?`,
   );
@@ -66,10 +67,23 @@ export function createEpisodes({ db, config, events, shows, logger }) {
       return selectByIdentity.get(showId, identityKey) ?? null;
     },
 
+    /**
+     * Two rows in one show can carry the same filename — delete a file, let it be
+     * marked missing, then add a different file under the same name. The scanner's
+     * fast path uses this, so the choice must be deterministic and must prefer the
+     * row that is actually live, or it could attach the wrong GUID to the file.
+     */
     findByFilename(showId, filename) {
       return (
-        db.prepare('SELECT * FROM episodes WHERE show_id = ? AND filename = ?').get(showId, filename) ??
-        null
+        db
+          .prepare(
+            `SELECT * FROM episodes
+              WHERE show_id = ? AND filename = ?
+              ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'missing' THEN 1 WHEN 'expired' THEN 2 ELSE 3 END,
+                       updated_at DESC
+              LIMIT 1`,
+          )
+          .get(showId, filename) ?? null
       );
     },
 
@@ -89,6 +103,7 @@ export function createEpisodes({ db, config, events, shows, logger }) {
         active: row?.active ?? 0,
         missing: row?.missing ?? 0,
         removed: row?.removed ?? 0,
+        expired: row?.expired ?? 0,
         total: row?.total ?? 0,
         inFeed: (row?.active ?? 0) + (row?.missing ?? 0),
       };
@@ -295,12 +310,12 @@ export function createEpisodes({ db, config, events, shows, logger }) {
         .all(cutoff);
       if (!stale.length) return [];
 
-      const markRemoved = db.prepare(
-        `UPDATE episodes SET status = 'removed', removed_at = @now, updated_at = @now WHERE id = @id`,
+      const markExpired = db.prepare(
+        `UPDATE episodes SET status = 'expired', removed_at = @now, updated_at = @now WHERE id = @id`,
       );
       const now = nowIso();
       const run = db.transaction(() => {
-        for (const row of stale) markRemoved.run({ id: row.id, now });
+        for (const row of stale) markExpired.run({ id: row.id, now });
       });
       run();
 

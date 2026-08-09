@@ -124,6 +124,10 @@ export function createShows({ db, config, events, logger, settings }) {
         throw conflict(`A show already uses the folder name "${slug}".`, 'slug_taken');
       }
 
+      // Asking for this show again is the explicit signal that overrides a previous
+      // removal, so the tombstone goes.
+      api.forgetRemovedFolder(slug);
+
       const dir = dirFor(slug);
       try {
         await mkdir(dir, { recursive: false });
@@ -220,7 +224,13 @@ export function createShows({ db, config, events, logger, settings }) {
       return updated;
     },
 
-    /** Internal setter for scanner-owned columns (cover, status, last scan). */
+    /**
+     * Internal setter for scanner-owned columns (cover, status, last scan).
+     *
+     * `last_scan_id` alone does not touch `updated_at`: it records that a scan
+     * happened, not that anything changed, and treating it as a change made the
+     * feed's ETag and lastBuildDate move on every single scan.
+     */
     setSystemFields(id, fields) {
       const allowed = [
         'cover_filename',
@@ -235,7 +245,8 @@ export function createShows({ db, config, events, logger, settings }) {
       const entries = Object.entries(fields).filter(([key]) => allowed.includes(key));
       if (!entries.length) return api.get(id);
       const payload = Object.fromEntries(entries);
-      payload.updated_at = nowIso();
+      const bookkeepingOnly = entries.every(([key]) => key === 'last_scan_id');
+      if (!bookkeepingOnly) payload.updated_at = nowIso();
       payload.id = id;
       const assignments = Object.keys(payload)
         .filter((key) => key !== 'id')
@@ -291,7 +302,10 @@ export function createShows({ db, config, events, logger, settings }) {
     async remove(id, { deleteFiles = false } = {}) {
       const show = api.getOrThrow(id);
       const dir = dirFor(show);
-      deleteShow.run(id); // cascades to episodes and scan_log rows
+
+      // Files first: if this fails — a permission problem on a NAS, say — the show
+      // is left completely intact rather than half-deleted with its audio gone and
+      // its database row already destroyed.
       if (deleteFiles) {
         try {
           await rm(dir, { recursive: true, force: true });
@@ -299,14 +313,40 @@ export function createShows({ db, config, events, logger, settings }) {
         } catch (err) {
           logger?.error({ err, dir }, 'could not delete show folder');
           throw badRequest(
-            `The show was removed from SelfPod, but its folder \`${dir}\` could not be deleted: ${err.message}`,
+            `\`${dir}\` could not be deleted: ${err.message}. Nothing has been removed from SelfPod, so you can fix the permissions and try again.`,
             'rmdir_failed',
           );
         }
       }
+
+      deleteShow.run(id); // cascades to episodes and scan_log rows
+
+      // When the folder stays, remember that its removal was deliberate. Without
+      // this, the next scan re-adopts the folder with a new id, a new feed token
+      // and new episode GUIDs — breaking every subscriber.
+      if (!deleteFiles) {
+        db.prepare(
+          'INSERT INTO removed_folders (slug, removed_at) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET removed_at = excluded.removed_at',
+        ).run(show.slug, nowIso());
+      }
+
       events?.emit(EVENTS.SHOWS_CHANGED, {});
       events?.emit(EVENTS.SHOW_CHANGED, { showId: id, slug: show.slug });
       return { slug: show.slug, filesDeleted: deleteFiles };
+    },
+
+    /** Folders the user removed on purpose, which discovery must skip. */
+    isFolderRemoved(slug) {
+      return db.prepare('SELECT 1 FROM removed_folders WHERE slug = ?').get(slug) !== undefined;
+    },
+
+    listRemovedFolders() {
+      return db.prepare('SELECT slug, removed_at FROM removed_folders ORDER BY removed_at DESC').all();
+    },
+
+    /** Asking for the show back clears the tombstone so discovery adopts it again. */
+    forgetRemovedFolder(slug) {
+      db.prepare('DELETE FROM removed_folders WHERE slug = ?').run(slug);
     },
 
     /* ---- show.json ---- */

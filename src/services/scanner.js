@@ -44,12 +44,38 @@ export function createScanner({
   let running = false;
   let currentScan = null;
 
+  /**
+   * Every scan runs through here, one at a time.
+   *
+   * Two scans overlapping is not merely wasteful, it is incorrect: the database
+   * writes are synchronous but the scan body awaits on hashing and metadata, so a
+   * second scan can insert a row between the first scan's read and its write —
+   * producing a UNIQUE constraint failure, or worse, marking a file that is
+   * present as missing because it was absent from the other scan's directory
+   * listing. The scheduled rescan colliding with the startup scan is enough to
+   * trigger it, so serialising is not optional.
+   */
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  function serialise(task) {
+    inFlight += 1;
+    const result = chain.then(task, task).finally(() => {
+      inFlight -= 1;
+    });
+    // The chain must survive a failed scan, or every later scan is skipped.
+    chain = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
   /** Set of showIds whose next scan must re-hash every file (manual rescans). */
   const forceRehash = new Set();
 
   const api = {
     get isScanning() {
-      return running;
+      return inFlight > 0 || running;
     },
 
     get current() {
@@ -79,6 +105,7 @@ export function createScanner({
       const onDisk = new Set();
       const created = [];
       const skipped = [];
+      const ignored = [];
 
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
@@ -89,6 +116,13 @@ export function createScanner({
         }
         onDisk.add(entry.name);
         if (!shows.getBySlug(entry.name)) {
+          // The user removed this show but chose to keep its folder. Re-adopting it
+          // would mint a new feed token and new episode GUIDs, breaking every
+          // subscriber — so it is left alone until they explicitly add it back.
+          if (shows.isFolderRemoved(entry.name)) {
+            ignored.push(entry.name);
+            continue;
+          }
           const show = await shows.createFromFolder(entry.name);
           created.push(show);
         }
@@ -113,7 +147,7 @@ export function createScanner({
         );
       }
 
-      return { found: onDisk.size, created, missing, skipped };
+      return { found: onDisk.size, created, missing, skipped, ignored };
     },
 
     /** Queues a scan of one show; repeated calls collapse until it runs. */
@@ -123,13 +157,13 @@ export function createScanner({
       const existing = queued.get(showId);
       // A manual request outranks a background one for logging purposes.
       if (!existing || trigger === SCAN_TRIGGER.MANUAL) queued.set(showId, trigger);
-      void drain();
+      drainSafely();
     },
 
     enqueueAll(trigger = SCAN_TRIGGER.SCHEDULED, { rehash = false } = {}) {
       if (rehash) for (const show of shows.list()) forceRehash.add(show.id);
       if (!globalQueued || trigger === SCAN_TRIGGER.MANUAL) globalQueued = trigger;
-      void drain();
+      drainSafely();
     },
 
     /** Awaits the queue draining — used by tests and by "rescan then respond" flows. */
@@ -139,11 +173,11 @@ export function createScanner({
     },
 
     async scanShowNow(showId, trigger = SCAN_TRIGGER.MANUAL, options = {}) {
-      return scanShow(showId, trigger, options);
+      return serialise(() => scanShow(showId, trigger, options));
     },
 
     async scanAllNow(trigger = SCAN_TRIGGER.MANUAL, options = {}) {
-      return scanAll(trigger, options);
+      return serialise(() => scanAll(trigger, options));
     },
   };
 
@@ -156,19 +190,24 @@ export function createScanner({
         if (globalQueued) {
           const trigger = globalQueued;
           globalQueued = null;
-          await scanAll(trigger);
+          await serialise(() => scanAll(trigger));
           continue;
         }
         const next = queued.entries().next();
         if (next.done) break;
         const [showId, trigger] = next.value;
         queued.delete(showId);
-        await scanShow(showId, trigger);
+        await serialise(() => scanShow(showId, trigger));
       }
     } finally {
       running = false;
       currentScan = null;
     }
+  }
+
+  /** Queued work is fire-and-forget, so its failures have to be caught here. */
+  function drainSafely() {
+    drain().catch((err) => logger?.error({ err }, 'library scan failed'));
   }
 
   async function scanAll(trigger, { rehash = false } = {}) {
@@ -209,6 +248,12 @@ export function createScanner({
       warnings.push({
         file: show.slug,
         message: `The folder for "${show.title}" is no longer in \`${config.showsDir}\`. Its feed is paused; you can restore the folder or remove the show from the dashboard.`,
+      });
+    }
+    for (const name of discovery.ignored ?? []) {
+      warnings.push({
+        file: name,
+        message: `The folder \`${name}\` is still on disk but you removed its show, so SelfPod is leaving it alone. Create a show with the folder name \`${name}\` to publish it again.`,
       });
     }
     for (const name of discovery.skipped ?? []) {
@@ -313,14 +358,26 @@ export function createScanner({
     for (const filename of audioFiles) {
       const path = join(dir, filename);
       let stats;
+      let mtimeIso;
       try {
         stats = await stat(path);
+        // A filesystem can report a timestamp Date cannot represent, which would
+        // throw RangeError out of the whole scan; the fallback keeps one odd file
+        // from stopping the library.
+        mtimeIso = stats.mtime.toISOString();
       } catch (err) {
-        errors.push(activity.formatFileError(filename, err));
-        continue;
+        if (stats && err instanceof RangeError) {
+          mtimeIso = nowIso();
+          warnings.push({
+            file: filename,
+            message: `\`${filename}\` has a modification time SelfPod cannot read, so today's date is used as its publish date. You can set the publish date yourself on the episode page.`,
+          });
+        } else {
+          errors.push(activity.formatFileError(filename, err));
+          continue;
+        }
       }
 
-      const mtimeIso = stats.mtime.toISOString();
       const mimeType = audioMimeType(filename);
 
       // Fast path: same name, same size, same mtime as a row we already have →
@@ -338,11 +395,18 @@ export function createScanner({
           // Claim the identity even on the fast path, so a byte-identical sibling
           // later in this scan is reported rather than quietly stealing the row.
           claimedIdentities.set(byName.identity_key, filename);
-          if (byName.status === EPISODE_STATUS.MISSING) {
+          if (
+            byName.status === EPISODE_STATUS.MISSING ||
+            byName.status === EPISODE_STATUS.EXPIRED
+          ) {
             episodes.setSystemFields(byName.id, {
               status: EPISODE_STATUS.ACTIVE,
               missing_since: null,
+              removed_at: null,
             });
+            if (byName.status === EPISODE_STATUS.EXPIRED) {
+              warnings.push({ file: filename, message: returnedFromExpiry(filename) });
+            }
             updated += 1;
             changed = true;
           }
@@ -377,7 +441,10 @@ export function createScanner({
       if (existing) {
         seenEpisodeIds.add(existing.id);
 
-        // A user-removed episode stays removed even though its file is present.
+        // A user's "remove from feed" is permanent until they undo it. An expired
+        // one is not: it fell out of the feed because the file was gone, so the
+        // file returning is exactly the signal to bring it back — with the same
+        // GUID, which is the whole point of keeping the row.
         if (existing.status === EPISODE_STATUS.REMOVED) {
           if (existing.filename !== filename) {
             episodes.setSystemFields(existing.id, { filename, file_mtime: mtimeIso });
@@ -393,6 +460,10 @@ export function createScanner({
         if (existing.status !== EPISODE_STATUS.ACTIVE) {
           fields.status = EPISODE_STATUS.ACTIVE;
           fields.missing_since = null;
+          fields.removed_at = null;
+          if (existing.status === EPISODE_STATUS.EXPIRED) {
+            warnings.push({ file: filename, message: returnedFromExpiry(filename) });
+          }
         }
 
         // Re-read duration only when the bytes actually changed.
@@ -458,6 +529,7 @@ export function createScanner({
     for (const episode of episodes.listByShow(showId)) {
       if (seenEpisodeIds.has(episode.id)) continue;
       if (episode.status === EPISODE_STATUS.REMOVED) continue;
+      if (episode.status === EPISODE_STATUS.EXPIRED) continue;
       if (episode.status !== EPISODE_STATUS.MISSING) {
         episodes.setSystemFields(episode.id, {
           status: EPISODE_STATUS.MISSING,
@@ -558,6 +630,11 @@ export function createScanner({
   }
 
   return api;
+}
+
+/** Shared by both scan paths, since either can be the one to notice the return. */
+function returnedFromExpiry(filename) {
+  return `\`${filename}\` is back after being gone longer than the grace period, so it has returned to the feed with its original episode identity — subscribers keep their played state.`;
 }
 
 /** "2026-08-07-episode-one.m4a" → "Episode One" (a suggestion, never a lock). */

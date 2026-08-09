@@ -154,22 +154,49 @@ async function authPlugin(fastify, { db, settings, config, logger }) {
         'cross_site_blocked',
       );
     }
+    // Every current browser sends Sec-Fetch-Site, and `same-origin` is a stronger
+    // statement than anything Origin can tell us — so trust it and stop.
+    if (fetchSite === 'same-origin' || fetchSite === 'none') return;
 
     const origin = request.headers.origin;
-    if (origin) {
-      const host = request.headers['x-forwarded-host'] ?? request.headers.host;
-      let originHost = null;
+    if (!origin) return;
+
+    let originHost = null;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      throw forbidden('That request had an unreadable Origin header and was blocked.', 'bad_origin');
+    }
+
+    // Which hostnames count as "us" is not obvious behind a proxy: nginx's default
+    // `proxy_set_header Host $proxy_host` rewrites Host to the container's name, so
+    // comparing Origin against Host alone would reject every form submission —
+    // including the sign-in form, locking the admin out entirely. The configured
+    // public base URL is the authoritative answer, with the forwarded and real Host
+    // headers accepted as well.
+    const allowed = new Set();
+    const publicBase = settings.publicBaseUrl();
+    if (publicBase) {
       try {
-        originHost = new URL(origin).host;
+        allowed.add(new URL(publicBase).host);
       } catch {
-        originHost = null;
+        /* a malformed stored value simply contributes nothing */
       }
-      if (!originHost || (host && originHost !== host)) {
-        throw forbidden(
-          'That request came from another site and was blocked. Reload this page and try again.',
-          'cross_origin_blocked',
-        );
-      }
+    }
+    // A chain of proxies appends, so this header can be a comma-separated list.
+    const forwardedHost = request.headers['x-forwarded-host'];
+    if (forwardedHost) allowed.add(String(forwardedHost).split(',')[0].trim());
+    if (request.headers.host) allowed.add(request.headers.host);
+
+    if (!allowed.has(originHost)) {
+      request.log.warn(
+        { originHost, allowed: [...allowed] },
+        'blocked a request whose Origin does not match this instance',
+      );
+      throw forbidden(
+        `That request came from ${originHost}, which is not this SelfPod instance, so it was blocked. If you reach SelfPod on that address, set it as the public base URL in Settings.`,
+        'cross_origin_blocked',
+      );
     }
   });
 

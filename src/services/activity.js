@@ -10,6 +10,25 @@ import { describeFsError } from '../lib/errors.js';
  * written here is a plain-language sentence naming the file, the path and the UID
  * the app runs as — never a stack trace.
  */
+/**
+ * Diagnostics per scan are capped. The point of the activity log is that a user can
+ * understand what happened, and 5,000 copies of the same warning serve that worse
+ * than 50 plus a count — while a blob that size is written on every scan interval
+ * and parsed on every page load.
+ */
+const MAX_ENTRIES_PER_SCAN = 50;
+
+function capEntries(entries) {
+  if (entries.length <= MAX_ENTRIES_PER_SCAN) return entries;
+  const kept = entries.slice(0, MAX_ENTRIES_PER_SCAN);
+  const hidden = entries.length - kept.length;
+  kept.push({
+    file: null,
+    message: `…and ${hidden} more of the same kind. Fixing the ones above usually clears the rest.`,
+  });
+  return kept;
+}
+
 export function createActivity({ db, config, logger }) {
   const insertScan = db.prepare(
     `INSERT INTO scan_log (show_id, started_at, trigger, note)
@@ -61,6 +80,8 @@ export function createActivity({ db, config, logger }) {
     },
 
     finish(id, { filesFound = 0, added = 0, updated = 0, missing = 0, removed = 0, errors = [], warnings = [], note = null } = {}) {
+      const cappedErrors = capEntries(errors);
+      const cappedWarnings = capEntries(warnings);
       finishScan.run({
         id,
         finishedAt: nowIso(),
@@ -69,8 +90,8 @@ export function createActivity({ db, config, logger }) {
         updated,
         missing,
         removed,
-        errorsJson: errors.length ? JSON.stringify(errors) : null,
-        warningsJson: warnings.length ? JSON.stringify(warnings) : null,
+        errorsJson: cappedErrors.length ? JSON.stringify(cappedErrors) : null,
+        warningsJson: cappedWarnings.length ? JSON.stringify(cappedWarnings) : null,
         note,
       });
       return hydrate(selectById.get(id));

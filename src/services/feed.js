@@ -75,6 +75,25 @@ export function createFeeds({ config, settings, events, shows, episodes, logger 
   return api;
 }
 
+/**
+ * Strips characters that XML 1.0 forbids outright.
+ *
+ * Control characters cannot appear in an XML document even as numeric references,
+ * so a single one — arriving from an ID3 tag, a filename, or the API — would make
+ * the *entire* feed unparseable for every subscriber, with nothing to see but a
+ * podcast app that stopped updating. Lone surrogates are removed for the same
+ * reason: they cannot be encoded as valid UTF-8.
+ */
+function xmlSafe(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1')
+    .replace(/\uFFFE|\uFFFF/g, '');
+}
+
 function buildXml({ show, items, base, config }) {
   const doc = create({ version: '1.0', encoding: 'UTF-8' }).ele('rss', {
     version: '2.0',
@@ -88,28 +107,28 @@ function buildXml({ show, items, base, config }) {
 
   // All text goes through the XML builder's escaping: titles come from filenames
   // and user input, so none of it can be assumed XML-safe (§8.3 requirement 5).
-  channel.ele('title').txt(show.title).up();
+  channel.ele('title').txt(xmlSafe(show.title)).up();
   channel.ele('link').txt(base).up();
-  channel.ele('description').txt(show.description ?? '').up();
-  channel.ele('language').txt(show.language || 'en').up();
+  channel.ele('description').txt(xmlSafe(show.description)).up();
+  channel.ele('language').txt(xmlSafe(show.language) || 'en').up();
   // Directories reject an empty itunes:author, so it always carries something
   // meaningful; the show title is the last-resort fallback.
-  const authorName = show.author_name?.trim() || show.title;
+  const authorName = xmlSafe(show.author_name?.trim() || show.title);
   channel.ele('itunes:author').txt(authorName).up();
-  channel.ele('itunes:summary').txt(show.description ?? '').up();
+  channel.ele('itunes:summary').txt(xmlSafe(show.description)).up();
 
   const owner = channel.ele('itunes:owner');
   owner.ele('itunes:name').txt(authorName).up();
   // An empty <itunes:email> is worse than none at all — it looks like a real
   // value to validators. Omit it until the user provides one.
   if (show.author_email?.trim()) {
-    owner.ele('itunes:email').txt(show.author_email.trim()).up();
+    owner.ele('itunes:email').txt(xmlSafe(show.author_email.trim())).up();
   }
   owner.up();
 
-  const category = channel.ele('itunes:category', { text: show.itunes_category });
+  const category = channel.ele('itunes:category', { text: xmlSafe(show.itunes_category) });
   if (show.itunes_subcategory) {
-    category.ele('itunes:category', { text: show.itunes_subcategory }).up();
+    category.ele('itunes:category', { text: xmlSafe(show.itunes_subcategory) }).up();
   }
   category.up();
 
@@ -121,7 +140,7 @@ function buildXml({ show, items, base, config }) {
     channel.ele('itunes:image', { href: art }).up();
     const image = channel.ele('image');
     image.ele('url').txt(art).up();
-    image.ele('title').txt(show.title).up();
+    image.ele('title').txt(xmlSafe(show.title)).up();
     image.ele('link').txt(base).up();
     image.up();
   }
@@ -129,7 +148,7 @@ function buildXml({ show, items, base, config }) {
   // The feed is private, so it is marked as not available for transfer, and the
   // show's own UUID is its permanent identifier across any future URL change.
   channel.ele('podcast:locked').txt('yes').up();
-  channel.ele('podcast:guid').txt(show.id).up();
+  channel.ele('podcast:guid').txt(xmlSafe(show.id)).up();
 
   channel.ele('generator').txt(GENERATOR).up();
   channel.ele('lastBuildDate').txt(toRFC2822(lastBuildDate(show, items))).up();
@@ -141,15 +160,15 @@ function buildXml({ show, items, base, config }) {
 
   for (const episode of items) {
     const item = channel.ele('item');
-    item.ele('title').txt(episode.title).up();
-    item.ele('description').txt(episode.description ?? '').up();
+    item.ele('title').txt(xmlSafe(episode.title)).up();
+    item.ele('description').txt(xmlSafe(episode.description)).up();
     if (episode.description) {
-      item.ele('content:encoded').dat(episode.description).up();
+      item.ele('content:encoded').dat(xmlSafe(episode.description).replace(/]]>/g, ']]&gt;')).up();
     }
 
     // isPermaLink is always written explicitly: some clients default it to true
     // and then try to fetch the guid as a URL (§8.3 requirement 2).
-    item.ele('guid', { isPermaLink: 'false' }).txt(episode.id).up();
+    item.ele('guid', { isPermaLink: 'false' }).txt(xmlSafe(episode.id)).up();
     item.ele('pubDate').txt(toRFC2822(episode.pub_date)).up();
 
     // Omitted entirely when unknown — never zero, never an empty tag (§8.3 req 3).
@@ -186,9 +205,20 @@ function buildXml({ show, items, base, config }) {
   return doc.end({ prettyPrint: true });
 }
 
+/**
+ * When the feed's content last changed.
+ *
+ * Derived from the episodes and the show's own metadata timestamp — deliberately
+ * not from anything a scan touches for bookkeeping, so a feed that has not changed
+ * keeps reporting the same build date and the same ETag. Podcast apps poll often;
+ * a value that moved every few minutes meant every poll re-downloaded everything.
+ */
 function lastBuildDate(show, items) {
-  const newestEpisode = items[0]?.pub_date;
-  const candidates = [show.updated_at, newestEpisode].filter(Boolean).map((v) => new Date(v).getTime());
-  const newest = candidates.length ? Math.max(...candidates) : Date.now();
+  const stamps = [show.updated_at];
+  for (const episode of items) {
+    stamps.push(episode.pub_date, episode.updated_at);
+  }
+  const times = stamps.filter(Boolean).map((v) => new Date(v).getTime()).filter((t) => !Number.isNaN(t));
+  const newest = times.length ? Math.max(...times) : Date.now();
   return new Date(Math.min(newest, Date.now()));
 }

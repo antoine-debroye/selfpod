@@ -31,6 +31,26 @@ for (const warning of config.warnings) logger.warn(warning);
 
 let shutdown = async () => {};
 
+/**
+ * Last line of defence.
+ *
+ * Node exits the process on an unhandled rejection, which for a container means a
+ * restart loop — and the operator sees a service that keeps dying with no
+ * explanation. A background job that fails should degrade the app, not kill it, so
+ * these are logged loudly and the process keeps serving. A genuinely fatal state
+ * still surfaces through the health endpoint and the UI banner.
+ */
+process.on('unhandledRejection', (reason) => {
+  logger.error(
+    { err: reason instanceof Error ? reason : new Error(String(reason)) },
+    'a background task failed without being handled; SelfPod is still running, but please report this',
+  );
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error({ err }, 'an unexpected error escaped; SelfPod is still running, but please report this');
+});
+
 async function main() {
   logger.info(
     { version: VERSION, dataDir: config.dataDir, uid: config.runtimeUid, gid: config.runtimeGid },

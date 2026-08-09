@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -102,7 +102,7 @@ export function createCovers({ config, logger }) {
      */
     async saveUpload(showDir, sourcePath) {
       const target = join(showDir, CANONICAL_COVER_FILENAME);
-      const tmp = join(showDir, `.cover-upload-${process.pid}.tmp`);
+      const tmp = join(showDir, `.cover-upload-${randomUUID()}.tmp`);
       try {
         await sharp(sourcePath)
           .rotate() // honour EXIF orientation before discarding metadata
@@ -129,7 +129,7 @@ export function createCovers({ config, logger }) {
     async normalise(showDir, filename, { size = ARTWORK_MIN_PX } = {}) {
       const source = join(showDir, filename);
       const target = join(showDir, CANONICAL_COVER_FILENAME);
-      const tmp = join(showDir, `.cover-normalise-${process.pid}.tmp`);
+      const tmp = join(showDir, `.cover-normalise-${randomUUID()}.tmp`);
 
       const before = await api.inspect(source);
       if (before.error) {
@@ -158,26 +158,39 @@ export function createCovers({ config, logger }) {
     },
 
     /**
-     * Removes the other recognised cover filenames so detection can't flip back
-     * to a stale file the next time it runs (order matters in COVER_FILENAMES).
+     * Clears only the files that would *shadow* the new cover — i.e. those earlier
+     * than it in the detection order.
+     *
+     * It deliberately does not delete every recognised cover name. `folder.jpg` and
+     * `artwork.jpg` are the conventions Jellyfin, Plex and Kodi use, and a user's
+     * high-resolution `cover.png` is their original: destroying those to install a
+     * re-encoded JPEG would be deleting the user's files without asking.
      */
     async removeOtherCovers(showDir, keep) {
+      const keepIndex = COVER_FILENAMES.indexOf(keep.toLowerCase());
+      if (keepIndex <= 0) return [];
+
       let entries;
       try {
         entries = await readdir(showDir, { withFileTypes: true });
       } catch {
-        return;
+        return [];
       }
-      const recognised = new Set(COVER_FILENAMES);
+
+      const shadowing = new Set(COVER_FILENAMES.slice(0, keepIndex));
+      const removed = [];
       for (const entry of entries) {
         if (!entry.isFile()) continue;
         const lower = entry.name.toLowerCase();
-        if (lower === keep.toLowerCase()) continue;
-        if (!recognised.has(lower)) continue;
-        await unlink(join(showDir, entry.name)).catch((err) => {
-          logger?.debug({ err, file: entry.name }, 'could not remove superseded cover file');
-        });
+        if (!shadowing.has(lower)) continue;
+        try {
+          await unlink(join(showDir, entry.name));
+          removed.push(entry.name);
+        } catch (err) {
+          logger?.debug({ err, file: entry.name }, 'could not remove a shadowing cover file');
+        }
       }
+      return removed;
     },
 
     mimeTypeFor(filename) {

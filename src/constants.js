@@ -53,7 +53,17 @@ export const GENERATOR = 'SelfPod';
 
 export const EPISODE_STATUS = Object.freeze({
   ACTIVE: 'active',
+  /** File not on disk right now; still in the feed during its grace period. */
   MISSING: 'missing',
+  /**
+   * Gone for longer than the grace period, so dropped from the feed — but the row
+   * is kept, and the scanner re-adopts it with the same GUID if the file comes
+   * back. Deliberately distinct from `removed`: conflating the two meant a file
+   * that returned after a long outage came back as a brand-new episode, losing
+   * every subscriber's played state.
+   */
+  EXPIRED: 'expired',
+  /** Removed from the feed by the user. Never resurrected automatically. */
   REMOVED: 'removed',
 });
 

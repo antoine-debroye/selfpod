@@ -436,9 +436,22 @@ function showActions(slug) {
     </a>`;
 }
 
-/** Only same-site paths may be used as a post-login redirect target. */
+/**
+ * Only same-site paths may be used as a post-login redirect target.
+ *
+ * Checking for a leading `//` is not enough: the URL parser treats a backslash as
+ * a path separator too, so `/\\evil.example.com` resolves to another origin. The
+ * value is therefore parsed and only its path and query are kept.
+ */
 function sanitiseNext(value) {
   if (typeof value !== 'string' || !value.startsWith('/')) return '';
+  if (value.includes('\\')) return '';
   if (value.startsWith('//')) return '';
-  return value;
+  try {
+    const parsed = new URL(value, 'http://selfpod.invalid');
+    if (parsed.host !== 'selfpod.invalid') return '';
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return '';
+  }
 }

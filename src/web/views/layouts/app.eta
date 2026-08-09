@@ -42,7 +42,11 @@
 %>
 
 <% if (it.flash) { %>
-<script type="application/json" id="flash-data"><%~ JSON.stringify(it.flash) %></script>
+<%
+  /* `<` is escaped so a message containing "</script>" cannot break out of the tag.
+     Show titles and filenames reach this, and both are user-controlled. */
+%>
+<script type="application/json" id="flash-data"><%~ JSON.stringify(it.flash).replace(/</g, "\\u003c") %></script>
 <% } %>
 </body>
 </html>
