@@ -47,6 +47,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY src ./src
 COPY docker ./docker
+# Ships the admin-password reset, which is the only way back into an instance whose
+# generated password has scrolled out of the container log.
+COPY scripts ./scripts
 
 RUN chmod +x docker/entrypoint.sh \
  && mkdir -p /data \

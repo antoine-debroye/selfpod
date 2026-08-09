@@ -77,11 +77,18 @@ same thing in file form.
 
 TrueNAS 24.10 dropped Kubernetes for Docker, so SelfPod installs as a Custom App.
 
-### 1. Make a dataset for your podcasts
+### 1. Decide where your audio lives
 
-**Datasets → Add Dataset.** Name it something like `podcasts`. If you also want
-to copy files in over SMB, use the **SMB** or **Multiprotocol** dataset preset —
-that gets the ACLs right for mixed access.
+Either make a dataset for it (**Datasets → Add Dataset**, using the **SMB** or
+**Multiprotocol** preset if you also want to copy files in over SMB), or point
+SelfPod at a folder you already have — see *Reusing an existing media folder*
+below.
+
+SelfPod also needs a small dataset of its own for its database. Add one called
+`selfpod`, then open **Permissions → Edit** on it and set the owner to the same
+user that owns your audio. A new dataset belongs to `root`, and SelfPod does not
+run as root, so skipping this step is the most likely way to end up with an app
+that starts and then cannot write anything.
 
 ### 2. Find the UID and GID that own your files
 
@@ -94,49 +101,56 @@ Open **System → Shell** and run:
 id your-username
 ```
 
-You'll see something like `uid=3001(antoine) gid=3001(antoine)`. Those two
-numbers are your `PUID` and `PGID`. Use the account that owns — or will own — the
-audio files, typically the same account you use for the SMB share.
+You will get something like `uid=3000(antoine) gid=3001(antoine)`. Use those for
+`PUID` and `PGID` respectively.
+
+> **Read both numbers.** They are often different, and they do not have to match.
+> On a real box the user was `3000` while their group was `3001` — and `3000`
+> happened to be a *different* group (`SMB_Users`), so assuming "GID = UID" would
+> have silently granted the wrong group. Check the **Credentials → Groups** page if
+> you want to confirm the group's number.
 
 > **Why not just use 568?** `568` is TrueNAS's built-in `apps` user, and plenty of
 > guides suggest it. It only works if your dataset's ACL actually grants that user
-> access. If you're copying files in over SMB as yourself, your own UID is the
-> right answer, and SelfPod will read exactly what you wrote.
-
-While you're in the dataset's **Edit ACL** screen, make sure your user has
-**Full Control** with **inheritance enabled**, so files created later are also
-readable. SelfPod never changes permissions on your files — it reports problems
-and leaves your library alone.
+> access. If you copy files in over SMB as yourself, your own UID is the right
+> answer, and SelfPod will read exactly what you wrote.
 
 ### 3. Install the app
 
-**Apps → Discover Apps → ⋮ (top right) → Install via YAML.** Paste this, editing
-the three marked values:
+**Apps → Discover Apps → Custom App.** That opens a form rather than a YAML box on
+current TrueNAS versions, so fill it in as follows and leave everything else alone:
 
-```yaml
-services:
-  selfpod:
-    image: ghcr.io/antoine-debroye/selfpod:latest
-    container_name: selfpod
-    restart: unless-stopped
-    environment:
-      PUBLIC_BASE_URL: https://podcast.example.com   # ← your public address
-      PUID: 3001                                      # ← from `id your-username`
-      PGID: 3001                                      # ← from `id your-username`
-      TZ: Europe/London
-    volumes:
-      - /mnt/your-pool/podcasts:/data                 # ← your dataset path
-    ports:
-      - "8080:8080"
-    init: true
-```
+| Section | Field | Value |
+|---|---|---|
+| Application name | Application Name | `selfpod` |
+| Image | Repository | `ghcr.io/antoine-debroye/selfpod` |
+| Image | Tag | `latest` |
+| General | Timezone | your zone, e.g. `Europe/London` |
+| Container | Environment Variable | `PUBLIC_BASE_URL` = the address you will reach SelfPod on |
+| Container | Environment Variable | `PUID` = your UID |
+| Container | Environment Variable | `PGID` = your GID |
+| Container | Restart Policy | **Unless Stopped** — the default is *No*, which will not survive a reboot |
+| Network | Port: Host `8080`, Container `8080` | |
+| Storage | Host Path `/mnt/your-pool/selfpod` → Mount Path `/data` | |
+| Storage | Host Path `/mnt/your-pool/.../your-audio` → Mount Path `/data/shows` | |
 
 Leave it a moment: TrueNAS shows the app as *Deploying* until the health check
 passes, which takes up to about 30 seconds on first start.
 
+#### Reusing an existing media folder
+
+The two storage rows above are what let you point SelfPod at audio you already
+have. Mount your existing folder at `/data/shows` and each subfolder in it becomes
+a show — no files are moved and nothing is renamed. SelfPod's database stays in the
+separate `selfpod` dataset, so it never appears in your media share.
+
+The one visible change: SelfPod writes a `show.json` into a show's folder after you
+first edit that show's settings, so your metadata is portable. Nothing is written
+until you make an edit.
+
 ### 4. Get the first-run password
 
-**Apps → selfpod → Logs**, or in the shell:
+**Apps → selfpod → the log icon** next to the container, or in the shell:
 
 ```bash
 docker logs selfpod
@@ -145,12 +159,16 @@ docker logs selfpod
 Look for the boxed banner containing the generated password. Sign in with it and
 the setup wizard will ask you to choose your own.
 
+The log view only streams from the moment you open it, so if the banner has already
+scrolled past, use the reset described in **Locked out?** below rather than hunting
+for it.
+
 ### Notes for TrueNAS specifically
 
 - **Port already in use?** Change the left-hand number in `"8080:8080"`. The
   TrueNAS UI itself uses 80 and 443; check **Apps** for anything else on 8080.
-- **Updating.** TrueNAS does not reliably detect a new `:latest` for custom-YAML
-  apps. To update, **Edit** the app and save (which re-pulls), or in the shell:
+- **Updating.** TrueNAS does not reliably detect a new `:latest` for a Custom App.
+  To update, **Edit** the app and save (which re-pulls), or in the shell:
   `docker pull ghcr.io/antoine-debroye/selfpod:latest` and restart the app.
 - **Keep `/data` on your pool**, as above. Don't point it at an NFS or SMB *mount* —
   SQLite can't lock reliably over those, and SelfPod will warn you if it detects it.
@@ -262,6 +280,22 @@ what actually guarantees correctness.
 If SelfPod notices the watcher isn't reporting changes that the periodic scan
 keeps finding, it switches itself to polling and says so in the UI. That message
 is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
+
+## Locked out?
+
+SelfPod prints its generated password once, to the container log. If that has
+scrolled away, reset it from inside the container:
+
+```bash
+docker exec selfpod node scripts/reset-password.js
+```
+
+On TrueNAS, use **Apps → selfpod → the shell icon** next to the container and run
+`node scripts/reset-password.js` there.
+
+A new temporary password is printed, everyone is signed out, and the next sign-in
+asks you to choose your own. Nothing else is touched — your shows, episode
+identities and feed tokens are unchanged, so subscribers are unaffected.
 
 ## Moving to a new machine
 
