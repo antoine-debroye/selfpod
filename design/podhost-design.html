@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Podhost — Design System &amp; Interface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   PODHOST — Design System
+   A self-hosted podcast server. Design language: "The Broadcast Workshop"
+   — warm, crafted, editorial. Studio warmth meets library calm.
+   ============================================================ */
+
+:root {
+  /* --- Surfaces --- */
+  --paper:        #F6F2EB;   /* app background, warm cream */
+  --paper-2:      #EFE9DF;   /* recessed/secondary surface */
+  --card:         #FBF8F2;   /* raised card */
+  --line:         #E4DDCB;   /* hairline borders */
+  --line-2:       #D8CFB8;   /* stronger border */
+
+  /* --- Ink (dark sidebar / text) --- */
+  --ink:          #16181D;   /* near-black, warm */
+  --ink-2:        #23262D;   /* sidebar raised */
+  --ink-3:        #363B45;   /* sidebar hover */
+  --ink-mute:     #8A8A86;   /* muted text on paper */
+  --ink-soft:     #6B6A63;   /* secondary text on paper */
+  --text:         #1B1D22;   /* primary text on paper */
+
+  /* --- Accent: Signal Terracotta (the Podhost signature) --- */
+  --accent:       #D9602B;   /* primary accent — warm broadcast amber-red */
+  --accent-2:     #B84A1E;   /* hover / pressed */
+  --accent-soft:  #F3D9C8;   /* tint background */
+  --accent-ink:   #7A3215;   /* text on tint */
+
+  /* --- Secondary: Deep Teal (info / links) --- */
+  --teal:         #2A6F97;
+  --teal-soft:    #DCEAF2;
+
+  /* --- Status --- */
+  --ok:           #4A8C5C;
+  --ok-soft:      #DCE7DE;
+  --warn:         #C68A1E;
+  --warn-soft:    #F2E6C8;
+  --err:          #C44536;
+  --err-soft:     #F3D6D0;
+
+  /* --- Radii --- */
+  --r-sm: 7px;
+  --r:    11px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+
+  /* --- Shadow --- warm, soft */
+  --shadow:      0 1px 2px rgba(40,32,18,.05), 0 6px 18px -8px rgba(40,32,18,.10);
+  --shadow-lg:   0 2px 4px rgba(40,32,18,.06), 0 18px 40px -16px rgba(40,32,18,.18);
+
+  /* --- Type --- */
+  --serif: 'Fraunces', Georgia, serif;
+  --sans:  'Inter', -apple-system, system-ui, sans-serif;
+  --mono:  'JetBrains Mono', ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--sans);
+  background: var(--paper);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+  font-size: 15px;
+}
+
+/* page background texture: faint paper grain via layered gradients */
+body::before {
+  content:"";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 800px at 80% -10%, rgba(217,96,43,.05), transparent 60%),
+    radial-gradient(900px 700px at -10% 110%, rgba(42,111,151,.05), transparent 60%);
+  z-index: 0;
+}
+
+/* ----- Page chrome / nav rail for the showcase itself ----- */
+.showcase-nav {
+  position: fixed; top: 16px; right: 16px; z-index: 100;
+  background: var(--ink); color: #ECE7DA;
+  border-radius: 999px; padding: 6px 10px 6px 14px;
+  box-shadow: var(--shadow-lg);
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px;
+}
+.showcase-nav select {
+  background: var(--ink-3); color: #ECE7DA; border: none;
+  border-radius: 999px; padding: 5px 10px; font-family: var(--sans);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.showcase-nav .dot { width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent); }
+
+/* ----- Layout of the showcase page ----- */
+.page { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 0 28px 120px; }
+
+/* ---------- HERO / COVER ---------- */
+.cover {
+  padding: 90px 0 70px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 56px;
+}
+.cover .mark { display:flex; align-items:center; gap:14px; margin-bottom: 34px; }
+.cover .mark .logo { width: 46px; height: 46px; }
+.cover .mark .word { font-family: var(--serif); font-weight: 600; font-size: 26px; letter-spacing:-.01em; color:var(--ink); }
+.cover .mark .word span { color: var(--accent); }
+.cover h1 {
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(40px, 6vw, 74px); line-height: 1.02; letter-spacing: -.025em;
+  color: var(--ink); max-width: 16ch; margin-bottom: 22px;
+}
+.cover h1 em { font-style: italic; font-weight: 400; color: var(--accent); }
+.cover .lede { font-size: 19px; line-height: 1.55; color: var(--ink-soft); max-width: 52ch; }
+.cover .meta { margin-top: 30px; display:flex; gap: 28px; flex-wrap:wrap; font-size: 13px; color: var(--ink-mute); }
+.cover .meta b { color: var(--ink-soft); font-weight:600; display:block; margin-bottom:2px; font-family: var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+.cover .meta div { color: var(--text); }
+
+/* ---------- SECTION ---------- */
+.section { margin: 0 0 76px; scroll-margin-top: 24px; }
+.section-head { display:flex; align-items:baseline; gap: 16px; margin-bottom: 26px; }
+.section-head .num { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight:600; letter-spacing:.06em; }
+.section-head h2 { font-family: var(--serif); font-weight: 600; font-size: 30px; letter-spacing:-.015em; color: var(--ink); }
+.section-head .line { flex:1; height:1px; background: var(--line); }
+.section-intro { color: var(--ink-soft); max-width: 64ch; font-size: 15.5px; margin-bottom: 28px; }
+
+/* ============================================================
+   DESIGN SYSTEM COMPONENTS
+   ============================================================ */
+
+/* ---- Palette ---- */
+.swatches { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 14px; }
+.sw { border-radius: var(--r); overflow:hidden; border:1px solid var(--line); background:var(--card); box-shadow:var(--shadow); }
+.sw .chip { height: 78px; }
+.sw .info { padding: 12px 14px 14px; }
+.sw .info .name { font-weight:600; font-size:13px; color:var(--ink); }
+.sw .info .hex { font-family: var(--mono); font-size:11px; color:var(--ink-mute); margin-top:2px; }
+.sw .info .role { font-size:11px; color:var(--ink-soft); margin-top:6px; }
+
+/* ---- Type specimen ---- */
+.type-specimen { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding: 32px 34px; box-shadow:var(--shadow); }
+.type-row { padding: 18px 0; border-bottom:1px dashed var(--line); display:flex; gap:24px; align-items:baseline; }
+.type-row:last-child { border-bottom:none; }
+.type-row .label { width: 120px; flex:none; font-family: var(--mono); font-size:11px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.06em; }
+.type-row .demo { flex:1; }
+.ds-display { font-family:var(--serif); font-weight:600; font-size:40px; line-height:1.05; letter-spacing:-.02em; color:var(--ink); }
+.ds-display em { font-style:italic; font-weight:400; color:var(--accent); }
+.ds-h2 { font-family:var(--serif); font-weight:600; font-size:26px; letter-spacing:-.012em; color:var(--ink); }
+.ds-body { font-size:15.5px; color:var(--text); max-width:50ch; }
+.ds-mono { font-family:var(--mono); font-size:13px; color:var(--teal); }
+.ds-caption { font-family:var(--mono); font-size:11px; color:var(--ink-mute); letter-spacing:.05em; text-transform:uppercase; }
+
+/* ---- Components grid ---- */
+.comp-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:18px; }
+.comp-card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:22px; box-shadow:var(--shadow); }
+.comp-card h4 { font-family:var(--mono); font-size:11px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.06em; margin-bottom:16px; }
+
+/* buttons */
+.btn { display:inline-flex; align-items:center; gap:8px; font-family:var(--sans); font-weight:600; font-size:14px;
+  border:1px solid transparent; border-radius: var(--r-sm); padding:9px 15px; cursor:pointer; transition:.15s; text-decoration:none; }
+.btn svg { width:16px;height:16px; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { background:var(--accent-2); }
+.btn-ghost { background:transparent; color:var(--ink); border-color:var(--line-2); }
+.btn-ghost:hover { background:var(--paper-2); }
+.btn-ink { background:var(--ink); color:#ECE7DA; }
+.btn-ink:hover { background:var(--ink-2); }
+.btn-danger { background:transparent; color:var(--err); border-color:var(--err); }
+.btn-danger:hover { background:var(--err-soft); }
+.btn-sm { padding:6px 11px; font-size:13px; }
+
+/* badges / status */
+.badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; }
+.badge .d { width:7px;height:7px;border-radius:50%; }
+.badge-ok { background:var(--ok-soft); color:#2E5A3B; } .badge-ok .d { background:var(--ok); }
+.badge-warn { background:var(--warn-soft); color:#8A5E10; } .badge-warn .d { background:var(--warn); }
+.badge-err { background:var(--err-soft); color:#8C2A20; } .badge-err .d { background:var(--err); }
+.badge-mute { background:var(--paper-2); color:var(--ink-soft); border:1px solid var(--line); }
+
+/* inputs */
+.field { margin-bottom: 14px; }
+.field label { display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:6px; }
+.field input, .field textarea, .field select {
+  width:100%; font-family:var(--sans); font-size:14px; color:var(--text);
+  background:#fff; border:1px solid var(--line-2); border-radius:var(--r-sm); padding:10px 12px; transition:.15s;
+}
+.field input:focus, .field textarea:focus, .field select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.field .hint { font-size:12px; color:var(--ink-mute); margin-top:5px; }
+
+.toggle { display:flex; align-items:center; gap:10px; }
+.toggle .switch { width:42px;height:24px;border-radius:999px;background:var(--line-2); position:relative; transition:.15s; cursor:pointer; }
+.toggle .switch::after { content:""; position:absolute; top:3px; left:3px; width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2); transition:.15s; }
+.toggle.on .switch { background:var(--accent); }
+.toggle.on .switch::after { left:21px; }
+.toggle .tl { font-size:13px; }
+
+/* avatar / cover thumb */
+.thumb { border-radius:var(--r); overflow:hidden; background:var(--ink); position:relative; }
+.thumb.wave { background: linear-gradient(135deg,#2A2438,#3E2D4A); display:flex; align-items:center; justify-content:center; }
+
+/* ============================================================
+   SCREEN MOCKUPS  (rendered inside a "browser" frame)
+   ============================================================ */
+.frame-wrap { display:flex; flex-direction:column; gap:14px; }
+.frame-label { display:flex; align-items:center; gap:12px; }
+.frame-label .tag { font-family:var(--mono); font-size:11px; color:#fff; background:var(--ink); padding:3px 9px; border-radius:999px; letter-spacing:.05em; }
+.frame-label .desc { font-size:14px; color:var(--ink-soft); }
+.frame-label .route { font-family:var(--mono); font-size:12px; color:var(--teal); margin-left:auto; }
+
+.browser {
+  border-radius: 14px; overflow:hidden; box-shadow: var(--shadow-lg);
+  border:1px solid var(--line-2); background:var(--card);
+}
+.browser .bar { background: var(--ink-2); display:flex; align-items:center; gap:8px; padding:11px 14px; }
+.browser .bar .lights { display:flex; gap:6px; }
+.browser .bar .lights i { width:11px;height:11px;border-radius:50%; display:block; }
+.browser .bar .lights i:nth-child(1){background:#F76C5E;} .browser .bar .lights i:nth-child(2){background:#E8B84B;} .browser .bar .lights i:nth-child(3){background:#5BB97A;}
+.browser .bar .url { flex:1; background:var(--ink); color:#9C998F; font-family:var(--mono); font-size:12px; padding:5px 14px; border-radius:6px; }
+.browser .bar .url b { color:#C9C4B5; font-weight:500; }
+.browser .viewport { background:var(--paper); }
+
+/* ----- App shell (sidebar + topbar) used inside mockups ----- */
+.app { display:grid; grid-template-columns: 232px 1fr; min-height: 600px; }
+.sidebar { background: var(--ink); color:#CFC9BB; padding: 20px 16px; display:flex; flex-direction:column; gap:6px; }
+.sidebar .brand { display:flex; align-items:center; gap:10px; padding: 4px 8px 18px; }
+.sidebar .brand .logo { width:30px;height:30px; }
+.sidebar .brand .word { font-family:var(--serif); font-weight:600; font-size:18px; color:#F2EEE4; letter-spacing:-.01em; }
+.sidebar .brand .word span { color: var(--accent); }
+.sidebar .nav-item { display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:var(--r-sm); font-size:13.5px; font-weight:500; color:#B6B0A2; cursor:pointer; transition:.12s; }
+.sidebar .nav-item svg { width:17px;height:17px; opacity:.8; }
+.sidebar .nav-item:hover { background:var(--ink-3); color:#ECE7DA; }
+.sidebar .nav-item.active { background:var(--ink-3); color:#fff; }
+.sidebar .nav-item.active svg { opacity:1; color:var(--accent); }
+.sidebar .nav-section { font-family:var(--mono); font-size:10px; color:#6E6B62; letter-spacing:.07em; text-transform:uppercase; padding:18px 11px 7px; }
+.sidebar .spacer { flex:1; }
+.sidebar .me { display:flex; align-items:center; gap:10px; padding:10px; border-radius:var(--r-sm); background:var(--ink-2); }
+.sidebar .me .av { width:30px;height:30px;border-radius:50%; background:linear-gradient(135deg,var(--accent),#B84A1E); display:flex;align-items:center;justify-content:center; color:#fff;font-weight:700;font-size:13px; }
+.sidebar .me .who { font-size:12px; color:#ECE7DA; font-weight:600; } .sidebar .me .who small { display:block; color:#7E7B72; font-weight:400; font-size:10.5px; }
+
+.topbar { display:flex; align-items:center; gap:14px; padding:16px 26px; border-bottom:1px solid var(--line); background:var(--card); }
+.topbar .crumbs { font-size:13px; color:var(--ink-mute); }
+.topbar .crumbs b { color:var(--text); font-weight:600; }
+.topbar .right { margin-left:auto; display:flex; align-items:center; gap:12px; }
+.topbar .public-url { font-family:var(--mono); font-size:12px; color:var(--ink-soft); background:var(--paper-2); border:1px solid var(--line); padding:5px 10px; border-radius:7px; display:flex; align-items:center; gap:7px; }
+.topbar .public-url .d { width:7px;height:7px;border-radius:50%; background:var(--ok); box-shadow:0 0 6px var(--ok); }
+
+.content { padding: 26px 30px 40px; }
+
+/* page title block */
+.page-title { display:flex; align-items:flex-end; gap:18px; margin-bottom: 22px; }
+.page-title h1 { font-family:var(--serif); font-weight:600; font-size:30px; letter-spacing:-.015em; color:var(--ink); }
+.page-title .sub { color:var(--ink-mute); font-size:13.5px; margin-bottom:3px; }
+.page-title .actions { margin-left:auto; display:flex; gap:10px; }
+
+/* dashboard show cards */
+.show-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(250px,1fr)); gap:18px; }
+.show-card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; box-shadow:var(--shadow); transition:.15s; cursor:pointer; }
+.show-card:hover { transform: translateY(-2px); box-shadow:var(--shadow-lg); border-color:var(--line-2); }
+.show-card .cover-art { height: 128px; position:relative; }
+.show-card .cover-art .art { width:100%;height:100%;object-fit:cover;display:block; }
+.show-card .body { padding: 14px 15px 16px; }
+.show-card .body .title { font-family:var(--serif); font-weight:600; font-size:17px; color:var(--ink); line-height:1.2; margin-bottom:3px; }
+.show-card .body .meta { font-size:12px; color:var(--ink-mute); display:flex; align-items:center; gap:8px; }
+.show-card .body .meta .sep { width:3px;height:3px;border-radius:50%;background:var(--line-2); }
+.show-card .status { position:absolute; top:10px; right:10px; }
+.show-card .play-glyph { position:absolute; bottom:10px; left:10px; width:34px;height:34px;border-radius:50%; background:rgba(22,24,29,.6); backdrop-filter:blur(6px); display:flex;align-items:center;justify-content:center; color:#fff; }
+.show-card .play-glyph svg { width:15px;height:15px; }
+
+/* show detail layout */
+.detail-grid { display:grid; grid-template-columns: 300px 1fr; gap: 26px; }
+.detail-left { display:flex; flex-direction:column; gap:18px; }
+.cover-box { border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--line); box-shadow:var(--shadow); position:relative; }
+.cover-box .art { width:100%; aspect-ratio:1/1; object-fit:cover; display:block; }
+.cover-box .replace { position:absolute; inset:auto 0 0 0; padding:10px; background:linear-gradient(transparent, rgba(22,24,29,.7)); color:#fff; font-size:12px; display:flex; align-items:center; justify-content:center; gap:7px; }
+.feed-box { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px; }
+.feed-box .lab { font-family:var(--mono); font-size:10.5px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.06em; margin-bottom:9px; }
+.feed-box .url-row { display:flex; align-items:center; gap:8px; background:var(--paper-2); border:1px solid var(--line); border-radius:var(--r-sm); padding:8px 10px; }
+.feed-box .url-row .u { font-family:var(--mono); font-size:11.5px; color:var(--teal); flex:1; overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.feed-box .qr { width:74px;height:74px; background:#fff; border:1px solid var(--line); border-radius:8px; margin-top:12px; display:flex;align-items:center;justify-content:center; }
+
+.form-card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding: 22px 24px; box-shadow:var(--shadow); margin-bottom:18px; }
+.form-card .ftitle { font-family:var(--serif); font-weight:600; font-size:18px; color:var(--ink); margin-bottom:4px; }
+.form-card .fdesc { font-size:13px; color:var(--ink-mute); margin-bottom:18px; }
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+
+/* episode table */
+.ep-table { width:100%; border-collapse:collapse; }
+.ep-table th { text-align:left; font-family:var(--mono); font-size:10.5px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.06em; padding:10px 12px; border-bottom:1px solid var(--line); font-weight:600; }
+.ep-table td { padding:13px 12px; border-bottom:1px solid var(--line); font-size:13.5px; color:var(--text); vertical-align:middle; }
+.ep-table tr:hover td { background:var(--paper-2); }
+.ep-table .ep-title { font-weight:600; color:var(--ink); }
+.ep-table .ep-title small { display:block; font-weight:400; color:var(--ink-mute); font-size:11.5px; font-family:var(--mono); margin-top:1px; }
+.ep-table .dur { font-family:var(--mono); font-size:12px; color:var(--ink-soft); }
+.ep-table .size { font-family:var(--mono); font-size:12px; color:var(--ink-mute); }
+.ep-table .actions { display:flex; gap:6px; justify-content:flex-end; }
+.icon-btn { width:30px;height:30px;border-radius:7px; border:1px solid var(--line-2); background:var(--card); display:inline-flex;align-items:center;justify-content:center; cursor:pointer; color:var(--ink-soft); }
+.icon-btn:hover { background:var(--paper-2); color:var(--ink); }
+.icon-btn.danger:hover { color:var(--err); border-color:var(--err); }
+.ep-table .wave { display:flex; align-items:flex-end; gap:2px; height:20px; }
+.ep-table .wave i { width:2.5px; background:var(--accent); opacity:.55; border-radius:1px; }
+
+/* activity log */
+.log-list { display:flex; flex-direction:column; }
+.log-item { display:grid; grid-template-columns: 96px 1fr auto; gap:16px; padding:15px 0; border-bottom:1px solid var(--line); align-items:start; }
+.log-item .time { font-family:var(--mono); font-size:12px; color:var(--ink-mute); }
+.log-item .body { font-size:13.5px; color:var(--text); }
+.log-item .body b { color:var(--ink); font-weight:600; }
+.log-item .body .err { color:var(--err); display:block; margin-top:5px; font-size:13px; background:var(--err-soft); border:1px solid #ECC9C3; border-radius:7px; padding:9px 12px; }
+.log-item .trig { font-family:var(--mono); font-size:11px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.05em; }
+
+/* settings rows */
+.set-row { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--line); }
+.set-row .info { flex:1; }
+.set-row .info .t { font-weight:600; font-size:14.5px; color:var(--ink); }
+.set-row .info .d { font-size:13px; color:var(--ink-mute); margin-top:2px; }
+.set-row .val { font-family:var(--mono); font-size:13px; color:var(--ink-soft); }
+
+/* upload dropzone */
+.dropzone { border:2px dashed var(--line-2); border-radius:var(--r-lg); padding: 50px 30px; text-align:center; background:var(--card); transition:.15s; }
+.dropzone .glyph { width:64px;height:64px;border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex;align-items:center;justify-content:center; margin:0 auto 18px; }
+.dropzone h3 { font-family:var(--serif); font-weight:600; font-size:22px; color:var(--ink); margin-bottom:6px; }
+.dropzone p { color:var(--ink-mute); font-size:14px; }
+.dropzone .or { margin:18px 0; font-size:12px; color:var(--ink-mute); }
+.queue { margin-top:20px; }
+.queue-item { display:flex; align-items:center; gap:14px; background:var(--card); border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 14px; margin-bottom:10px; }
+.queue-item .ic { width:34px;height:34px;border-radius:8px; background:var(--paper-2); display:flex;align-items:center;justify-content:center; color:var(--accent); }
+.queue-item .nm { font-weight:600; font-size:13.5px; color:var(--ink); } .queue-item .nm small { display:block; font-weight:400; color:var(--ink-mute); font-size:11.5px; font-family:var(--mono); }
+.queue-item .bar { flex:1; height:6px; background:var(--paper-2); border-radius:999px; overflow:hidden; max-width:200px; }
+.queue-item .bar i { display:block; height:100%; background:var(--accent); border-radius:999px; }
+.queue-item .pct { font-family:var(--mono); font-size:12px; color:var(--ink-soft); }
+
+/* login */
+.login-shell { min-height:600px; display:grid; grid-template-columns: 1.1fr 1fr; background:var(--ink); }
+.login-art { position:relative; overflow:hidden; background: radial-gradient(circle at 30% 20%, #2A2438, #16181D 70%); display:flex; align-items:flex-end; padding:44px; }
+.login-art .glow { position:absolute; top:-20%; right:-10%; width:60%; aspect-ratio:1/1; background:radial-gradient(circle, rgba(217,96,43,.35), transparent 60%); }
+.login-art .quote { position:relative; color:#ECE7DA; }
+.login-art .quote .logo { width:42px;height:42px; margin-bottom:26px; }
+.login-art .quote h2 { font-family:var(--serif); font-weight:600; font-size:34px; line-height:1.1; letter-spacing:-.02em; max-width:14ch; }
+.login-art .quote h2 em { font-style:italic; font-weight:400; color:var(--accent); }
+.login-art .quote .by { margin-top:18px; font-family:var(--mono); font-size:11px; color:#7E7B72; letter-spacing:.05em; text-transform:uppercase; }
+.login-form { background:var(--paper); padding: 56px 50px; display:flex; flex-direction:column; justify-content:center; }
+.login-form .welcome { font-family:var(--serif); font-weight:600; font-size:26px; color:var(--ink); margin-bottom:4px; }
+.login-form .sub { color:var(--ink-mute); font-size:14px; margin-bottom:30px; }
+
+/* setup wizard */
+.setup { padding: 44px 50px; min-height:600px; }
+.setup-progress { display:flex; align-items:center; gap:10px; margin-bottom:36px; }
+.setup-progress .step { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--ink-mute); }
+.setup-progress .step .n { width:26px;height:26px;border-radius:50%; border:1px solid var(--line-2); display:flex;align-items:center;justify-content:center; font-family:var(--mono); font-size:12px; font-weight:600; }
+.setup-progress .step.done .n { background:var(--ok); color:#fff; border-color:var(--ok); }
+.setup-progress .step.active .n { background:var(--accent); color:#fff; border-color:var(--accent); }
+.setup-progress .step.active { color:var(--ink); font-weight:600; }
+.setup-progress .bar { flex:1; height:2px; background:var(--line); border-radius:1px; }
+.setup-progress .bar.done { background:var(--ok); }
+
+/* misc helpers */
+.kbd { font-family:var(--mono); font-size:11px; background:var(--paper-2); border:1px solid var(--line-2); border-bottom-width:2px; border-radius:5px; padding:1px 6px; color:var(--ink-soft); }
+.notice { display:flex; gap:12px; align-items:flex-start; padding:13px 15px; border-radius:var(--r-sm); font-size:13px; }
+.notice.warn { background:var(--warn-soft); color:#8A5E10; border:1px solid #E6D199; }
+.notice.info { background:var(--teal-soft); color:#1E547A; border:1px solid #BFDAE8; }
+.notice svg { width:18px;height:18px; flex:none; margin-top:1px; }
+.mono { font-family:var(--mono); }
+
+.section-tag { font-family:var(--mono); font-size:11px; color:var(--accent); font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-bottom:8px; }
+
+hr.soft { border:none; border-top:1px solid var(--line); margin:22px 0; }
+
+@media (max-width: 820px){
+  .detail-grid, .form-row { grid-template-columns:1fr; }
+  .login-shell { grid-template-columns:1fr; }
+  .login-art { display:none; }
+  .app { grid-template-columns:1fr; }
+  .sidebar { display:none; }
+}
+</style>
+</head>
+<body>
+
+<div class="showcase-nav">
+  <span class="dot"></span>
+  <select id="navSelect">
+    <option value="#cover">Cover</option>
+    <option value="#system">01 · Design System</option>
+    <option value="#screen-login">02 · Login</option>
+    <option value="#screen-setup">03 · Setup Wizard</option>
+    <option value="#screen-dashboard">04 · Dashboard</option>
+    <option value="#screen-show">05 · Show Detail</option>
+    <option value="#screen-episode">06 · Episode Edit</option>
+    <option value="#screen-upload">07 · Upload</option>
+    <option value="#screen-activity">08 · Activity Log</option>
+    <option value="#screen-settings">09 · Settings</option>
+  </select>
+</div>
+
+<div class="page">
+
+<!-- ================= COVER ================= -->
+<section class="cover" id="cover">
+  <div class="mark">
+    <!-- logo: a rounded square with a stylized waveform / broadcast glyph -->
+    <svg class="logo" viewBox="0 0 48 48" fill="none">
+      <rect width="48" height="48" rx="12" fill="#16181D"/>
+      <g stroke="#D9602B" stroke-width="3" stroke-linecap="round">
+        <line x1="13" y1="24" x2="13" y2="24"/>
+        <line x1="19" y1="17" x2="19" y2="31"/>
+        <line x1="25" y1="11" x2="25" y2="37"/>
+        <line x1="31" y1="17" x2="31" y2="31"/>
+        <line x1="37" y1="21" x2="37" y2="27"/>
+      </g>
+    </svg>
+    <div class="word">Pod<span>host</span></div>
+  </div>
+  <h1>Your shows, <em>self-hosted</em> — in a workshop, not a dashboard.</h1>
+  <p class="lede">A design language for Podhost, a single-container podcast server. Warm, crafted, and built so that dropping a file in a folder is the whole workflow. This document is the complete design system and a high-fidelity pass over every screen in the spec.</p>
+  <div class="meta">
+    <div><b>Identity</b>The Broadcast Workshop</div>
+    <div><b>Type</b>Fraunces · Inter · JetBrains Mono</div>
+    <div><b>Accent</b>Signal Terracotta · #D9602B</div>
+    <div><b>Screens</b>9 mockups</div>
+  </div>
+</section>
+
+<!-- ================= 01 DESIGN SYSTEM ================= -->
+<section class="section" id="system">
+  <div class="section-head">
+    <span class="num">01</span><h2>Design System</h2><span class="line"></span>
+  </div>
+  <p class="section-intro">Self-hosted tools usually look like they were built for the person who built them. Podhost is for someone who records a show in a closet studio and wants their infrastructure to feel like a quiet, well-made instrument — not a server console. The system below is built around warmth (paper, ink, terracotta), a single editorial serif for voice, and clarity for the technical bits that matter.</p>
+
+  <!-- Palette -->
+  <div class="section-tag">Palette</div>
+  <div class="swatches" style="margin-bottom:34px">
+    <div class="sw"><div class="chip" style="background:#F6F2EB"></div><div class="info"><div class="name">Paper</div><div class="hex">#F6F2EB</div><div class="role">App background</div></div></div>
+    <div class="sw"><div class="chip" style="background:#FBF8F2;border:1px solid #E4DDCB"></div><div class="info"><div class="name">Card</div><div class="hex">#FBF8F2</div><div class="role">Raised surfaces</div></div></div>
+    <div class="sw"><div class="chip" style="background:#EFE9DF"></div><div class="info"><div class="name">Paper-2</div><div class="hex">#EFE9DF</div><div class="role">Recessed fields</div></div></div>
+    <div class="sw"><div class="chip" style="background:#16181D"></div><div class="info"><div class="name">Ink</div><div class="hex">#16181D</div><div class="role">Sidebar, dark UI</div></div></div>
+    <div class="sw"><div class="chip" style="background:#D9602B"></div><div class="info"><div class="name">Signal Terracotta</div><div class="hex">#D9602B</div><div class="role">Primary accent</div></div></div>
+    <div class="sw"><div class="chip" style="background:#2A6F97"></div><div class="info"><div class="name">Deep Teal</div><div class="hex">#2A6F97</div><div class="role">Links, info</div></div></div>
+    <div class="sw"><div class="chip" style="background:#4A8C5C"></div><div class="info"><div class="name">OK Green</div><div class="hex">#4A8C5C</div><div class="role">Healthy scan</div></div></div>
+    <div class="sw"><div class="chip" style="background:#C68A1E"></div><div class="info"><div class="name">Warn Amber</div><div class="hex">#C68A1E</div><div class="role">Warnings</div></div></div>
+    <div class="sw"><div class="chip" style="background:#C44536"></div><div class="info"><div class="name">Err Red</div><div class="hex">#C44536</div><div class="role">Destructive, errors</div></div></div>
+  </div>
+
+  <!-- Type -->
+  <div class="section-tag">Typography</div>
+  <div class="type-specimen" style="margin-bottom:34px">
+    <div class="type-row">
+      <div class="label">Display<br>Fraunces 600</div>
+      <div class="demo"><div class="ds-display">Late Night <em>Tape</em> Club</div></div>
+    </div>
+    <div class="type-row">
+      <div class="label">Heading<br>Fraunces 600</div>
+      <div class="demo"><div class="ds-h2">Show detail &amp; section titles</div></div>
+    </div>
+    <div class="type-row">
+      <div class="label">Body<br>Inter 400</div>
+      <div class="demo"><div class="ds-body">The body copy stays in Inter so dense admin UI reads cleanly. Fraunces is reserved for moments that deserve a voice: show titles, page headings, the editorial flourishes that stop the app feeling like a settings panel.</div></div>
+    </div>
+    <div class="type-row">
+      <div class="label">Mono<br>JetBrains Mono</div>
+      <div class="demo"><div class="ds-mono">https://podcast.example.com/feeds/late-night-tape-club/a1b2c3.xml</div></div>
+    </div>
+    <div class="type-row">
+      <div class="label">Caption<br>JetBrains Mono 11</div>
+      <div class="demo"><div class="ds-caption">EPISODE COUNT · LAST SCAN · FILE SIZE</div></div>
+    </div>
+  </div>
+
+  <!-- Components -->
+  <div class="section-tag">Components</div>
+  <div class="comp-grid">
+    <div class="comp-card">
+      <h4>Buttons</h4>
+      <div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start">
+        <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New show</button>
+        <button class="btn btn-ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>Rescan all</button>
+        <button class="btn btn-ink">Save changes</button>
+        <button class="btn btn-danger btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>Delete file</button>
+      </div>
+    </div>
+    <div class="comp-card">
+      <h4>Status &amp; Badges</h4>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        <span class="badge badge-ok"><span class="d"></span>Healthy · 24 episodes</span>
+        <span class="badge badge-warn"><span class="d"></span>2 warnings</span>
+        <span class="badge badge-err"><span class="d"></span>Scan failed</span>
+        <span class="badge badge-mute">Missing file</span>
+      </div>
+      <hr class="soft">
+      <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft)">
+        <span class="badge badge-ok" style="min-width:18px;justify-content:center;padding:3px"><span class="d"></span></span> Active
+        <span class="badge badge-warn" style="min-width:18px;justify-content:center;padding:3px"><span class="d"></span></span> Missing (grace)
+      </div>
+    </div>
+    <div class="comp-card">
+      <h4>Form fields</h4>
+      <div class="field"><label>Show title</label><input value="Late Night Tape Club" /></div>
+      <div class="field"><label>Author email</label><input value="studio@example.com" type="email" /></div>
+      <div class="toggle on"><span class="switch"></span><span class="tl">Explicit content</span></div>
+    </div>
+    <div class="comp-card">
+      <h4>Notices</h4>
+      <div class="notice warn" style="margin-bottom:10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>Cover art is 200×200px. Directories require 1400–3000px, square.</div>
+      <div class="notice info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Live file detection isn't available on this volume — scanning every 5&nbsp;min.</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 02 LOGIN ================= -->
+<section class="section" id="screen-login">
+  <div class="section-head"><span class="num">02</span><h2>Login</h2><span class="line"></span></div>
+  <p class="section-intro">A split screen: an editorial hero on the dark side that says what Podhost is, a calm form on the paper side. Single admin — no social buttons, no "forgot password" circus. First run forces a password change; otherwise this is the door.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Admin login</span><span class="route">/login</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/login</b></div></div>
+      <div class="viewport">
+        <div class="login-shell">
+          <div class="login-art">
+            <div class="glow"></div>
+            <div class="quote">
+              <svg class="logo" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="#F2EEE4"/>
+                <g stroke="#D9602B" stroke-width="3" stroke-linecap="round">
+                  <line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/>
+                </g>
+              </svg>
+              <h2>Drop a file. <em>It's an episode.</em></h2>
+              <div class="by">Podhost · Self-hosted podcast server</div>
+            </div>
+          </div>
+          <div class="login-form">
+            <div class="welcome">Welcome back</div>
+            <div class="sub">Sign in to your Podhost instance.</div>
+            <div class="field"><label>Username</label><input value="admin" /></div>
+            <div class="field"><label>Password</label><input type="password" value="••••••••••••" /></div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:6px">Sign in</button>
+            <div style="margin-top:18px;font-size:12px;color:var(--ink-mute)">Running Podhost 1.4.0 · <span class="mono" style="color:var(--teal)">/health ok</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 03 SETUP ================= -->
+<section class="section" id="screen-setup">
+  <div class="section-head"><span class="num">03</span><h2>Setup Wizard</h2><span class="line"></span></div>
+  <p class="section-intro">First run only. Three steps shown as a progress rail: secure the admin account, set the public base URL (pre-filled from env), define defaults. The tone is "let's get you on the air" — not a config form.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">First-run setup · step 2 of 3</span><span class="route">/setup</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/setup</b></div></div>
+      <div class="viewport">
+        <div class="setup">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:40px">
+            <svg style="width:34px;height:34px" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="11" fill="#16181D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg>
+            <span style="font-family:var(--serif);font-weight:600;font-size:22px;color:var(--ink)">Pod<span style="color:var(--accent)">host</span></span>
+          </div>
+          <div class="setup-progress">
+            <div class="step done"><span class="n">✓</span>Admin account</div><div class="bar done"></div>
+            <div class="step active"><span class="n">2</span>Public URL</div><div class="bar"></div>
+            <div class="step"><span class="n">3</span>Defaults</div>
+          </div>
+
+          <div style="max-width:560px">
+            <div class="section-tag">Step 2</div>
+            <h2 style="font-family:var(--serif);font-weight:600;font-size:26px;color:var(--ink);margin-bottom:6px">Where does your server live?</h2>
+            <p style="color:var(--ink-mute);font-size:14px;margin-bottom:26px">Podhost uses this to build the feed and media URLs your podcast app will fetch. It's the address your reverse proxy serves Podhost on.</p>
+            <div class="field"><label>Public base URL</label><input value="https://podcast.example.com" class="mono" style="font-family:var(--mono);font-size:13px" /></div>
+            <div class="notice info" style="margin:6px 0 22px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Pre-filled from <span class="mono">PUBLIC_BASE_URL</span>. You can change it here without editing the container.</div>
+            <div style="display:flex;gap:10px;margin-top:18px">
+              <button class="btn btn-ghost">Back</button>
+              <button class="btn btn-primary">Continue</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 04 DASHBOARD ================= -->
+<section class="section" id="screen-dashboard">
+  <div class="section-head"><span class="num">04</span><h2>Dashboard</h2><span class="line"></span></div>
+  <p class="section-intro">The home screen. A grid of show cards with cover art, a status dot (the spec's most important surfacing requirement — errors show up here first, never in a podcast app), episode count and last scan. The public URL is pinned to the topbar with a one-click reachability test.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Dashboard — show overview</span><span class="route">/</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <!-- sidebar -->
+          <div class="sidebar">
+            <div class="brand">
+              <svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg>
+              <div class="word">Pod<span>host</span></div>
+            </div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M13 3v5h5"/></svg>Shows</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin · podhost.local</small></div></div>
+          </div>
+
+          <!-- main -->
+          <div>
+            <div class="topbar">
+              <div class="crumbs"><b>Dashboard</b></div>
+              <div class="right">
+                <div class="public-url"><span class="d"></span>podcast.example.com <span style="color:var(--ink-mute);margin-left:4px">· test</span></div>
+                <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>Rescan all</button>
+                <button class="btn btn-primary btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New show</button>
+              </div>
+            </div>
+            <div class="content">
+              <div class="page-title">
+                <div>
+                  <div class="sub">3 shows · last full scan 2 min ago</div>
+                  <h1>Your workshop</h1>
+                </div>
+              </div>
+
+              <div class="show-grid">
+                <!-- card 1 -->
+                <div class="show-card">
+                  <div class="cover-art">
+                    <div class="art" style="background:linear-gradient(135deg,#3E2D4A,#1E1830);display:flex;align-items:center;justify-content:center">
+                      <svg viewBox="0 0 120 120" style="width:100%;height:100%;position:absolute"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#D9602B" stop-opacity=".9"/><stop offset="1" stop-color="#7A3215" stop-opacity=".4"/></linearGradient></defs><text x="50%" y="54%" text-anchor="middle" font-family="Fraunces" font-weight="600" font-size="34" fill="#F2EEE4">LNTC</text></svg>
+                    </div>
+                    <span class="status"><span class="badge badge-ok"><span class="d"></span>24 ep</span></span>
+                    <div class="play-glyph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>
+                  </div>
+                  <div class="body">
+                    <div class="title">Late Night Tape Club</div>
+                    <div class="meta"><span>Audio · m4a</span><span class="sep"></span><span>scanned 2m ago</span></div>
+                  </div>
+                </div>
+                <!-- card 2 -->
+                <div class="show-card">
+                  <div class="cover-art">
+                    <div class="art" style="background:linear-gradient(135deg,#2A6F97,#16384D);position:relative">
+                      <svg viewBox="0 0 120 120" style="width:100%;height:100%;position:absolute"><text x="50%" y="56%" text-anchor="middle" font-family="Fraunces" font-weight="600" font-size="30" fill="#F2EEE4">Field Notes</text></svg>
+                    </div>
+                    <span class="status"><span class="badge badge-ok"><span class="d"></span>12 ep</span></span>
+                    <div class="play-glyph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>
+                  </div>
+                  <div class="body">
+                    <div class="title">Field Notes</div>
+                    <div class="meta"><span>Audio · mp3</span><span class="sep"></span><span>scanned 4m ago</span></div>
+                  </div>
+                </div>
+                <!-- card 3 with warning -->
+                <div class="show-card">
+                  <div class="cover-art">
+                    <div class="art" style="background:linear-gradient(135deg,#C44536,#7A2418);position:relative">
+                      <svg viewBox="0 0 120 120" style="width:100%;height:100%;position:absolute"><text x="50%" y="56%" text-anchor="middle" font-family="Fraunces" font-style="italic" font-weight="600" font-size="32" fill="#F2EEE4">Static</text></svg>
+                    </div>
+                    <span class="status"><span class="badge badge-warn"><span class="d"></span>2 warnings</span></span>
+                    <div class="play-glyph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>
+                  </div>
+                  <div class="body">
+                    <div class="title">Static Hour</div>
+                    <div class="meta"><span>Audio · mp3</span><span class="sep"></span><span style="color:#8A5E10">cover art too small</span></div>
+                  </div>
+                </div>
+                <!-- new show tile -->
+                <div class="show-card" style="border-style:dashed;border-color:var(--line-2);display:flex;align-items:center;justify-content:center;min-height:220px">
+                  <div style="text-align:center;color:var(--ink-mute)">
+                    <div style="width:48px;height:48px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+                    <div style="font-family:var(--serif);font-weight:600;font-size:16px;color:var(--ink)">New show</div>
+                    <div style="font-size:12px;margin-top:3px">or just make a folder</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 05 SHOW DETAIL ================= -->
+<section class="section" id="screen-show">
+  <div class="section-head"><span class="num">05</span><h2>Show Detail</h2><span class="line"></span></div>
+  <p class="section-intro">The busiest screen. Left column: cover art with drag-to-replace, the feed URL with copy button and a QR code (scannable straight into a phone's "add by URL" flow). Right: the metadata form (Apple category picker, not free text) and the episode table with the spec's two distinct delete actions — "remove from feed" vs "delete file".</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Show detail — metadata, feed &amp; episodes</span><span class="route">/shows/late-night-tape-club</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/shows/late-night-tape-club</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <div class="sidebar">
+            <div class="brand"><svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg><div class="word">Pod<span>host</span></div></div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>Shows</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin</small></div></div>
+          </div>
+
+          <div>
+            <div class="topbar">
+              <div class="crumbs"><a style="color:var(--ink-mute)">Dashboard</a> / <b>Late Night Tape Club</b></div>
+              <div class="right">
+                <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>Rescan</button>
+                <button class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg>Upload</button>
+              </div>
+            </div>
+
+            <div class="content">
+              <div class="page-title">
+                <div><div class="sub">Audio · 24 episodes · last scan 2m ago</div><h1>Late Night Tape Club</h1></div>
+                <div class="actions"><span class="badge badge-ok"><span class="d"></span>Healthy</span></div>
+              </div>
+
+              <div class="detail-grid">
+                <!-- left column -->
+                <div class="detail-left">
+                  <div class="cover-box">
+                    <div class="art" style="background:linear-gradient(135deg,#3E2D4A,#1E1830);display:flex;align-items:center;justify-content:center;position:relative">
+                      <span style="font-family:var(--serif);font-weight:600;font-size:48px;color:#F2EEE4;letter-spacing:-.02em">LNTC</span>
+                    </div>
+                    <div class="replace"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg>Drag to replace cover</div>
+                  </div>
+                  <div class="notice warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>Cover is 1200×1200. Directories prefer 1400–3000px. <a style="color:#8A5E10;font-weight:600">Resize to 1400</a></div>
+
+                  <div class="feed-box">
+                    <div class="lab">Feed URL · token-protected</div>
+                    <div class="url-row"><span class="u">https://podcast.example.com/feeds/late-night-tape-club/a1b2c3d4e5.xml</span><button class="icon-btn" style="border:none;background:transparent"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+                    <div style="display:flex;gap:14px;align-items:flex-start;margin-top:14px">
+                      <!-- QR placeholder -->
+                      <div class="qr">
+                        <svg width="64" height="64" viewBox="0 0 64 64" fill="#16181D"><rect x="2" y="2" width="16" height="16"/><rect x="6" y="6" width="8" height="8" fill="#fff"/><rect x="46" y="2" width="16" height="16"/><rect x="50" y="6" width="8" height="8" fill="#fff"/><rect x="2" y="46" width="16" height="16"/><rect x="6" y="50" width="8" height="8" fill="#fff"/><rect x="22" y="2" width="3" height="3"/><rect x="28" y="2" width="3" height="3"/><rect x="34" y="2" width="3" height="3"/><rect x="22" y="8" width="3" height="3"/><rect x="30" y="8" width="3" height="3"/><rect x="22" y="14" width="6" height="3"/><rect x="34" y="14" width="3" height="3"/><rect x="2" y="22" width="3" height="3"/><rect x="8" y="22" width="3" height="3"/><rect x="14" y="22" width="3" height="3"/><rect x="22" y="22" width="3" height="3"/><rect x="30" y="22" width="6" height="3"/><rect x="40" y="22" width="3" height="3"/><rect x="46" y="22" width="3" height="3"/><rect x="54" y="22" width="6" height="3"/><rect x="22" y="28" width="3" height="3"/><rect x="28" y="28" width="3" height="3"/><rect x="34" y="28" width="6" height="3"/><rect x="44" y="28" width="3" height="3"/><rect x="50" y="28" width="3" height="3"/><rect x="56" y="28" width="3" height="3"/><rect x="2" y="34" width="3" height="3"/><rect x="10" y="34" width="3" height="3"/><rect x="16" y="34" width="3" height="3"/><rect x="24" y="34" width="3" height="3"/><rect x="32" y="34" width="3" height="3"/><rect x="40" y="34" width="3" height="3"/><rect x="48" y="34" width="3" height="3"/><rect x="56" y="34" width="3" height="3"/><rect x="22" y="40" width="6" height="3"/><rect x="30" y="40" width="3" height="3"/><rect x="36" y="40" width="3" height="3"/><rect x="44" y="40" width="6" height="3"/><rect x="22" y="46" width="3" height="3"/><rect x="28" y="46" width="3" height="3"/><rect x="34" y="46" width="6" height="3"/><rect x="44" y="46" width="3" height="3"/><rect x="50" y="46" width="3" height="3"/><rect x="22" y="52" width="3" height="3"/><rect x="30" y="52" width="3" height="3"/><rect x="38" y="52" width="3" height="3"/><rect x="46" y="52" width="6" height="3"/><rect x="22" y="58" width="6" height="3"/><rect x="32" y="58" width="3" height="3"/><rect x="38" y="58" width="3" height="3"/><rect x="44" y="58" width="3" height="3"/><rect x="50" y="58" width="6" height="3"/></svg>
+                      </div>
+                      <div style="font-size:12px;color:var(--ink-mute);max-width:120px;line-height:1.5">Scan with your phone's camera or podcast app's <span class="mono">Add by URL</span>.</div>
+                    </div>
+                    <hr class="soft">
+                    <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-9-9M17 3v6h6"/></svg>Rotate feed token</button>
+                  </div>
+                </div>
+
+                <!-- right column -->
+                <div>
+                  <div class="form-card">
+                    <div class="ftitle">Show metadata</div>
+                    <div class="fdesc">Edits here write back to <span class="mono">show.json</span> on disk, so your config stays portable.</div>
+                    <div class="form-row" style="margin-bottom:14px">
+                      <div class="field" style="margin:0"><label>Title</label><input value="Late Night Tape Club" /></div>
+                      <div class="field" style="margin:0"><label>Author name</label><input value="Antoine De Broye" /></div>
+                    </div>
+                    <div class="form-row" style="margin-bottom:14px">
+                      <div class="field" style="margin:0"><label>Author email</label><input value="studio@example.com" class="mono" style="font-family:var(--mono);font-size:13px" /></div>
+                      <div class="field" style="margin:0"><label>Language</label><select><option>English (en)</option></select></div>
+                    </div>
+                    <div class="field" style="margin-bottom:14px"><label>Description</label><textarea rows="3">A weekly tape collage of found audio, late-night radio, and field recordings.</textarea></div>
+                    <div class="form-row">
+                      <div class="field" style="margin:0"><label>Category (Apple)</label><select><option>Arts → Books</option></select></div>
+                      <div class="field" style="margin:0"><label>Explicit</label><div class="toggle" style="margin-top:4px"><span class="switch"></span><span class="tl">No</span></div></div>
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px"><button class="btn btn-ghost btn-sm">Cancel</button><button class="btn btn-primary btn-sm">Save changes</button></div>
+                  </div>
+
+                  <div class="form-card">
+                    <div style="display:flex;align-items:center;margin-bottom:14px">
+                      <div class="ftitle" style="margin:0">Episodes</div>
+                      <span class="badge badge-mute" style="margin-left:10px">24</span>
+                      <span style="margin-left:auto;font-size:12px;color:var(--ink-mute)">ordered by publish date ↓</span>
+                    </div>
+                    <table class="ep-table">
+                      <thead><tr><th>Title</th><th>Published</th><th>Duration</th><th>Size</th><th>Status</th><th></th></tr></thead>
+                      <tbody>
+                        <tr>
+                          <td><div class="ep-title">Episode 42 — The Long Drive<small>2026-08-07-episode-42.m4a</small></div></td>
+                          <td class="mono" style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">Aug 7, 2026</td>
+                          <td class="dur">58:12</td>
+                          <td class="size">48.2 MB</td>
+                          <td><span class="badge badge-ok" style="padding:2px 7px"><span class="d"></span>Active</span></td>
+                          <td><div class="actions"><button class="icon-btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button><button class="icon-btn danger"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></div></td>
+                        </tr>
+                        <tr>
+                          <td><div class="ep-title">Episode 41 — Cassette Hiss<small>2026-07-31-ep41.mp3</small></div></td>
+                          <td class="mono" style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">Jul 31, 2026</td>
+                          <td class="dur">1:02:44</td>
+                          <td class="size">54.9 MB</td>
+                          <td><span class="badge badge-ok" style="padding:2px 7px"><span class="d"></span>Active</span></td>
+                          <td><div class="actions"><button class="icon-btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button><button class="icon-btn danger"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></div></td>
+                        </tr>
+                        <tr style="background:var(--warn-soft)">
+                          <td><div class="ep-title">Episode 40 — Lost Signal<small style="color:#8A5E10">file missing on disk</small></div></td>
+                          <td class="mono" style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">Jul 24, 2026</td>
+                          <td class="dur">52:03</td>
+                          <td class="size">—</td>
+                          <td><span class="badge badge-warn" style="padding:2px 7px"><span class="d"></span>Missing</span></td>
+                          <td><div class="actions"><button class="icon-btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button><button class="icon-btn danger"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></div></td>
+                        </tr>
+                        <tr>
+                          <td><div class="ep-title">Episode 39 — Dial Tones<small>2026-07-17-ep39.m4a</small></div></td>
+                          <td class="mono" style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">Jul 17, 2026</td>
+                          <td class="dur">47:55</td>
+                          <td class="size">41.1 MB</td>
+                          <td><span class="badge badge-ok" style="padding:2px 7px"><span class="d"></span>Active</span></td>
+                          <td><div class="actions"><button class="icon-btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button><button class="icon-btn danger"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></div></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div style="margin-top:12px;font-size:11.5px;color:var(--ink-mute)">Two distinct delete actions: remove from feed only (reversible) vs. delete the underlying file (irreversible — confirmation required).</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 06 EPISODE EDIT ================= -->
+<section class="section" id="screen-episode">
+  <div class="section-head"><span class="num">06</span><h2>Episode Edit</h2><span class="line"></span></div>
+  <p class="section-intro">Focused single-record editor. Title, description, season/episode numbers, explicit override, publish-date override (the spec's mechanism for reordering — no drag handle). A waveform strip and the file's read-only facts ground the editable fields in the actual audio.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Episode edit</span><span class="route">/shows/late-night-tape-club/episodes/42</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/shows/late-night-tape-club/episodes/42</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <div class="sidebar">
+            <div class="brand"><svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg><div class="word">Pod<span>host</span></div></div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>Shows</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin</small></div></div>
+          </div>
+
+          <div>
+            <div class="topbar">
+              <div class="crumbs"><a style="color:var(--ink-mute)">Dashboard</a> / <a style="color:var(--ink-mute)">Late Night Tape Club</a> / <b>Episode 42</b></div>
+              <div class="right"><button class="btn btn-ghost btn-sm">Back to show</button></div>
+            </div>
+            <div class="content">
+              <div class="page-title"><div><div class="sub">2026-08-07-episode-42.m4a · audio/x-m4a</div><h1>Edit episode</h1></div><div class="actions"><button class="btn btn-danger btn-sm">Remove from feed</button></div></div>
+
+              <!-- waveform / file facts -->
+              <div class="form-card" style="margin-bottom:18px">
+                <div style="display:flex;align-items:center;gap:18px">
+                  <div style="width:54px;height:54px;border-radius:12px;background:var(--ink);display:flex;align-items:center;justify-content:center;color:var(--accent)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="12" x2="6" y2="12"/><line x1="9" y1="8" x2="9" y2="16"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="15" y1="8" x2="15" y2="16"/><line x1="18" y1="11" x2="18" y2="13"/></svg></div>
+                  <div style="flex:1">
+                    <div style="font-family:var(--mono);font-size:11px;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.06em">Audio preview</div>
+                    <!-- waveform -->
+                    <div class="wave" style="height:34px;display:flex;align-items:center;gap:2px;margin-top:6px">
+                      <i style="width:3px;height:30%;background:var(--accent)"></i><i style="width:3px;height:50%;background:var(--accent)"></i><i style="width:3px;height:70%;background:var(--accent)"></i><i style="width:3px;height:45%;background:var(--accent)"></i><i style="width:3px;height:85%;background:var(--accent)"></i><i style="width:3px;height:60%;background:var(--accent)"></i><i style="width:3px;height:95%;background:var(--accent)"></i><i style="width:3px;height:75%;background:var(--accent)"></i><i style="width:3px;height:40%;background:var(--accent)"></i><i style="width:3px;height:65%;background:var(--accent)"></i><i style="width:3px;height:90%;background:var(--accent)"></i><i style="width:3px;height:55%;background:var(--accent)"></i><i style="width:3px;height:80%;background:var(--accent)"></i><i style="width:3px;height:35%;background:var(--accent)"></i><i style="width:3px;height:70%;background:var(--accent)"></i><i style="width:3px;height:50%;background:var(--accent)"></i><i style="width:3px;height:88%;background:var(--accent)"></i><i style="width:3px;height:60%;background:var(--accent)"></i><i style="width:3px;height:45%;background:var(--accent)"></i><i style="width:3px;height:72%;background:var(--accent)"></i><i style="width:3px;height:30%;background:var(--accent)"></i><i style="width:3px;height:55%;background:var(--accent)"></i><i style="width:3px;height:78%;background:var(--accent)"></i><i style="width:3px;height:42%;background:var(--accent)"></i><i style="width:3px;height:68%;background:var(--accent)"></i><i style="width:3px;height:85%;background:var(--accent)"></i><i style="width:3px;height:50%;background:var(--accent)"></i><i style="width:3px;height:95%;background:var(--accent)"></i><i style="width:3px;height:65%;background:var(--accent)"></i><i style="width:3px;height:38%;background:var(--accent)"></i><i style="width:3px;height:80%;background:var(--accent)"></i><i style="width:3px;height:55%;background:var(--accent)"></i><i style="width:3px;height:72%;background:var(--accent)"></i><i style="width:3px;height:45%;background:var(--accent)"></i><i style="width:3px;height:90%;background:var(--accent)"></i><i style="width:3px;height:60%;background:var(--accent)"></i><i style="width:3px;height:33%;background:var(--accent)"></i><i style="width:3px;height:75%;background:var(--accent)"></i><i style="width:3px;height:50%;background:var(--accent)"></i><i style="width:3px;height:85%;background:var(--accent)"></i><i style="width:3px;height:40%;background:var(--accent)"></i>
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink-soft)"><span class="mono">58:12</span><span class="mono">48.2 MB</span><span class="mono">192 kbps</span></div>
+                </div>
+              </div>
+
+              <div class="form-card">
+                <div class="form-row">
+                  <div class="field" style="margin:0"><label>Episode title</label><input value="Episode 42 — The Long Drive" /></div>
+                  <div class="field" style="margin:0"><label>GUID <span style="color:var(--ink-mute);font-weight:400">(stable — won't change if you rename the file)</span></label><input value="f3a1c2…4b8e" class="mono" style="font-family:var(--mono);font-size:12px;color:var(--ink-mute)" readonly /></div>
+                </div>
+                <div class="field" style="margin-top:14px"><label>Description</label><textarea rows="4">A three-hour drive south, told through radio scans, rest-stop ambience, and one very persistent cassette.</textarea></div>
+                <div class="form-row" style="margin-top:14px">
+                  <div class="field" style="margin:0"><label>Season</label><input value="2" /></div>
+                  <div class="field" style="margin:0"><label>Episode number</label><input value="42" /></div>
+                </div>
+                <div class="form-row" style="margin-top:14px">
+                  <div class="field" style="margin:0"><label>Publish date <span style="color:var(--ink-mute);font-weight:400">(editable — sets feed order)</span></label><input value="2026-08-07 21:00" class="mono" style="font-family:var(--mono);font-size:13px" /></div>
+                  <div class="field" style="margin:0"><label>Explicit</label><div class="toggle on" style="margin-top:4px"><span class="switch"></span><span class="tl">Yes</span></div></div>
+                </div>
+                <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn btn-ghost btn-sm">Cancel</button><button class="btn btn-primary btn-sm">Save episode</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 07 UPLOAD ================= -->
+<section class="section" id="screen-upload">
+  <div class="section-head"><span class="num">07</span><h2>Upload</h2><span class="line"></span></div>
+  <p class="section-intro">For when you'd rather not touch the filesystem at all. Drag-and-drop straight into a show; the server validates extensions against the spec's supported list, streams to temp, then atomically moves into the show folder and triggers an immediate scan — no waiting for the next polling cycle.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Drag-and-drop upload</span><span class="route">/shows/late-night-tape-club/upload</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/shows/late-night-tape-club/upload</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <div class="sidebar">
+            <div class="brand"><svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg><div class="word">Pod<span>host</span></div></div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>Shows</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin</small></div></div>
+          </div>
+          <div>
+            <div class="topbar"><div class="crumbs"><a style="color:var(--ink-mute)">Late Night Tape Club</a> / <b>Upload</b></div></div>
+            <div class="content">
+              <div class="page-title"><div><div class="sub">Drop audio into Late Night Tape Club</div><h1>Upload episodes</h1></div></div>
+
+              <div class="dropzone">
+                <div class="glyph"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg></div>
+                <h3>Drag your audio files here</h3>
+                <p>or <a style="color:var(--accent);font-weight:600">browse</a> from your device · mp3, m4a, aac, ogg, opus, wav, flac</p>
+                <div class="or">— or just drop files in the show's folder over SMB / NFS, no upload needed —</div>
+              </div>
+
+              <div class="queue">
+                <div class="section-tag">In progress</div>
+                <div class="queue-item">
+                  <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+                  <div><div class="nm">2026-08-09-episode-43.m4a<small>audio/x-m4a · 52.4 MB</small></div></div>
+                  <div class="bar"><i style="width:64%"></i></div>
+                  <div class="pct">64%</div>
+                </div>
+                <div class="queue-item">
+                  <div class="ic" style="color:var(--ok)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+                  <div><div class="nm">2026-08-09-intro.mp3<small style="color:var(--ok)">uploaded · scanning…</small></div></div>
+                  <div style="flex:1"></div><div class="pct" style="color:var(--ok)">done</div>
+                </div>
+              </div>
+
+              <div class="notice info" style="margin-top:18px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>After upload finishes, Podhost scans this show immediately — no need to wait for the scheduled rescan.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 08 ACTIVITY ================= -->
+<section class="section" id="screen-activity">
+  <div class="section-head"><span class="num">08</span><h2>Activity Log</h2><span class="line"></span></div>
+  <p class="section-intro">The spec's single most important UX requirement: every failure that was invisible until a podcast app broke must show up here, in plain language. Each scan is a row; errors expand into actionable sentences that name the configured PUID and the exact path — not a stack trace.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Activity log — scan history &amp; errors</span><span class="route">/activity</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/activity</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <div class="sidebar">
+            <div class="brand"><svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg><div class="word">Pod<span>host</span></div></div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>Shows</div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin</small></div></div>
+          </div>
+          <div>
+            <div class="topbar"><div class="crumbs"><b>Activity</b></div><div class="right"><select style="font-family:var(--sans);font-size:13px;border:1px solid var(--line-2);border-radius:7px;padding:6px 10px;background:#fff"><option>All shows</option><option>Late Night Tape Club</option></select></div></div>
+            <div class="content">
+              <div class="page-title"><div><div class="sub">Reverse-chronological · filterable by show</div><h1>Scan history</h1></div></div>
+
+              <div class="form-card" style="padding:8px 22px">
+                <div class="log-list">
+                  <div class="log-item">
+                    <div class="time">14:02:18</div>
+                    <div class="body"><b>Late Night Tape Club</b> · scheduled rescan — 24 episodes, 1 added, 0 missing.<span class="err">Could not read <span class="mono">episode-40.wav</span>: permission denied. Podhost is running as UID 1000; check that this user can read files in <span class="mono">/data/shows/late-night-tape-club/</span>.</span></div>
+                    <div class="trig">scheduled</div>
+                  </div>
+                  <div class="log-item">
+                    <div class="time">13:58:02</div>
+                    <div class="body"><b>Field Notes</b> · watcher rescan — 12 episodes, 0 added, 0 missing.</div>
+                    <div class="trig">watcher</div>
+                  </div>
+                  <div class="log-item">
+                    <div class="time">13:41:55</div>
+                    <div class="body"><b>Static Hour</b> · manual rescan — 8 episodes, 0 added, 0 missing. <span style="color:#8A5E10">2 warnings:</span> cover art 1200×1200 (below 1400px minimum); 1 file has no embedded tags.</div>
+                    <div class="trig">manual</div>
+                  </div>
+                  <div class="log-item">
+                    <div class="time">13:20:11</div>
+                    <div class="body"><b>Late Night Tape Club</b> · watcher rescan — 23 episodes, 1 added: <span class="mono">2026-08-07-episode-42.m4a</span>.</div>
+                    <div class="trig">watcher</div>
+                  </div>
+                  <div class="log-item">
+                    <div class="time">12:05:00</div>
+                    <div class="body"><b>All shows</b> · scheduled fallback rescan completed. Watcher active on <span class="mono">/data</span>.</div>
+                    <div class="trig">scheduled</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= 09 SETTINGS ================= -->
+<section class="section" id="screen-settings">
+  <div class="section-head"><span class="num">09</span><h2>Settings</h2><span class="line"></span></div>
+  <p class="section-intro">Instance-level defaults. Rescan interval (the spec's polling fallback), default author/email/language, admin password, session security. Plain rows with inline controls — the one place that looks like a settings panel, kept calm and scannable.</p>
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="tag">Screen</span><span class="desc">Instance settings</span><span class="route">/settings</span></div>
+    <div class="browser">
+      <div class="bar"><div class="lights"><i></i><i></i><i></i></div><div class="url"><b>podcast.example.com/settings</b></div></div>
+      <div class="viewport">
+        <div class="app">
+          <div class="sidebar">
+            <div class="brand"><svg class="logo" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#23262D"/><g stroke="#D9602B" stroke-width="3" stroke-linecap="round"><line x1="13" y1="24" x2="13" y2="24"/><line x1="19" y1="17" x2="19" y2="31"/><line x1="25" y1="11" x2="25" y2="37"/><line x1="31" y1="17" x2="31" y2="31"/><line x1="37" y1="21" x2="37" y2="27"/></g></svg><div class="word">Pod<span>host</span></div></div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>Shows</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</div>
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8"/></svg>Settings</div>
+            <div class="spacer"></div>
+            <div class="me"><div class="av">AD</div><div class="who">antoine<small>admin</small></div></div>
+          </div>
+          <div>
+            <div class="topbar"><div class="crumbs"><b>Settings</b></div></div>
+            <div class="content">
+              <div class="page-title"><div><div class="sub">Instance defaults · Podhost 1.4.0</div><h1>Settings</h1></div></div>
+
+              <div class="form-card">
+                <div class="ftitle">Library</div>
+                <div class="fdesc">How Podhost watches for new audio.</div>
+                <div class="set-row">
+                  <div class="info"><div class="t">Fallback rescan interval</div><div class="d">Guarantees correctness on network shares where inotify events aren't delivered. Range: 1 min – 6 h.</div></div>
+                  <div class="val">5 min <button class="btn btn-ghost btn-sm" style="margin-left:8px">Edit</button></div>
+                </div>
+                <div class="set-row" style="border-bottom:none">
+                  <div class="info"><div class="t">File-system watcher</div><div class="d">Live detection via inotify. Falls back to polling automatically if no events arrive.</div></div>
+                  <div class="toggle on"><span class="switch"></span><span class="tl">Active</span></div>
+                </div>
+              </div>
+
+              <div class="form-card">
+                <div class="ftitle">Defaults for new shows</div>
+                <div class="fdesc">Used when a show folder has no <span class="mono">show.json</span> yet.</div>
+                <div class="set-row">
+                  <div class="info"><div class="t">Default author name</div></div>
+                  <div class="val">Antoine De Broye</div>
+                </div>
+                <div class="set-row">
+                  <div class="info"><div class="t">Default author email</div></div>
+                  <div class="val">studio@example.com</div>
+                </div>
+                <div class="set-row" style="border-bottom:none">
+                  <div class="info"><div class="t">Default language</div></div>
+                  <div class="val">English (en)</div>
+                </div>
+              </div>
+
+              <div class="form-card">
+                <div class="ftitle">Security</div>
+                <div class="set-row">
+                  <div class="info"><div class="t">Admin password</div><div class="d">Single admin account · bcrypt-hashed.</div></div>
+                  <button class="btn btn-ghost btn-sm">Change</button>
+                </div>
+                <div class="set-row">
+                  <div class="info"><div class="t">Session timeout</div><div class="d">HttpOnly · Secure over HTTPS · SameSite=Lax.</div></div>
+                  <div class="val">12 hours</div>
+                </div>
+                <div class="set-row" style="border-bottom:none">
+                  <div class="info"><div class="t">Login rate limit</div><div class="d">5 attempts per 15 minutes per IP.</div></div>
+                  <div class="val">enabled</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div style="margin-top:60px;padding-top:30px;border-top:1px solid var(--line);text-align:center;color:var(--ink-mute);font-size:13px">
+  <div style="font-family:var(--serif);font-weight:600;font-size:18px;color:var(--ink);margin-bottom:6px">Podhost — Design System &amp; Interface</div>
+  <div>"The Broadcast Workshop" · Fraunces / Inter / JetBrains Mono · Signal Terracotta #D9602B</div>
+  <div style="margin-top:8px;font-size:12px">Design exploration built from the Podhost specification — visual inspiration, not implementation.</div>
+</div>
+
+</div>
+
+<script>
+document.getElementById('navSelect').addEventListener('change', e => {
+  const t = document.querySelector(e.target.value);
+  if (t) t.scrollIntoView({behavior:'smooth', block:'start'});
+});
+</script>
+</body>
+</html>

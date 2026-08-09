@@ -1,0 +1,61 @@
+<div class="log-list" id="activity-list">
+  <% if (!it.entries.length) { %>
+    <div class="empty">
+      <div class="empty__title">No scans yet</div>
+      <p class="empty__hint">SelfPod records every scan here — what it found, what it added, and anything
+        that went wrong, in plain language.</p>
+    </div>
+  <% } %>
+
+  <% for (const entry of it.entries) { %>
+    <article class="log-item">
+      <div class="time">
+        <%= it.helpers.formatTime(entry.startedAt) %>
+        <small><%= it.helpers.formatDate(entry.startedAt) %></small>
+      </div>
+      <div class="body">
+        <b><%= entry.showTitle || 'All shows' %></b> ·
+        <%= entry.trigger %> scan<%
+        %><% if (entry.finishedAt) { %> — <%
+          %><%= entry.filesFound === null ? 0 : entry.filesFound %> file<%= entry.filesFound === 1 ? '' : 's' %> found<%
+          %><% if (entry.added) { %>, <%= entry.added %> added<% } %><%
+          %><% if (entry.updated) { %>, <%= entry.updated %> updated<% } %><%
+          %><% if (entry.missing) { %>, <%= entry.missing %> missing<% } %><%
+          %><% if (entry.removed) { %>, <%= entry.removed %> dropped<% } %>.<%
+        %><% } else { %> — still running…<% } %>
+        <% if (entry.note) { %><span class="log-item__note"><%= entry.note %></span><% } %>
+
+        <% if (entry.errors.length) { %>
+          <div class="err">
+            <strong><%= entry.errors.length %> problem<%= entry.errors.length === 1 ? '' : 's' %>:</strong>
+            <ul>
+              <% for (const error of entry.errors) { %>
+                <li><%= error.message %></li>
+              <% } %>
+            </ul>
+          </div>
+        <% } %>
+
+        <% if (entry.warnings.length) { %>
+          <details class="log-item__warnings">
+            <summary><%= entry.warnings.length %> warning<%= entry.warnings.length === 1 ? '' : 's' %></summary>
+            <ul>
+              <% for (const warning of entry.warnings) { %>
+                <li><%= warning.message %></li>
+              <% } %>
+            </ul>
+          </details>
+        <% } %>
+      </div>
+      <div class="trig"><%= entry.trigger %></div>
+    </article>
+  <% } %>
+
+  <% if (it.hasMore) { %>
+    <button class="btn btn-ghost btn-sm activity-more" type="button"
+            hx-get="/ui/activity?offset=<%= it.nextOffset %><%= it.showFilter ? '&showId=' + encodeURIComponent(it.showFilter) : '' %>"
+            hx-target="this" hx-swap="outerHTML">
+      Load more
+    </button>
+  <% } %>
+</div>

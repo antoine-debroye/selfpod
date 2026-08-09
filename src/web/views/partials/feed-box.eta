@@ -1,0 +1,39 @@
+<%
+  const show = it.show;
+%>
+<div class="feed-box" id="feed-box">
+  <div class="lab">Feed URL · token-protected</div>
+
+  <% if (show.feedUrl) { %>
+    <div class="url-row">
+      <span class="u" id="feed-url-<%= show.id %>"><%= show.feedUrl %></span>
+      <button class="icon-btn icon-btn--bare" type="button" data-copy-target="#feed-url-<%= show.id %>"
+              aria-label="Copy feed URL" title="Copy feed URL">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      </button>
+    </div>
+
+    <div class="feed-box__qr-row">
+      <div class="qr"><%~ it.qrSvg || '' %></div>
+      <p class="feed-box__qr-hint">
+        Scan with your phone's camera, or paste the URL into your podcast app's
+        <span class="mono">Add by URL</span> flow.
+      </p>
+    </div>
+  <% } else { %>
+    <div class="notice warn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+      <div>SelfPod does not know its public address yet, so it cannot build a feed URL.
+        <a href="/settings">Set it in Settings</a>.</div>
+    </div>
+  <% } %>
+
+  <hr class="soft">
+
+  <button class="btn btn-ghost btn-sm btn-ghost--danger"
+          hx-get="/ui/modals/rotate-token/<%= encodeURIComponent(show.slug) %>"
+          hx-target="#modal-root" hx-swap="innerHTML" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9M17 3v6h6"/></svg>
+    Rotate feed token
+  </button>
+</div>

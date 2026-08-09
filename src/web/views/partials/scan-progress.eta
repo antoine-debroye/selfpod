@@ -1,0 +1,21 @@
+<%
+  /* Live rescan feedback (spec §6.2 point 3): a rescan must never be a silent
+     background action.
+
+     Two mechanisms, deliberately: the SSE stream supplies an immediate, detailed
+     label, and a slow poll of the scan state guarantees the strip disappears when
+     the scan is over. The poll is what makes this correct when SSE is unavailable
+     (a proxy that buffers the stream) and when a scan finishes so fast that its
+     events fire before this element was even inserted. */
+  const scope = it.scope || 'all';
+  const label = it.label || 'Scanning…';
+%>
+<div class="scan-progress" id="scan-progress" role="status" aria-live="polite"
+     sse-swap="scan-progress-<%= scope %>"
+     hx-get="/ui/scan-status?scope=<%= encodeURIComponent(scope) %>"
+     hx-trigger="load delay:2500ms"
+     hx-swap="outerHTML">
+  <span class="scan-progress__dot" aria-hidden="true"></span>
+  <span class="scan-progress__status"><%= label %></span>
+  <span class="scan-progress__bar" aria-hidden="true"><i></i></span>
+</div>

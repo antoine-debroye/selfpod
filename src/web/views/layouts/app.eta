@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title><%= it.title ? it.title + ' · SelfPod' : 'SelfPod' %></title>
+<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/assets/fonts/fraunces-variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/fonts/inter-variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/css/app.css?v=<%= it.assetVersion %>">
+<script src="/assets/js/htmx.min.js?v=<%= it.assetVersion %>" defer></script>
+<script src="/assets/js/htmx-ext-sse.js?v=<%= it.assetVersion %>" defer></script>
+<script src="/assets/js/app.js?v=<%= it.assetVersion %>" defer></script>
+</head>
+<body hx-ext="sse" sse-connect="/ui/events">
+<a class="skip-link" href="#main">Skip to content</a>
+
+<%~ include('../partials/permission-banner', it) %>
+
+<div class="app">
+  <%~ include('../partials/sidebar', it) %>
+  <div class="nav-scrim" data-nav-close aria-hidden="true"></div>
+
+  <div class="app-main">
+    <%~ include('../partials/topbar', it) %>
+    <main class="content" id="main">
+      <%~ it.body %>
+    </main>
+  </div>
+</div>
+
+<div id="toast-root" aria-live="polite" aria-atomic="false"></div>
+<div id="modal-root"></div>
+
+<%
+  /* The SSE stream is connected on <body> because the htmx SSE extension only
+     swaps into elements that are descendants of the sse-connect element, and the
+     progress strips live in several different places. Everything the stream drives
+     also works without it — a manual refresh always shows the true state — so a
+     proxy that buffers or drops the stream degrades feedback, never correctness. */
+%>
+
+<% if (it.flash) { %>
+<script type="application/json" id="flash-data"><%~ JSON.stringify(it.flash) %></script>
+<% } %>
+</body>
+</html>

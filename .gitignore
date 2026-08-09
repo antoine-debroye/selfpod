@@ -1,0 +1,8 @@
+node_modules/
+.devdata/
+.dockerdata/
+*.log
+.DS_Store
+.env
+.env.*
+coverage/

@@ -1,0 +1,10 @@
+<%
+  /* Empty #modal-root plus an optional toast: the response to a successful modal
+     action. app.js sees the dialog disappear and restores focus. */
+%>
+<% if (it.toast) { %>
+  <div class="toast toast--<%= it.toast.level || 'ok' %>" role="status" hx-swap-oob="beforeend:#toast-root">
+    <div class="toast__body"><%= it.toast.message %></div>
+    <button class="toast__close" type="button" data-toast-close aria-label="Dismiss">×</button>
+  </div>
+<% } %>

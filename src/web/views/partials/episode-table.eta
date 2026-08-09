@@ -1,0 +1,53 @@
+<%
+  const show = it.show;
+  const episodes = it.episodes || [];
+  const inFeed = episodes.filter((e) => e.status !== 'removed');
+  const removed = episodes.filter((e) => e.status === 'removed');
+%>
+<div class="form-card" id="episode-table">
+  <div class="episode-table__head">
+    <div class="ftitle" style="margin:0">Episodes</div>
+    <span class="badge badge-mute"><%= inFeed.length %></span>
+    <span class="episode-table__order">ordered by publish date ↓</span>
+  </div>
+
+  <% if (!episodes.length) { %>
+    <div class="empty">
+      <div class="empty__title">No audio yet</div>
+      <p class="empty__hint">
+        Drop files into <code><%= show.folder %></code> over SMB, NFS or <span class="mono">docker cp</span> —
+        they appear here on their own. Or
+        <a href="/shows/<%= encodeURIComponent(show.slug) %>/upload">upload through the browser</a>.
+        Supported: <%= it.helpers.supportedFormats %>.
+      </p>
+    </div>
+  <% } else { %>
+    <div class="table-scroll">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th scope="col">Title</th>
+            <th scope="col">Published</th>
+            <th scope="col">Duration</th>
+            <th scope="col">Size</th>
+            <th scope="col">Status</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% for (const episode of episodes) { %>
+            <%~ include('../partials/episode-row', { episode, show, helpers: it.helpers }) %>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="help-note" style="margin-top:14px">
+      <strong>Remove from feed</strong> keeps the audio file and can be undone — a rescan will not bring the
+      episode back on its own. <strong>Delete file</strong> erases the audio from disk and cannot be undone.
+      <% if (removed.length) { %>
+        <%= removed.length %> episode<%= removed.length === 1 ? '' : 's' %> currently removed from the feed.
+      <% } %>
+    </p>
+  <% } %>
+</div>

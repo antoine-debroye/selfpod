@@ -1,0 +1,42 @@
+<%
+  const episode = it.episode;
+  const show = it.show;
+  const badge = it.helpers.episodeBadge(episode.status);
+  const rowClass = episode.status === 'missing' ? ' class="is-missing"' : episode.status === 'removed' ? ' class="is-removed"' : '';
+%>
+<tr<%~ rowClass %> id="episode-row-<%= episode.id %>">
+  <td>
+    <div class="ep-title">
+      <a href="/shows/<%= encodeURIComponent(show.slug) %>/episodes/<%= encodeURIComponent(episode.id) %>"><%= episode.title %></a>
+      <% if (episode.status === 'missing') { %>
+        <small class="ep-title__warn">file missing on disk — still in the feed for now</small>
+      <% } else { %>
+        <small><%= episode.filename %></small>
+      <% } %>
+    </div>
+  </td>
+  <td class="ep-date mono"><%= it.helpers.formatDate(episode.pubDate) %></td>
+  <td class="dur"><%= it.helpers.formatDuration(episode.durationSeconds) %></td>
+  <td class="size"><%= it.helpers.formatBytes(episode.fileSizeBytes) %></td>
+  <td><span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span></td>
+  <td>
+    <div class="actions">
+      <a class="icon-btn" href="/shows/<%= encodeURIComponent(show.slug) %>/episodes/<%= encodeURIComponent(episode.id) %>"
+         aria-label="Edit <%= episode.title %>" title="Edit">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <% if (episode.status === 'removed') { %>
+        <button class="icon-btn" type="button" title="Restore to feed" aria-label="Restore <%= episode.title %> to the feed"
+                hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>/restore"
+                hx-target="#episode-table" hx-swap="outerHTML">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9M3 3v6h6"/></svg>
+        </button>
+      <% } %>
+      <button class="icon-btn danger" type="button" title="Remove or delete" aria-label="Remove or delete <%= episode.title %>"
+              hx-get="/ui/modals/delete-episode/<%= encodeURIComponent(episode.id) %>"
+              hx-target="#modal-root" hx-swap="innerHTML">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+      </button>
+    </div>
+  </td>
+</tr>

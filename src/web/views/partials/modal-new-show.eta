@@ -1,0 +1,29 @@
+<%
+  const errors = it.errors || {};
+%>
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title">New show</h2>
+  <form class="modal__body" method="post" action="/shows/new"
+        hx-post="/ui/shows" hx-target="#modal-root" hx-swap="innerHTML">
+    <div class="field<%= errors.title ? ' is-invalid' : '' %>">
+      <label for="m-title">Show name</label>
+      <input id="m-title" name="title" required autofocus maxlength="300" value="<%= it.title || '' %>"
+             data-slug-source>
+      <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+    </div>
+    <div class="field<%= errors.slug ? ' is-invalid' : '' %>">
+      <label for="m-slug">Folder name <span class="label-hint">(appears in the feed URL)</span></label>
+      <input id="m-slug" name="slug" class="mono mono-input" maxlength="96" value="<%= it.slug || '' %>"
+             data-slug-target pattern="[A-Za-z0-9][A-Za-z0-9._-]*">
+      <% if (errors.slug) { %>
+        <div class="field-error"><%= errors.slug %></div>
+      <% } else { %>
+        <div class="hint">Leave blank to derive it from the name.</div>
+      <% } %>
+    </div>
+    <div class="modal__actions">
+      <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
+      <button class="btn btn-primary btn-sm" type="submit">Create show</button>
+    </div>
+  </form>
+</dialog>

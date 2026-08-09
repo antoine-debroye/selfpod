@@ -1,0 +1,73 @@
+<%
+  const episode = it.episode;
+  const show = it.show;
+  const errors = it.errors || {};
+  const err = (field) => errors[field] ? ' is-invalid' : '';
+%>
+<form class="form-card" id="episode-form"
+      method="post" action="/ui/episodes/<%= encodeURIComponent(episode.id) %>"
+      hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>"
+      hx-target="#episode-form" hx-swap="outerHTML">
+  <div class="form-row">
+    <div class="field<%= err('title') %>" style="margin:0">
+      <label for="e-title">Episode title</label>
+      <input id="e-title" name="title" value="<%= episode.title %>" required maxlength="400">
+      <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+    </div>
+    <div class="field" style="margin:0">
+      <label for="e-guid">GUID <span class="label-hint">(stable — unchanged if you rename the file)</span></label>
+      <input id="e-guid" class="mono mono-input" value="<%= episode.id %>" readonly>
+    </div>
+  </div>
+
+  <div class="field" style="margin-top:14px">
+    <label for="e-description">Description</label>
+    <textarea id="e-description" name="description" rows="4" maxlength="20000"><%= episode.description %></textarea>
+  </div>
+
+  <div class="form-row" style="margin-top:14px">
+    <div class="field<%= err('season') %>" style="margin:0">
+      <label for="e-season">Season <span class="label-hint">(optional)</span></label>
+      <input id="e-season" name="season" inputmode="numeric" value="<%= episode.season === null ? '' : episode.season %>">
+      <% if (errors.season) { %><div class="field-error"><%= errors.season %></div><% } %>
+    </div>
+    <div class="field<%= err('episodeNumber') %>" style="margin:0">
+      <label for="e-number">Episode number <span class="label-hint">(optional)</span></label>
+      <input id="e-number" name="episodeNumber" inputmode="numeric" value="<%= episode.episodeNumber === null ? '' : episode.episodeNumber %>">
+      <% if (errors.episodeNumber) { %><div class="field-error"><%= errors.episodeNumber %></div><% } %>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-top:14px">
+    <div class="field<%= err('pubDate') %>" style="margin:0">
+      <label for="e-pubdate">Publish date <span class="label-hint">(sets the order in the feed)</span></label>
+      <input id="e-pubdate" name="pubDate" type="datetime-local" class="mono mono-input"
+             value="<%= it.helpers.dateTimeInputValue(episode.pubDate) %>">
+      <% if (errors.pubDate) { %>
+        <div class="field-error"><%= errors.pubDate %></div>
+      <% } else { %>
+        <div class="hint">Times are in <%= it.helpers.timeZone %>. Episodes are always ordered newest first.</div>
+      <% } %>
+    </div>
+    <div class="field" style="margin:0">
+      <label for="e-explicit">Explicit content</label>
+      <%
+        /* Three states, not a toggle: the stored value is nullable so an episode
+           can inherit the show's setting, which a two-state switch cannot express. */
+      %>
+      <select id="e-explicit" name="explicit">
+        <option value="inherit"<%= episode.explicit === null ? ' selected' : '' %>>
+          Inherit from show (<%= show.explicit ? 'yes' : 'no' %>)
+        </option>
+        <option value="1"<%= episode.explicit === true ? ' selected' : '' %>>Yes</option>
+        <option value="0"<%= episode.explicit === false ? ' selected' : '' %>>No</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <% if (it.saved) { %><span class="form-saved" role="status">Saved ✓</span><% } %>
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Back to show</a>
+    <button class="btn btn-primary btn-sm" type="submit">Save episode</button>
+  </div>
+</form>

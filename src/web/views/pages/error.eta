@@ -1,0 +1,13 @@
+<main class="error-page">
+  <div class="error-page__card">
+    <div class="section-tag">HTTP <%= it.status %></div>
+    <h1 class="error-page__title"><%= it.title || 'Something went wrong' %></h1>
+    <p class="error-page__message"><%= it.message %></p>
+    <div class="form-actions">
+      <a class="btn btn-ghost btn-sm" href="/">Back to the dashboard</a>
+      <% if (it.status >= 500) { %>
+        <a class="btn btn-primary btn-sm" href="/activity">Check the activity log</a>
+      <% } %>
+    </div>
+  </div>
+</main>

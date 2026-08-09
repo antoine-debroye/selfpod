@@ -1,0 +1,104 @@
+<%
+  const show = it.show;
+  const errors = it.errors || {};
+  const saved = it.saved;
+  const err = (field) => errors[field] ? ' is-invalid' : '';
+%>
+<form class="form-card" id="show-meta-form"
+      method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/meta"
+      hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/meta"
+      hx-target="#show-meta-form" hx-swap="outerHTML">
+  <div class="ftitle">Show metadata</div>
+  <div class="fdesc">
+    Saved to SelfPod's database, and mirrored to <span class="mono">show.json</span> in the show's folder
+    so your settings stay portable.
+  </div>
+
+  <div class="form-row" style="margin-bottom:14px">
+    <div class="field<%= err('title') %>" style="margin:0">
+      <label for="f-title">Title</label>
+      <input id="f-title" name="title" value="<%= show.title %>" required maxlength="300">
+      <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+    </div>
+    <div class="field<%= err('authorName') %>" style="margin:0">
+      <label for="f-author">Author name</label>
+      <input id="f-author" name="authorName" value="<%= show.authorName %>" maxlength="200">
+      <% if (errors.authorName) { %><div class="field-error"><%= errors.authorName %></div><% } %>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-bottom:14px">
+    <div class="field<%= err('authorEmail') %>" style="margin:0">
+      <label for="f-email">Author email</label>
+      <input id="f-email" name="authorEmail" type="email" class="mono mono-input" value="<%= show.authorEmail %>" maxlength="200">
+      <% if (errors.authorEmail) { %>
+        <div class="field-error"><%= errors.authorEmail %></div>
+      <% } else { %>
+        <div class="hint">Podcast directories require an owner email to verify who owns the show.</div>
+      <% } %>
+    </div>
+    <div class="field<%= err('language') %>" style="margin:0">
+      <label for="f-language">Language</label>
+      <select id="f-language" name="language">
+        <% for (const lang of it.helpers.languages) { %>
+          <option value="<%= lang.code %>"<%= show.language === lang.code ? ' selected' : '' %>><%= lang.label %></option>
+        <% } %>
+      </select>
+    </div>
+  </div>
+
+  <div class="field" style="margin-bottom:14px">
+    <label for="f-description">Description</label>
+    <textarea id="f-description" name="description" rows="3" maxlength="8000"><%= show.description %></textarea>
+  </div>
+
+  <div class="form-row">
+    <div class="field<%= err('category') %>" style="margin:0">
+      <label for="f-category">Category (Apple)</label>
+      <select id="f-category" name="category" data-category-select>
+        <% for (const name of it.helpers.categoryNames) { %>
+          <option value="<%= name %>"<%= show.category === name ? ' selected' : '' %>><%= name %></option>
+        <% } %>
+      </select>
+      <% if (errors.category) { %><div class="field-error"><%= errors.category %></div><% } %>
+    </div>
+    <div class="field<%= err('subcategory') %>" style="margin:0">
+      <label for="f-subcategory">Subcategory</label>
+      <select id="f-subcategory" name="subcategory" data-subcategory-select>
+        <option value="">(none)</option>
+        <% for (const [category, subs] of Object.entries(it.helpers.categories)) { %>
+          <% if (subs.length) { %>
+            <optgroup label="<%= category %>" data-category="<%= category %>">
+              <% for (const sub of subs) { %>
+                <option value="<%= sub %>"<%= show.category === category && show.subcategory === sub ? ' selected' : '' %>><%= sub %></option>
+              <% } %>
+            </optgroup>
+          <% } %>
+        <% } %>
+      </select>
+      <% if (errors.subcategory) { %><div class="field-error"><%= errors.subcategory %></div><% } %>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-top:14px">
+    <div class="field" style="margin:0">
+      <label for="f-explicit">Explicit content</label>
+      <div class="toggle<%= show.explicit ? ' on' : '' %>">
+        <input type="checkbox" id="f-explicit" name="explicit" role="switch" class="switch-input"
+               value="1"<%= show.explicit ? ' checked' : '' %>>
+        <label class="switch" for="f-explicit" aria-hidden="true"></label>
+        <span class="tl" data-toggle-label><%= show.explicit ? 'Yes' : 'No' %></span>
+      </div>
+    </div>
+    <div class="field" style="margin:0">
+      <label>Folder on disk</label>
+      <div class="static-value mono"><%= show.folder %></div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <% if (saved) { %><span class="form-saved" role="status">Saved ✓</span><% } %>
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Reset</a>
+    <button class="btn btn-primary btn-sm" type="submit">Save changes</button>
+  </div>
+</form>

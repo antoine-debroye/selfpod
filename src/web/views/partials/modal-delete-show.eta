@@ -1,0 +1,41 @@
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title">Remove “<%= it.show.title %>”?</h2>
+  <form class="modal__body" method="post" action="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/delete"
+        hx-post="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/delete"
+        hx-target="#modal-root" hx-swap="innerHTML">
+
+    <p>Anyone subscribed to this show's feed will stop receiving episodes.</p>
+
+    <fieldset class="modal__choices">
+      <legend class="sr-only">What should happen to the audio files?</legend>
+      <label class="choice">
+        <input type="radio" name="deleteFiles" value="0" checked>
+        <span class="choice__body">
+          <strong>Keep the folder and its audio</strong>
+          <small>Removes the show from SelfPod only. Everything stays in
+            <code><%= it.show.folder %></code>, and putting the folder back later restores the show.</small>
+        </span>
+      </label>
+      <label class="choice choice--danger">
+        <input type="radio" name="deleteFiles" value="1">
+        <span class="choice__body">
+          <strong>Delete the folder and every audio file in it</strong>
+          <small>Permanent. <%= it.show.counts.total %> episode file<%= it.show.counts.total === 1 ? '' : 's' %>
+            would be erased from disk. This cannot be undone.</small>
+        </span>
+      </label>
+    </fieldset>
+
+    <div class="field<%= it.errors && it.errors.confirm ? ' is-invalid' : '' %>">
+      <label for="confirm-slug">Type the folder name to confirm: <code><%= it.show.slug %></code></label>
+      <input id="confirm-slug" name="confirm" class="mono mono-input" autocomplete="off" autofocus
+             data-confirm-match="<%= it.show.slug %>" data-confirm-target="#confirm-delete-show">
+      <% if (it.errors && it.errors.confirm) { %><div class="field-error"><%= it.errors.confirm %></div><% } %>
+    </div>
+
+    <div class="modal__actions">
+      <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
+      <button class="btn btn-danger btn-sm" type="submit" id="confirm-delete-show" disabled>Remove show</button>
+    </div>
+  </form>
+</dialog>

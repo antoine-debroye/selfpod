@@ -1,0 +1,26 @@
+# Local development: builds the image from this checkout instead of pulling it.
+#
+# Kept separate from docker-compose.yml on purpose — a `build:` key breaks the
+# TrueNAS "Install via YAML" flow, which has no build context.
+#
+#   docker compose -f docker-compose.dev.yml up --build
+
+services:
+  selfpod:
+    build:
+      context: .
+    image: selfpod:dev
+    container_name: selfpod-dev
+    restart: unless-stopped
+    environment:
+      PUBLIC_BASE_URL: http://localhost:8080
+      PUID: 1000
+      PGID: 1000
+      TZ: Europe/London
+      ADMIN_PASSWORD: devpassword123
+      LOG_LEVEL: debug
+    volumes:
+      - ./.dockerdata:/data
+    ports:
+      - "8080:8080"
+    init: true

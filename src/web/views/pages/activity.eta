@@ -1,0 +1,34 @@
+<div class="page-title">
+  <div>
+    <div class="sub">Newest first · <%= it.total %> scan<%= it.total === 1 ? '' : 's' %> recorded</div>
+    <h1>Scan history</h1>
+  </div>
+  <div class="actions">
+    <form class="inline-form" method="get" action="/activity">
+      <label class="sr-only" for="show-filter">Filter by show</label>
+      <select id="show-filter" name="showId"
+              hx-get="/ui/activity" hx-include="this" hx-target="#activity-list" hx-swap="outerHTML"
+              hx-push-url="false">
+        <option value="">All shows</option>
+        <% for (const show of it.shows) { %>
+          <option value="<%= show.slug %>"<%= it.showFilter === show.slug ? ' selected' : '' %>><%= show.title %></option>
+        <% } %>
+      </select>
+      <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+    </form>
+  </div>
+</div>
+
+<%
+  /* Spec §11.5 calls this the single most important UX requirement: every failure
+     mode the hand-built version hit was invisible until a podcast app broke. */
+%>
+<p class="help-note" style="margin-bottom:16px">
+  Everything SelfPod does to your library is recorded here, including anything that failed.
+  If an episode is not appearing, this is the first place to look.
+  You should never need to read container logs over SSH to understand what happened.
+</p>
+
+<div class="form-card activity-card">
+  <%~ include('../partials/activity-list', it) %>
+</div>

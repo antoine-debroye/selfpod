@@ -1,0 +1,20 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "selfpod-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/index.js"],
+      "port": 8099,
+      "env": {
+        "DATA_DIR": "./.devdata",
+        "PORT": "8099",
+        "PUBLIC_BASE_URL": "http://localhost:8099",
+        "ADMIN_PASSWORD": "devpassword123",
+        "TZ": "Europe/London",
+        "LOG_LEVEL": "info",
+        "PRETTY_LOGS": "1"
+      }
+    }
+  ]
+}

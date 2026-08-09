@@ -1,0 +1,79 @@
+<%
+  const show = it.show;
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">Drop audio into <%= show.title %></div>
+    <h1>Upload episodes</h1>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Back to show</a>
+  </div>
+</div>
+
+<%
+  /* A real form with a real submit button, so uploading works with JavaScript
+     disabled. The vanilla-JS queue below intercepts it when available to add
+     per-file progress, which htmx cannot report. */
+%>
+<form class="upload-form" method="post" enctype="multipart/form-data"
+      action="/api/shows/<%= show.id %>/upload"
+      data-upload-form data-show-id="<%= show.id %>" data-slug="<%= show.slug %>">
+  <div class="dropzone" data-dropzone>
+    <div class="glyph" aria-hidden="true">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg>
+    </div>
+    <h2>Drag your audio files here</h2>
+    <p>
+      or
+      <label class="link-button">
+        browse from your device
+        <input type="file" name="files" multiple class="sr-only"
+               accept=".mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,audio/*" data-file-input>
+      </label>
+      · <%= it.helpers.supportedFormats %>
+    </p>
+    <div class="or">— or just drop files into the show's folder over SMB / NFS, no upload needed —</div>
+    <noscript>
+      <button class="btn btn-primary btn-sm" type="submit">Upload selected files</button>
+    </noscript>
+  </div>
+</form>
+
+<div class="queue" id="upload-queue" hidden>
+  <div class="section-tag">In progress</div>
+  <div data-queue-items></div>
+</div>
+
+<template id="queue-item-template">
+  <div class="queue-item" data-queue-item>
+    <div class="ic" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    </div>
+    <div class="queue-item__name">
+      <div class="nm" data-name></div>
+      <small data-detail></small>
+      <div class="msg" data-message hidden></div>
+    </div>
+    <div class="bar" data-bar><i style="width:0%"></i></div>
+    <div class="pct" data-pct>0%</div>
+  </div>
+</template>
+
+<div class="notice info" style="margin-top:18px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+  <div>When an upload finishes, SelfPod scans this show straight away — no waiting for the next scheduled pass.</div>
+</div>
+
+<%
+  /* Cloudflare's free plan rejects request bodies over 100 MB at the edge, before
+     they ever reach SelfPod, and typical episodes straddle that line. Saying so
+     up front is cheaper than letting someone debug a 413 that came from a proxy
+     they did not know was in the way. */
+%>
+<p class="help-note" style="margin-top:14px">
+  Uploading through a reverse proxy or tunnel? Many have their own body-size limit — Cloudflare's free plan
+  caps uploads at 100 MB regardless of SelfPod's own <%= it.maxUploadSizeMb %> MB limit. For large episodes,
+  reach SelfPod on its local address instead, or drop the file into
+  <code><%= show.folder %></code> directly.
+</p>

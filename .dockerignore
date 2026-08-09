@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.github
+.devdata
+.dockerdata
+.claude
+test
+doc
+design
+*.md
+!package.json
+docker-compose*.yml
+.DS_Store

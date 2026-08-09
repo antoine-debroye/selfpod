@@ -1,0 +1,41 @@
+<%
+  const errors = it.errors || {};
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">A show is just a folder — this creates one for you</div>
+    <h1>New show</h1>
+  </div>
+</div>
+
+<form class="form-card form-card--narrow" method="post" action="/shows/new">
+  <div class="field<%= errors.title ? ' is-invalid' : '' %>">
+    <label for="title">Show name</label>
+    <input id="title" name="title" value="<%= it.title || '' %>" required autofocus maxlength="300"
+           data-slug-source>
+    <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+  </div>
+
+  <div class="field<%= errors.slug ? ' is-invalid' : '' %>">
+    <label for="slug">Folder name <span class="label-hint">(appears in the feed URL)</span></label>
+    <input id="slug" name="slug" value="<%= it.slug || '' %>" class="mono mono-input" data-slug-target
+           pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="96">
+    <% if (errors.slug) { %>
+      <div class="field-error"><%= errors.slug %></div>
+    <% } else { %>
+      <div class="hint">Leave blank to derive it from the name. Letters, numbers, dots, dashes and underscores.</div>
+    <% } %>
+  </div>
+
+  <div class="notice info">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div>This creates a folder inside <code><%= it.showsDir %></code>. You can equally make the folder
+      yourself over SMB or NFS — SelfPod finds it either way, and never needs its container config edited
+      to add a show.</div>
+  </div>
+
+  <div class="form-actions">
+    <a class="btn btn-ghost btn-sm" href="/">Cancel</a>
+    <button class="btn btn-primary btn-sm" type="submit">Create show</button>
+  </div>
+</form>

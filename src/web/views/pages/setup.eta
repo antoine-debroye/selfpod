@@ -1,0 +1,118 @@
+<%
+  const step = it.step;
+  const errors = it.errors || {};
+  const err = (field) => errors[field] ? ' is-invalid' : '';
+%>
+<main class="setup">
+  <div class="setup-brand">
+    <%~ include('../partials/logo', { size: 34, tileFill: '#16181D' }) %>
+    <span class="setup-brand__word">Self<span>Pod</span></span>
+  </div>
+
+  <ol class="setup-progress">
+    <li class="step <%= step > 1 ? 'done' : step === 1 ? 'active' : '' %>">
+      <span class="n"><%= step > 1 ? '✓' : '1' %></span>Admin account
+    </li>
+    <li class="bar <%= step > 1 ? 'done' : '' %>" aria-hidden="true"></li>
+    <li class="step <%= step > 2 ? 'done' : step === 2 ? 'active' : '' %>">
+      <span class="n"><%= step > 2 ? '✓' : '2' %></span>Public URL
+    </li>
+    <li class="bar <%= step > 2 ? 'done' : '' %>" aria-hidden="true"></li>
+    <li class="step <%= step === 3 ? 'active' : '' %>">
+      <span class="n">3</span>Defaults
+    </li>
+  </ol>
+
+  <div class="setup-body">
+    <% if (step === 1) { %>
+      <div class="section-tag">Step 1</div>
+      <h1 class="setup-title">Choose your password</h1>
+      <p class="setup-lede">
+        SelfPod generated a random password and printed it to the container logs. Replace it with your own —
+        this is the only account, and it protects every feed URL in your library.
+      </p>
+      <form method="post" action="/setup/1">
+        <div class="field<%= err('password') %>">
+          <label for="password">New password</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" required minlength="10" autofocus>
+          <% if (errors.password) { %>
+            <div class="field-error"><%= errors.password %></div>
+          <% } else { %>
+            <div class="hint">At least 10 characters.</div>
+          <% } %>
+        </div>
+        <div class="field<%= err('passwordConfirm') %>">
+          <label for="passwordConfirm">Confirm password</label>
+          <input id="passwordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required>
+          <% if (errors.passwordConfirm) { %><div class="field-error"><%= errors.passwordConfirm %></div><% } %>
+        </div>
+        <div class="setup-actions">
+          <button class="btn btn-primary" type="submit">Continue</button>
+        </div>
+      </form>
+
+    <% } else if (step === 2) { %>
+      <div class="section-tag">Step 2</div>
+      <h1 class="setup-title">Where does your server live?</h1>
+      <p class="setup-lede">
+        SelfPod uses this to build the feed and media URLs your podcast app will fetch. It is the address
+        your reverse proxy or tunnel serves SelfPod on — SelfPod itself only speaks plain HTTP.
+      </p>
+      <form method="post" action="/setup/2">
+        <div class="field<%= err('publicBaseUrl') %>">
+          <label for="publicBaseUrl">Public base URL</label>
+          <input id="publicBaseUrl" name="publicBaseUrl" class="mono mono-input" autofocus
+                 value="<%= it.publicBaseUrl || '' %>" placeholder="https://podcast.example.com" required>
+          <% if (errors.publicBaseUrl) { %><div class="field-error"><%= errors.publicBaseUrl %></div><% } %>
+        </div>
+        <% if (it.envPrefilled) { %>
+          <div class="notice info" style="margin:6px 0 22px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            <div>Pre-filled from <span class="mono">PUBLIC_BASE_URL</span>. You can change it here, and later in
+              Settings, without editing the container.</div>
+          </div>
+        <% } %>
+        <div class="setup-actions">
+          <a class="btn btn-ghost" href="/setup/1">Back</a>
+          <button class="btn btn-primary" type="submit">Continue</button>
+        </div>
+      </form>
+
+    <% } else { %>
+      <div class="section-tag">Step 3</div>
+      <h1 class="setup-title">Defaults for your shows</h1>
+      <p class="setup-lede">
+        Used whenever a new folder appears without its own settings. Every one of these is editable
+        per show afterwards.
+      </p>
+      <form method="post" action="/setup/3">
+        <div class="field">
+          <label for="defaultAuthorName">Author name</label>
+          <input id="defaultAuthorName" name="defaultAuthorName" value="<%= it.defaultAuthorName || '' %>" autofocus>
+        </div>
+        <div class="field<%= err('defaultAuthorEmail') %>">
+          <label for="defaultAuthorEmail">Author email</label>
+          <input id="defaultAuthorEmail" name="defaultAuthorEmail" type="email" class="mono mono-input"
+                 value="<%= it.defaultAuthorEmail || '' %>">
+          <% if (errors.defaultAuthorEmail) { %>
+            <div class="field-error"><%= errors.defaultAuthorEmail %></div>
+          <% } else { %>
+            <div class="hint">Podcast directories require an owner email to verify who owns a show.</div>
+          <% } %>
+        </div>
+        <div class="field">
+          <label for="defaultLanguage">Language</label>
+          <select id="defaultLanguage" name="defaultLanguage">
+            <% for (const lang of it.helpers.languages) { %>
+              <option value="<%= lang.code %>"<%= (it.defaultLanguage || 'en') === lang.code ? ' selected' : '' %>><%= lang.label %></option>
+            <% } %>
+          </select>
+        </div>
+        <div class="setup-actions">
+          <a class="btn btn-ghost" href="/setup/2">Back</a>
+          <button class="btn btn-primary" type="submit">Finish setup</button>
+        </div>
+      </form>
+    <% } %>
+  </div>
+</main>

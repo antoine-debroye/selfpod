@@ -1,0 +1,27 @@
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title">Rotate the feed token?</h2>
+  <form class="modal__body" method="post" action="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/rotate-token"
+        hx-post="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/rotate-token"
+        hx-target="#modal-root" hx-swap="innerHTML">
+    <p>
+      This gives “<%= it.show.title %>” a brand new feed URL. Use it if the current URL has leaked —
+      the token is what authorises access to this show's feed and audio.
+    </p>
+    <p><strong>The current URL stops working immediately.</strong> Anyone already subscribed, including you,
+      needs to re-add the show using the new URL.</p>
+    <%
+      /* Being straight about what rotation cannot claw back: already-downloaded
+         episodes are on subscribers' devices, and any CDN in front of SelfPod may
+         hold cached copies for a while. */
+    %>
+    <p class="help-note">
+      Episodes already downloaded stay on subscribers' devices, and any CDN or proxy in front of SelfPod
+      may keep serving cached copies briefly. Rotating stops new access; it cannot un-share what is
+      already out there.
+    </p>
+    <div class="modal__actions">
+      <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
+      <button class="btn btn-danger btn-sm" type="submit">Rotate token</button>
+    </div>
+  </form>
+</dialog>

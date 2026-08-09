@@ -1,0 +1,46 @@
+<%
+  /* Spec §11.3 requires these to read as two clearly distinct actions, because one
+     is reversible and the other destroys the audio. They are therefore two
+     separate forms with different verbs, not one form with a checkbox. */
+  const episode = it.episode;
+  const show = it.show;
+%>
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title">“<%= episode.title %>”</h2>
+  <div class="modal__body">
+    <p class="mono modal__filename"><%= episode.filename %></p>
+
+    <section class="modal__option">
+      <h3 class="modal__option-title">Remove from the feed</h3>
+      <p>Subscribers stop seeing this episode. The audio file stays on disk, rescans leave it alone,
+        and you can restore it at any time.</p>
+      <form method="post" action="/ui/episodes/<%= encodeURIComponent(episode.id) %>/remove"
+            hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>/remove"
+            hx-target="#modal-root" hx-swap="innerHTML">
+        <button class="btn btn-ghost btn-sm" type="submit">Remove from feed</button>
+      </form>
+    </section>
+
+    <hr class="soft">
+
+    <section class="modal__option modal__option--danger">
+      <h3 class="modal__option-title">Delete the audio file</h3>
+      <p>Erases <code><%= episode.filename %></code>
+        (<%= it.helpers.formatBytes(episode.fileSizeBytes) %>) from
+        <code><%= show.folder %></code>. This cannot be undone.</p>
+      <form method="post" action="/ui/episodes/<%= encodeURIComponent(episode.id) %>/delete-file"
+            hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>/delete-file"
+            hx-target="#modal-root" hx-swap="innerHTML">
+        <label class="checkbox">
+          <input type="checkbox" name="confirm" value="1"
+                 data-confirm-check data-confirm-target="#confirm-delete-file">
+          <span>I understand this permanently deletes the audio file.</span>
+        </label>
+        <div class="modal__actions">
+          <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
+          <button class="btn btn-danger btn-sm" type="submit" id="confirm-delete-file" disabled>Delete file</button>
+        </div>
+      </form>
+    </section>
+  </div>
+</dialog>

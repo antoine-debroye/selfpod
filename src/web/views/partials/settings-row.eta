@@ -1,0 +1,47 @@
+<%
+  /* Two variants of the same row: a display view, and an inline edit form swapped
+     in over it. Keeping both here means the "Edit → save → display" cycle can
+     never drift out of visual sync. */
+  const editing = it.editing;
+  const errors = it.errors || {};
+%>
+<div class="set-row<%= it.last ? ' set-row--last' : '' %>">
+  <div class="info">
+    <div class="t"><%= it.title %></div>
+    <% if (it.description) { %><div class="d"><%= it.description %></div><% } %>
+    <% if (errors[it.key]) { %><div class="field-error"><%= errors[it.key] %></div><% } %>
+  </div>
+
+  <% if (editing) { %>
+    <form class="set-row__form" method="post" action="/ui/settings/<%= it.key %>"
+          hx-post="/ui/settings/<%= it.key %>"
+          hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">
+      <label class="sr-only" for="set-<%= it.key %>"><%= it.title %></label>
+      <% if (it.key === 'defaultLanguage') { %>
+        <select id="set-<%= it.key %>" name="value">
+          <% for (const lang of it.helpers.languages) { %>
+            <option value="<%= lang.code %>"<%= it.rawValue === lang.code ? ' selected' : '' %>><%= lang.label %></option>
+          <% } %>
+        </select>
+      <% } else { %>
+        <input id="set-<%= it.key %>" name="value" value="<%= it.rawValue === null || it.rawValue === undefined ? '' : it.rawValue %>"
+               class="<%= it.mono ? 'mono mono-input' : '' %>"
+               <%= it.inputType ? 'type="' + it.inputType + '"' : '' %>
+               <%= it.placeholder ? 'placeholder="' + it.placeholder + '"' : '' %> autofocus>
+      <% } %>
+      <% if (it.hint) { %><div class="hint"><%= it.hint %></div><% } %>
+      <div class="set-row__actions">
+        <button class="btn btn-ghost btn-sm" type="button"
+                hx-get="/ui/settings/<%= it.key %>" hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">Cancel</button>
+        <button class="btn btn-primary btn-sm" type="submit">Save</button>
+      </div>
+    </form>
+  <% } else { %>
+    <div class="val<%= it.mono ? ' mono' : '' %>">
+      <%= it.value %>
+      <button class="btn btn-ghost btn-sm set-row__edit" type="button"
+              hx-get="/ui/settings/<%= it.key %>?edit=1"
+              hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">Edit</button>
+    </div>
+  <% } %>
+</div>

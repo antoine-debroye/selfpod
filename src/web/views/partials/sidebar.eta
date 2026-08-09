@@ -1,0 +1,48 @@
+<nav class="sidebar" id="sidebar" aria-label="Main">
+  <a class="brand" href="/">
+    <%~ include('../partials/logo', { size: 30, tileFill: '#23262D' }) %>
+    <div class="word">Self<span>Pod</span></div>
+  </a>
+
+  <a class="nav-item<%= it.active === 'dashboard' ? ' active' : '' %>" href="/"<%= it.active === 'dashboard' ? ' aria-current="page"' : '' %>>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    Dashboard
+  </a>
+
+  <div class="nav-section">Shows</div>
+  <% for (const show of (it.shows || []).slice(0, 8)) { %>
+    <a class="nav-item<%= it.activeSlug === show.slug ? ' active' : '' %>" href="/shows/<%= encodeURIComponent(show.slug) %>"<%= it.activeSlug === show.slug ? ' aria-current="page"' : '' %>>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      <span class="nav-label"><%= show.title %></span>
+    </a>
+  <% } %>
+  <a class="nav-item" href="/shows/new">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    New show
+  </a>
+
+  <div class="nav-section">Instance</div>
+  <a class="nav-item<%= it.active === 'activity' ? ' active' : '' %>" href="/activity"<%= it.active === 'activity' ? ' aria-current="page"' : '' %>>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+    Activity
+  </a>
+  <a class="nav-item<%= it.active === 'settings' ? ' active' : '' %>" href="/settings"<%= it.active === 'settings' ? ' aria-current="page"' : '' %>>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>
+    Settings
+  </a>
+
+  <div class="spacer"></div>
+
+  <form method="post" action="/logout" class="me-form">
+    <div class="me">
+      <div class="av" aria-hidden="true"><%= (it.username || 'ad').slice(0, 2).toUpperCase() %></div>
+      <div class="who">
+        <%= it.username || 'admin' %>
+        <small>SelfPod <%= it.version %></small>
+      </div>
+      <button class="icon-btn me-signout" type="submit" title="Sign out" aria-label="Sign out">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
+    </div>
+  </form>
+</nav>

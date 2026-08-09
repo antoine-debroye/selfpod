@@ -1,0 +1,26 @@
+<div class="show-grid" id="show-grid">
+  <% for (const show of it.shows) { %>
+    <%~ include('../partials/show-card', { show, helpers: it.helpers }) %>
+  <% } %>
+
+  <a class="show-card show-card--new" href="/shows/new"
+     hx-get="/ui/modals/new-show" hx-target="#modal-root" hx-swap="innerHTML">
+    <div class="show-card--new__inner">
+      <span class="show-card--new__glyph" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </span>
+      <span class="show-card--new__title">New show</span>
+      <span class="show-card--new__hint">or just make a folder</span>
+    </div>
+  </a>
+</div>
+
+<% if (!it.shows.length) { %>
+  <div class="empty">
+    <div class="empty__title">No shows yet</div>
+    <p class="empty__hint">
+      Create a folder inside <code><%= it.showsDir %></code> and SelfPod picks it up on its own —
+      that is the whole workflow. Or use <strong>New show</strong> above and skip the filesystem entirely.
+    </p>
+  </div>
+<% } %>

@@ -1,0 +1,10 @@
+<%
+  /* Swapped out-of-band into #toast-root, so any fragment response can raise a
+     notice without owning the toast container. */
+%>
+<div id="toast-root" hx-swap-oob="beforeend:#toast-root">
+  <div class="toast toast--<%= it.level || 'ok' %>" role="status">
+    <div class="toast__body"><%= it.message %></div>
+    <button class="toast__close" type="button" data-toast-close aria-label="Dismiss">×</button>
+  </div>
+</div>

@@ -1,0 +1,8 @@
+<%
+  /* Native <dialog>: the browser supplies focus trapping, Escape-to-close and the
+     backdrop, so none of that has to be re-implemented in JavaScript. */
+%>
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title"><%= it.title %></h2>
+  <div class="modal__body"><%~ it.body %></div>
+</dialog>

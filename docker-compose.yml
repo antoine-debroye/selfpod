@@ -1,0 +1,50 @@
+# SelfPod — the whole deployment.
+#
+# This file is deliberately complete and deliberately final: adding a show never
+# means editing it again. A show is a folder inside the one mounted volume, so
+# the tenth show needs exactly as much configuration as the first (none).
+#
+# Paste-ready for TrueNAS SCALE (Apps → Discover → Custom App → Install via YAML),
+# and equally usable with `docker compose up -d`.
+
+services:
+  selfpod:
+    image: ghcr.io/antoine-debroye/selfpod:latest
+    container_name: selfpod
+    restart: unless-stopped
+
+    environment:
+      # The only required setting: the address your reverse proxy or tunnel serves
+      # SelfPod on. Every URL in every feed is built from it. No trailing slash.
+      # It can also be set later in Settings, without editing this file.
+      PUBLIC_BASE_URL: https://podcast.example.com
+
+      # Match these to whoever owns your audio files on the host. On TrueNAS, run
+      # `id <username>` in a shell to find them. Getting this right is what avoids
+      # every "permission denied" problem — SelfPod never changes permissions on
+      # your files itself.
+      PUID: 1000
+      PGID: 1000
+
+      # Used for displayed dates and for an episode's default publish date.
+      TZ: Europe/London
+
+      # Optional. Shown here at their defaults so they are easy to find.
+      # RESCAN_INTERVAL_SECONDS: 300   # fallback rescan; 60–21600, also in Settings
+      # MAX_UPLOAD_SIZE_MB: 1024       # browser uploads; your proxy may cap lower
+      # ADMIN_USERNAME: admin
+      # ADMIN_PASSWORD: choose-your-own # if unset, one is generated and logged once
+      # LOG_LEVEL: info
+
+    volumes:
+      # One volume, mounted once. Everything lives here: your audio, the cover
+      # art, and SelfPod's database. Moving to another machine is copying this
+      # directory. Use a local path on the Docker host — not an NFS or SMB mount,
+      # which SQLite cannot lock reliably.
+      - /path/on/host/selfpod-data:/data
+
+    ports:
+      - "8080:8080"
+
+    # Reaps any stray child process, so a restart never leaves zombies behind.
+    init: true

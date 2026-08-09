@@ -1,0 +1,49 @@
+<div class="login-shell">
+  <div class="login-art">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="quote">
+      <div class="login-art__brand">
+        <%~ include('../partials/logo', { size: 42, tileFill: '#F2EEE4' }) %>
+        <span class="login-art__word">Self<span>Pod</span></span>
+      </div>
+      <h2>Drop a file. <em>It's an episode.</em></h2>
+      <div class="by">Self-hosted podcast server</div>
+    </div>
+  </div>
+
+  <main class="login-form">
+    <h1 class="welcome"><%= it.firstRun ? 'Welcome to SelfPod' : 'Welcome back' %></h1>
+    <p class="sub">
+      <% if (it.firstRun) { %>
+        Sign in with the password printed in your container logs, then choose your own.
+      <% } else { %>
+        Sign in to your SelfPod instance.
+      <% } %>
+    </p>
+
+    <% if (it.error) { %>
+      <div class="notice err" role="alert" style="margin-bottom:18px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <div><%= it.error %></div>
+      </div>
+    <% } %>
+
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="<%= it.next || '/' %>">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" value="<%= it.username || '' %>" autocomplete="username" autofocus required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary login-submit" type="submit">Sign in</button>
+    </form>
+
+    <p class="login-foot">
+      SelfPod <%= it.version %> ·
+      <span class="mono login-foot__health" data-health-inline>/health</span>
+    </p>
+  </main>
+</div>

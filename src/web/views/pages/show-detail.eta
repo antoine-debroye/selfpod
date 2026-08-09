@@ -1,0 +1,67 @@
+<%
+  const show = it.show;
+  const badge = it.helpers.badgeFor(show.health, show.counts);
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">
+      <%= show.counts.inFeed %> episode<%= show.counts.inFeed === 1 ? '' : 's' %> in feed<%
+      %><% if (show.lastScan) { %> · last scan <%= it.helpers.relativeTime(show.lastScan.finishedAt) %><% } %>
+    </div>
+    <h1><%= show.title %></h1>
+  </div>
+  <div class="actions">
+    <span class="badge <%= badge.cls %>"><span class="d" aria-hidden="true"></span><%= badge.label %></span>
+  </div>
+</div>
+
+<div id="scan-progress-slot"></div>
+
+<% if (show.status === 'folder_missing') { %>
+  <div class="notice warn" style="margin-bottom:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div>The folder <code><%= show.folder %></code> is gone, so this feed is paused. Nothing has been deleted —
+      put the folder back and the show resumes with the same episode identities.</div>
+  </div>
+<% } %>
+
+<% if (show.lastScan && show.lastScan.errors.length) { %>
+  <div class="notice err" style="margin-bottom:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div>
+      <strong>The last scan reported <%= show.lastScan.errors.length %> problem<%= show.lastScan.errors.length === 1 ? '' : 's' %>.</strong>
+      <ul class="notice__list">
+        <% for (const error of show.lastScan.errors.slice(0, 4)) { %>
+          <li><%= error.message %></li>
+        <% } %>
+      </ul>
+      <a href="/activity?showId=<%= encodeURIComponent(show.slug) %>">See the full activity log</a>
+    </div>
+  </div>
+<% } %>
+
+<div class="detail-grid">
+  <div class="detail-left">
+    <%~ include('../partials/cover-box', { show, helpers: it.helpers }) %>
+    <%~ include('../partials/feed-box', { show, qrSvg: it.qrSvg, helpers: it.helpers }) %>
+  </div>
+
+  <div class="detail-right">
+    <%~ include('../partials/show-meta-form', { show, helpers: it.helpers }) %>
+    <%~ include('../partials/episode-table', { show, episodes: show.episodes, helpers: it.helpers }) %>
+
+    <section class="form-card danger-zone">
+      <div class="ftitle">Danger zone</div>
+      <div class="fdesc">Removing a show never touches your audio unless you explicitly ask it to.</div>
+      <div class="set-row" style="border-bottom:none">
+        <div class="info">
+          <div class="t">Remove this show</div>
+          <div class="d">Choose whether to keep the folder and its audio, or delete everything.</div>
+        </div>
+        <button class="btn btn-danger btn-sm" type="button"
+                hx-get="/ui/modals/delete-show/<%= encodeURIComponent(show.slug) %>"
+                hx-target="#modal-root" hx-swap="innerHTML">Remove show…</button>
+      </div>
+    </section>
+  </div>
+</div>

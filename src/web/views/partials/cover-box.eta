@@ -1,0 +1,51 @@
+<%
+  const show = it.show;
+  const cover = show.cover;
+%>
+<div id="cover-box">
+  <div class="cover-box" data-cover-dropzone data-show-id="<%= show.id %>" data-slug="<%= show.slug %>">
+    <% if (cover) { %>
+      <img class="art" src="<%= cover.localUrl %>" alt="Cover art for <%= show.title %>" width="600" height="600">
+    <% } else { %>
+      <div class="art art--placeholder" style="background: <%= it.helpers.placeholderGradient(show.slug) %>" aria-hidden="true">
+        <span class="art__initials art__initials--lg"><%= it.helpers.initials(show.title) %></span>
+      </div>
+    <% } %>
+    <label class="replace">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg>
+      <span>Drag an image here, or choose a file</span>
+      <input type="file" accept="image/jpeg,image/png,image/webp" data-cover-input class="sr-only">
+    </label>
+    <div class="cover-box__progress" data-cover-progress hidden><i></i></div>
+  </div>
+
+  <% if (cover && cover.warning) { %>
+    <div class="notice warn" style="margin-top:14px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+      <div>
+        <%= cover.warning.message %>
+        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/cover/normalize"
+              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/cover/normalize"
+              hx-target="#cover-box" hx-swap="outerHTML" class="notice__action">
+          <button class="btn btn-ghost btn-sm" type="submit">Resize to 1400×1400</button>
+        </form>
+      </div>
+    </div>
+  <% } else if (!cover) { %>
+    <div class="notice warn" style="margin-top:14px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+      <div>No cover art yet. Drop a square image above, or put <code>cover.jpg</code> (or <code>.png</code>/<code>.webp</code>) into the show's folder.</div>
+    </div>
+  <% } %>
+
+  <%
+    /* Spec §10.4 — this note is permanent, not conditional. Users otherwise spend
+       hours debugging a server that is already correct, because the podcast app
+       is caching artwork on its own infrastructure. */
+  %>
+  <p class="help-note">
+    Podcast apps such as Apple Podcasts and Pocket Casts cache artwork on <em>their own</em> servers,
+    keyed to their internal podcast id, and refresh it on their own schedule. SelfPod cannot make a
+    third-party app update its copy sooner — if the image below is right, your server is right.
+  </p>
+</div>

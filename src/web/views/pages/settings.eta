@@ -1,0 +1,169 @@
+<%
+  const s = it.settings;
+  const r = it.runtime;
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">Instance defaults · SelfPod <%= it.version %></div>
+    <h1>Settings</h1>
+  </div>
+</div>
+
+<section class="form-card">
+  <div class="ftitle">Public address</div>
+  <div class="fdesc">Every URL in every feed is built from this. It is the address your reverse proxy or
+    tunnel serves SelfPod on.</div>
+  <div id="setting-publicBaseUrl">
+    <%~ include('../partials/settings-row', {
+      key: 'publicBaseUrl',
+      title: 'Public base URL',
+      description: 'Include the scheme, no trailing slash — for example https://podcast.example.com',
+      value: s.publicBaseUrl || 'Not set',
+      mono: true,
+      helpers: it.helpers,
+    }) %>
+  </div>
+</section>
+
+<section class="form-card">
+  <div class="ftitle">Library</div>
+  <div class="fdesc">How SelfPod notices new audio.</div>
+
+  <div id="setting-rescanIntervalSeconds">
+    <%~ include('../partials/settings-row', {
+      key: 'rescanIntervalSeconds',
+      title: 'Fallback rescan interval',
+      description: 'This is what guarantees correctness on network shares, where file-change events are often never delivered. Between 1 minute and 6 hours.',
+      value: it.helpers.formatInterval(s.rescanIntervalSeconds),
+      helpers: it.helpers,
+    }) %>
+  </div>
+
+  <div id="setting-missingGraceSeconds">
+    <%~ include('../partials/settings-row', {
+      key: 'missingGraceSeconds',
+      title: 'Missing-file grace period',
+      description: 'How long an episode stays in the feed after its file disappears, so a brief share outage does not drop episodes from subscribers.',
+      value: it.helpers.formatInterval(s.missingGraceSeconds),
+      helpers: it.helpers,
+    }) %>
+  </div>
+
+  <div class="set-row">
+    <div class="info">
+      <div class="t">Live file detection</div>
+      <div class="d">
+        Watches the folder for changes so new files appear within seconds. Falls back to periodic
+        scanning on its own when a volume does not deliver file events.
+        <% if (r.watcher && r.watcher.degraded) { %>
+          <br><strong>Currently using periodic scanning</strong> — this volume is not delivering file
+          events, which is normal for SMB/NFS shares.
+        <% } %>
+      </div>
+    </div>
+    <form method="post" action="/ui/settings/watcher"
+          hx-post="/ui/settings/watcher" hx-target="closest .set-row" hx-swap="outerHTML">
+      <div class="toggle<%= s.watcherEnabled ? ' on' : '' %>">
+        <input type="checkbox" id="watcher-enabled" name="watcherEnabled" role="switch" class="switch-input"
+               value="1"<%= s.watcherEnabled ? ' checked' : '' %> onchange="this.form.requestSubmit()">
+        <label class="switch" for="watcher-enabled" aria-hidden="true"></label>
+        <span class="tl" data-toggle-label>
+          <%= s.watcherEnabled ? (r.watcher && r.watcher.degraded ? 'Polling' : 'Active') : 'Off' %>
+        </span>
+      </div>
+      <noscript><button class="btn btn-ghost btn-sm" type="submit">Apply</button></noscript>
+    </form>
+  </div>
+
+  <div class="set-row" style="border-bottom:none">
+    <div class="info">
+      <div class="t">Rescan everything now</div>
+      <div class="d">Re-reads every file, including a full content re-check. Use this if a file changed
+        without its size or timestamp changing.</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" type="button"
+            hx-post="/ui/rescan-all" hx-target="#scan-progress-slot" hx-swap="innerHTML">Rescan all</button>
+  </div>
+</section>
+
+<div id="scan-progress-slot"></div>
+
+<section class="form-card">
+  <div class="ftitle">Defaults for new shows</div>
+  <div class="fdesc">Used when a folder appears without a <span class="mono">show.json</span>.</div>
+  <div id="setting-defaultAuthorName">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultAuthorName', title: 'Default author name',
+      value: s.defaultAuthorName || 'Not set', helpers: it.helpers,
+    }) %>
+  </div>
+  <div id="setting-defaultAuthorEmail">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultAuthorEmail', title: 'Default author email',
+      description: 'Podcast directories require an owner email to verify who owns a show.',
+      value: s.defaultAuthorEmail || 'Not set', mono: true, helpers: it.helpers,
+    }) %>
+  </div>
+  <div id="setting-defaultLanguage">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultLanguage', title: 'Default language',
+      value: s.defaultLanguage, mono: true, last: true, helpers: it.helpers,
+    }) %>
+  </div>
+</section>
+
+<section class="form-card">
+  <div class="ftitle">Security</div>
+  <div class="set-row">
+    <div class="info">
+      <div class="t">Admin password</div>
+      <div class="d">One admin account, stored as a bcrypt hash. Signed in as <span class="mono"><%= s.adminUsername %></span>.</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" type="button"
+            hx-get="/ui/modals/change-password" hx-target="#modal-root" hx-swap="innerHTML">Change…</button>
+  </div>
+  <div id="setting-sessionTtlHours">
+    <%~ include('../partials/settings-row', {
+      key: 'sessionTtlHours', title: 'Stay signed in for',
+      description: 'Session cookies are HttpOnly, SameSite=Lax, and marked Secure automatically when SelfPod is reached over HTTPS.',
+      value: s.sessionTtlHours + ' hours', helpers: it.helpers,
+    }) %>
+  </div>
+  <div class="set-row" style="border-bottom:none">
+    <div class="info">
+      <div class="t">Sign-in protection</div>
+      <div class="d">Failed sign-ins are rate limited per source and backed off per account, so a shared
+        proxy address cannot be used to lock you out.</div>
+    </div>
+    <div class="val">enabled</div>
+  </div>
+</section>
+
+<section class="form-card">
+  <div class="ftitle">This container</div>
+  <div class="fdesc">Read-only. These come from the environment, and everything stateful lives in one volume —
+    copy <code><%= r.dataDir %></code> to another machine and your instance moves with it.</div>
+  <div class="set-row">
+    <div class="info"><div class="t">Data volume</div></div>
+    <div class="val mono"><%= r.dataDir %></div>
+  </div>
+  <div class="set-row">
+    <div class="info"><div class="t">Shows folder</div></div>
+    <div class="val mono"><%= r.showsDir %></div>
+  </div>
+  <div class="set-row">
+    <div class="info">
+      <div class="t">Running as</div>
+      <div class="d">Set PUID/PGID to match whoever owns your audio files.</div>
+    </div>
+    <div class="val mono">UID <%= r.puid %> · GID <%= r.pgid %></div>
+  </div>
+  <div class="set-row">
+    <div class="info"><div class="t">Time zone</div></div>
+    <div class="val mono"><%= r.timeZone %></div>
+  </div>
+  <div class="set-row" style="border-bottom:none">
+    <div class="info"><div class="t">Upload size limit</div><div class="d">A proxy in front of SelfPod may impose a lower one.</div></div>
+    <div class="val mono"><%= r.maxUploadSizeMb %> MB</div>
+  </div>
+</section>

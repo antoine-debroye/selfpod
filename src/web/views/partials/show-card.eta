@@ -1,0 +1,42 @@
+<%
+  const show = it.show;
+  const badge = it.helpers.badgeFor(show.health, show.counts);
+  const paused = show.status === 'folder_missing';
+%>
+<article class="show-card<%= paused ? ' show-card--paused' : '' %>"
+         id="show-card-<%= show.id %>"
+         hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/card"
+         hx-trigger="sse:scan-finished-<%= show.id %> from:body"
+         hx-swap="outerHTML">
+  <a class="show-card__link" href="/shows/<%= encodeURIComponent(show.slug) %>">
+    <div class="cover-art">
+      <% if (show.cover) { %>
+        <img class="art" src="<%= show.cover.localUrl %>" alt="Cover art for <%= show.title %>" loading="lazy" width="300" height="300">
+      <% } else { %>
+        <div class="art art--placeholder" style="background: <%= it.helpers.placeholderGradient(show.slug) %>" aria-hidden="true">
+          <span class="art__initials"><%= it.helpers.initials(show.title) %></span>
+        </div>
+      <% } %>
+      <span class="status">
+        <span class="badge <%= badge.cls %>"><span class="d" aria-hidden="true"></span><%= badge.label %></span>
+      </span>
+      <span class="play-glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </span>
+    </div>
+    <div class="body">
+      <h2 class="title"><%= show.title %></h2>
+      <div class="meta">
+        <% if (paused) { %>
+          <span class="meta--warn">folder missing</span>
+        <% } else if (show.warnings.length) { %>
+          <span class="meta--warn"><%= show.warnings[0].message.length > 46 ? show.warnings[0].message.slice(0, 44) + '…' : show.warnings[0].message %></span>
+        <% } else { %>
+          <span><%= show.counts.inFeed %> in feed</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span><%= show.lastScan ? 'scanned ' + it.helpers.relativeTime(show.lastScan.finishedAt) : 'not scanned yet' %></span>
+        <% } %>
+      </div>
+    </div>
+  </a>
+</article>

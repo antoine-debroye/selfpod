@@ -1,0 +1,10 @@
+<svg class="logo<%= it.class ? ' ' + it.class : '' %>" viewBox="0 0 48 48" fill="none" width="<%= it.size || 30 %>" height="<%= it.size || 30 %>" aria-hidden="true" focusable="false">
+  <rect width="48" height="48" rx="12" fill="<%= it.tileFill || '#23262D' %>"/>
+  <g stroke="<%= it.waveFill || '#D9602B' %>" stroke-width="3" stroke-linecap="round">
+    <line x1="13" y1="24" x2="13" y2="24"/>
+    <line x1="19" y1="17" x2="19" y2="31"/>
+    <line x1="25" y1="11" x2="25" y2="37"/>
+    <line x1="31" y1="17" x2="31" y2="31"/>
+    <line x1="37" y1="21" x2="37" y2="27"/>
+  </g>
+</svg>
