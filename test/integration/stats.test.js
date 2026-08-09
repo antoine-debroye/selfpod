@@ -127,6 +127,39 @@ describe('play and download statistics', () => {
     }
   });
 
+  it('explains a read that fails after the size check passed', async () => {
+    clearLog();
+    // Reading can fail *after* stat succeeded — the file deleted between the two, or
+    // the share dropping mid-transfer — and that arrives as a bare 500 from the
+    // static handler with nobody having set a reason. Standing a directory where the
+    // file was reproduces it deterministically: stat succeeds, the read cannot.
+    const { mkdir, rename, rm } = await import('node:fs/promises');
+    const path = join(server.config.showsDir, 'metrics', episode.filename);
+    const stashed = `${path}.stashed`;
+    await rename(path, stashed);
+    await mkdir(path);
+    try {
+      const response = await server.app.inject({
+        url: audioUrl(),
+        headers: { 'user-agent': 'Pocket Casts/7.5 (iPhone)' },
+      });
+      assert.ok(response.statusCode >= 400, `expected a failure, got ${response.statusCode}`);
+      await settle();
+
+      const [row] = server.stats.list({ episodeId: episode.id });
+      assert.ok(row, 'the failed request must be recorded at all');
+      assert.equal(row.ok, false);
+      assert.ok(
+        row.error && row.error.trim().length > 0,
+        'a failure with no reason is as useless as no record at all',
+      );
+      assert.match(row.error, new RegExp(episode.filename.slice(0, 12).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    } finally {
+      await rm(path, { recursive: true, force: true });
+      await rename(stashed, path);
+    }
+  });
+
   it('never stores the feed token or the raw user agent', async () => {
     clearLog();
     await server.app.inject({

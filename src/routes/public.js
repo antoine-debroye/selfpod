@@ -17,20 +17,6 @@ import { VERSION } from '../version.js';
  */
 export default async function publicRoutes(fastify, { config, settings, shows, episodes, feeds, covers, health, stats }) {
   /**
-   * Records how a media response actually ended.
-   *
-   * Waiting for the response to finish rather than recording in the handler is what
-   * makes the numbers trustworthy: only by then is the real status code known, and
-   * only then can a transfer that died halfway be told apart from one that
-   * completed. A handler-time log would count every attempt as a success — which is
-   * precisely the case the owner needs to see.
-   *
-   * `close` always fires, `finish` only on a complete response, so a `close`
-   * without a preceding `finish` is a client that hung up mid-download. The `done`
-   * latch means one response can only ever produce one row, whatever order and
-   * however many times those events arrive.
-   */
-  /**
    * True when this request came from the owner's own admin session.
    *
    * The episode editor previews audio through this very route, and the dashboard
@@ -46,6 +32,20 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     }
   }
 
+  /**
+   * Records how a media response actually ended.
+   *
+   * Waiting for the response to finish rather than recording in the handler is what
+   * makes the numbers trustworthy: only by then is the real status code known, and
+   * only then can a transfer that died halfway be told apart from one that
+   * completed. A handler-time log would count every attempt as a success — which is
+   * precisely the case the owner needs to see.
+   *
+   * `close` always fires, `finish` only on a complete response, so a `close`
+   * without a preceding `finish` is a client that hung up mid-download. The `done`
+   * latch means one response can only ever produce one row, whatever order and
+   * however many times those events arrive.
+   */
   function trackAccess(request, reply, extra) {
     if (isOwnRequest(request)) return;
     let done = false;
@@ -65,11 +65,31 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
         userAgent: request.headers['user-agent'] ?? null,
         error: aborted
           ? 'The app disconnected before the transfer finished, so this download is incomplete.'
-          : (extra.error ?? null),
+          : (extra.error ?? explainFailure(reply.statusCode, extra)),
       });
     };
     reply.raw.once('finish', () => settle(false));
     reply.raw.once('close', () => settle(!reply.raw.writableFinished));
+  }
+
+  /**
+   * A sentence for a failure nobody explained.
+   *
+   * Reading the file can still fail *after* the size check passed — the file is
+   * deleted or the share drops between the two — and that arrives here as a bare
+   * 500 from the static handler. A failure row with no reason is exactly as useless
+   * as the silence this feature was built to replace, so every one gets a sentence.
+   */
+  function explainFailure(statusCode, { name } = {}) {
+    if (!statusCode || statusCode < 400) return null;
+    const file = name ? `\`${name}\`` : 'this file';
+    if (statusCode >= 500) {
+      return `SelfPod began sending ${file} and then could not finish reading it. The file may have been moved, deleted or made unreadable while it was being sent, or the storage it lives on became unavailable.`;
+    }
+    if (statusCode === 416) {
+      return `A podcast app asked for a part of ${file} that does not exist. This usually means the app cached an older, longer version of the episode.`;
+    }
+    return `${file} could not be served (HTTP ${statusCode}).`;
   }
   /**
    * Resolves a slug+token pair to a show, or 404s. Both the "wrong token" and
@@ -179,6 +199,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       kind: ACCESS_KIND.COVER,
       showId: show.id,
       totalBytes: coverStats.size,
+      name: show.cover_filename,
     });
     return reply.sendFile(show.cover_filename, shows.dirFor(show), {
       cacheControl: false,
@@ -260,6 +281,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       episodeId: episode.id,
       showId: show.id,
       totalBytes: fileStats.size,
+      name: episode.filename,
     });
 
     // Range handling (206 responses, `Accept-Ranges`, 416 for an unsatisfiable

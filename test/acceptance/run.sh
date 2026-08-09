@@ -190,6 +190,68 @@ HEALTH="$(docker inspect --format '{{.State.Health.Status}}' "${NAME}-perm" 2>/d
   || fail "the container was marked unhealthy and may be restarted or hidden"
 docker rm -f "${NAME}-perm" >/dev/null 2>&1
 
+# -------------------------------------------------------------------------- 10
+# A real reported failure. Fastify rejects a route parameter over 100 characters
+# with an HTTP 414 before any handler runs, and an episode's filename is a route
+# parameter — so an episode with a long enough title simply never downloaded, and
+# nothing appeared in SelfPod's own logs, because no SelfPod code was reached.
+# This gets its own show so the checks above keep their one-episode assumptions.
+step "10. An episode whose filename exceeds 100 characters still downloads"
+mkdir -p "${WORK}/data/shows/long-names"
+LONG="2026-08-03-Bulletin météo : forte dépression sur Ceuta, retour à la normale annoncé depuis Madrid.m4a"
+cp "${FIXTURES}/sample.m4a" "${WORK}/data/shows/long-names/${LONG}"
+wait_for_scan
+LONG_TOKEN="$(api "${BASE}/api/shows" | json '
+d = json.load(sys.stdin)
+print(next((s["feedToken"] for s in d["shows"] if s["slug"] == "long-names"), ""))
+')"
+LONG_URL="$(curl -s "${BASE}/feeds/long-names/${LONG_TOKEN}.xml" | python3 -c '
+import re, sys
+m = re.search(r"<enclosure url=\"([^\"]+)\"", sys.stdin.read())
+print(m.group(1).replace("&amp;", "&") if m else "")
+')"
+LONG_CODE="$(curl -s -o "${WORK}/long.m4a" -w '%{http_code}' -A 'Pocket Casts/7.5 (iPhone; iOS 18.2)' "$LONG_URL")"
+if [ "$LONG_CODE" = "200" ] && cmp -s "${WORK}/long.m4a" "${FIXTURES}/sample.m4a"; then
+  pass "a 100+ character filename downloads byte-identically (no HTTP 414)"
+else
+  fail "the long filename returned HTTP ${LONG_CODE}"
+fi
+
+# -------------------------------------------------------------------------- 11
+step "11. Downloads, streams and failures are counted, without storing the token"
+curl -s -o /dev/null -H 'Range: bytes=0-999' -A 'Overcast/2024' "$LONG_URL"
+sleep 2
+STATS="$(api "${BASE}/api/stats")"
+printf '%s' "$STATS" | json '
+d = json.load(sys.stdin)["overview"]
+sys.exit(0 if d["downloads"] >= 1 and d["streams"] >= 1 else 1)
+' && pass "a whole-file fetch counted as a download, a range fetch as a stream" \
+  || fail "downloads and streams were not counted separately: ${STATS}"
+
+# The file is removed underneath a request, which is what a subscriber's failed
+# download looks like from the server's side.
+rm -f "${WORK}/data/shows/long-names/${LONG}"
+curl -s -o /dev/null -A 'Pocket Casts/7.5 (iPhone)' "$LONG_URL"
+sleep 2
+FAILURES="$(api "${BASE}/api/stats" | json 'print(json.load(sys.stdin)["overview"]["failures"])')"
+[ "${FAILURES:-0}" -ge 1 ] \
+  && pass "a request that could not be served is recorded as a failure" \
+  || fail "the failed request was not recorded"
+# Deliberately not matching one exact sentence: the file can vanish before the
+# size check or between it and the read, and those are different messages. What
+# must always hold is that no failure is left without an explanation.
+api "${BASE}/api/stats/log?failuresOnly=1" | json '
+d = json.load(sys.stdin)["entries"]
+bad = [r for r in d if not (r.get("error") or "").strip()]
+if bad:
+    print("rows with no reason:", [(r["status_code"], r["kind"]) for r in bad])
+sys.exit(1 if bad or not d else 0)
+' && pass "every failure carries a plain-language reason" \
+  || fail "a failure was recorded with no readable explanation"
+api "${BASE}/api/stats/log" | grep -q "$LONG_TOKEN" \
+  && fail "the feed token leaked into the access log" \
+  || pass "the feed token is never stored in the access log"
+
 # ---------------------------------------------------------------------- report
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"
