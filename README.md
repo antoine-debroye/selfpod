@@ -288,6 +288,27 @@ If SelfPod notices the watcher isn't reporting changes that the periodic scan
 keeps finding, it switches itself to polling and says so in the UI. That message
 is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
 
+## Testing your public address
+
+The hostname in the top bar is a button. Clicking it tests that address twice: once
+from your browser, and once from SelfPod itself. Two vantage points, because one
+cannot tell these apart:
+
+- **reachable** — both got through, and the reply proved it came from this container.
+- **blocked here** (amber) — SelfPod reached the address but your browser would not
+  make the call. An extension, a strict privacy mode, or a rule against calling an
+  `https` address from a plain-`http` page. **Your listeners are unaffected**; this
+  says nothing about your setup.
+- **wrong server** — the address answers, but not from this container. An old copy
+  still running, or a proxy sending that hostname elsewhere. This is the one worth
+  chasing: everything looks healthy while subscribers get someone else's feeds.
+- **unreachable** — neither could reach it, with the underlying reason named (DNS
+  does not resolve, connection refused, certificate rejected, timed out).
+
+That last detail comes from SelfPod's own attempt. A browser deliberately hides why
+a request failed, so the browser alone can only ever say "something went wrong" —
+which is why this test used to blame DNS for problems that were nothing of the sort.
+
 ## Subscribing from a podcast app
 
 Every SelfPod feed is **private and unlisted**, and that changes how you add it.

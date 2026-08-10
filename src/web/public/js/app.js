@@ -213,55 +213,170 @@
 
   /* -------------------------------------------------------- public URL test */
 
-  // Runs from the browser on purpose: that is the only way to prove the public
-  // address actually reaches SelfPod through the user's proxy and DNS.
+  /**
+   * Tests the public address from two vantage points, because one is not enough to
+   * reach a conclusion.
+   *
+   * The browser's own attempt is what a listener's device experiences, so it is worth
+   * making. But a browser can refuse a request for reasons that have nothing to do
+   * with the server — an extension, strict privacy mode, or HTTPS-only settings
+   * blocking a cross-origin call from this plain-HTTP page — and this test used to
+   * report every such refusal as "check DNS, your reverse proxy or tunnel", which was
+   * simply false. So SelfPod is asked to try the same address itself, and the two
+   * results together give a verdict that can distinguish the cases.
+   */
   document.addEventListener('click', function (event) {
     var button = event.target.closest('[data-health-test]');
     if (!button) return;
     var url = button.getAttribute('data-url');
     var dot = button.querySelector('.d');
     var action = button.querySelector('.public-url__action');
+    if (button.getAttribute('aria-busy') === 'true') return;
+    button.setAttribute('aria-busy', 'true');
     if (action) action.textContent = '· testing…';
 
-    var controller = new AbortController();
-    var timeout = setTimeout(function () {
-      controller.abort();
-    }, 8000);
+    function settle(state, message, level) {
+      button.removeAttribute('aria-busy');
+      if (dot) dot.classList.remove('d--warn', 'd--err');
+      if (dot && state !== 'reachable') dot.classList.add(state === 'blocked' ? 'd--warn' : 'd--err');
+      if (action) {
+        // "wrong server" rather than "unreachable": the address answers perfectly,
+        // it just is not this container, and calling that unreachable would send the
+        // operator looking for the wrong fault.
+        action.textContent =
+          state === 'reachable'
+            ? '· reachable'
+            : state === 'blocked'
+              ? '· blocked here'
+              : state === 'wrong'
+                ? '· wrong server'
+                : '· unreachable';
+      }
+      toast(message, level);
+    }
 
-    fetch(url, { signal: controller.signal, cache: 'no-store', mode: 'cors' })
-      .then(function (response) {
-        return response.json().then(
-          function (body) {
-            return { ok: response.ok, body: body };
-          },
-          function () {
-            return { ok: response.ok, body: null };
-          },
-        );
+    fromBrowser(url)
+      .then(function (browser) {
+        return fromServer().then(function (server) {
+          return verdict(browser, server, url);
+        });
       })
       .then(function (result) {
+        settle(result.state, result.message, result.level);
+      });
+  });
+
+  /** The browser's own attempt, classified rather than collapsed into one failure. */
+  function fromBrowser(url) {
+    var controller = new AbortController();
+    var timedOut = false;
+    var timeout = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, 10000);
+
+    return fetch(url, { signal: controller.signal, cache: 'no-store', mode: 'cors' })
+      .then(function (response) {
         clearTimeout(timeout);
-        if (result.ok) {
-          if (dot) dot.classList.remove('d--warn', 'd--err');
-          if (action) action.textContent = '· reachable';
-          var version = result.body && result.body.version ? ' (SelfPod ' + result.body.version + ')' : '';
-          toast('That address reaches SelfPod' + version + '.');
-        } else {
-          if (dot) dot.classList.add('d--err');
-          if (action) action.textContent = '· failed';
-          toast('That address answered, but not with SelfPod’s health check. Check your reverse proxy is pointing at the right container and port.', 'err');
-        }
+        return response.json().then(
+          function (body) {
+            return { ok: response.ok, status: response.status, body: body };
+          },
+          function () {
+            return { ok: response.ok, status: response.status, body: null };
+          },
+        );
       })
       .catch(function () {
         clearTimeout(timeout);
-        if (dot) dot.classList.add('d--err');
-        if (action) action.textContent = '· unreachable';
-        toast(
-          'Your browser could not reach that address. Check DNS, your reverse proxy or tunnel, and that the public base URL matches the hostname you serve SelfPod on.',
-          'err',
-        );
+        // A blocked, offline or CORS-refused request is indistinguishable here by
+        // design — the browser deliberately withholds the reason. Which is exactly
+        // why the server's attempt matters.
+        return { ok: false, status: null, body: null, failed: true, timedOut: timedOut };
       });
-  });
+  }
+
+  /** Asks SelfPod to try its own public address. */
+  function fromServer() {
+    return fetch('/api/reachability', {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'same-origin' },
+      cache: 'no-store',
+    })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  /** Combines both attempts into one honest sentence. */
+  function verdict(browser, server, url) {
+    var mixed = window.location.protocol === 'http:' && url.indexOf('https://') === 0;
+
+    if (browser.ok && server && server.reachable && server.sameInstance) {
+      var version = browser.body && browser.body.version ? ' (SelfPod ' + browser.body.version + ')' : '';
+      return { state: 'reachable', message: 'That address reaches SelfPod' + version + '.', level: 'ok' };
+    }
+
+    // The server got somewhere but not here: the single most confusing misconfiguration,
+    // because everything looks fine until subscribers get someone else's feed.
+    if (server && server.checked && server.reachable && !server.sameInstance) {
+      return { state: 'wrong', message: server.message, level: 'err' };
+    }
+
+    // The address works, the browser would not make the call. Previously reported as
+    // a server fault, which sent people to check DNS for no reason.
+    if (server && server.reachable && server.sameInstance && !browser.ok) {
+      var causes = ['an extension', 'strict privacy mode'];
+      if (mixed) causes.push('a rule against calling an https address from this plain-http page');
+      return {
+        state: 'blocked',
+        message:
+          'That address is fine — SelfPod reached itself through it. Your browser is what refused the request' +
+          (browser.timedOut ? ', by timing out' : '') +
+          '. That is usually ' + causes.slice(0, -1).join(', ') + ' or ' + causes[causes.length - 1] +
+          '. Subscribers are unaffected.',
+        level: 'warn',
+      };
+    }
+
+    if (browser.ok && server && server.checked && !server.reachable) {
+      return {
+        state: 'failed',
+        message: 'Your browser reached that address but SelfPod could not: ' + server.message,
+        level: 'err',
+      };
+    }
+
+    if (!browser.ok && browser.status) {
+      return {
+        state: 'failed',
+        message:
+          'That address answered with HTTP ' + browser.status +
+          " instead of SelfPod's health check. Something else is serving that hostname, or your proxy points at the wrong container or port.",
+        level: 'err',
+      };
+    }
+
+    if (server && server.checked) {
+      return { state: 'failed', message: server.message, level: 'err' };
+    }
+
+    if (server && server.checked === false) {
+      return { state: 'failed', message: server.message, level: 'err' };
+    }
+
+    // Both attempts failed to produce a usable answer, including SelfPod's own — so
+    // say exactly that rather than naming a cause neither test established.
+    return {
+      state: 'failed',
+      message:
+        'Neither your browser nor SelfPod itself could reach that address. Check DNS, your reverse proxy or tunnel, and that the public base URL matches the hostname you serve SelfPod on.',
+      level: 'err',
+    };
+  }
 
   /* ---------------------------------------------------- category linking */
 

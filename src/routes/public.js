@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { EPISODE_STATUS, SHOW_STATUS } from '../constants.js';
 import { ACCESS_KIND } from '../services/stats.js';
 import { notFound } from '../lib/errors.js';
+import { signPing } from '../lib/instance-proof.js';
 import { isSafeFilename } from '../lib/slug.js';
 import { tokensMatch } from '../lib/tokens.js';
 import { VERSION } from '../version.js';
@@ -114,7 +115,19 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
   fastify.get('/health', async (request, reply) => {
     reply.header('access-control-allow-origin', '*');
     reply.header('cache-control', 'no-store');
-    return health.summary({ version: VERSION });
+    const summary = health.summary({ version: VERSION });
+
+    // `?ping=` lets the reachability check prove the public address reaches *this*
+    // instance and not merely something that answers like SelfPod — an old container
+    // left running, or a second install. Echoing the nonce would prove nothing,
+    // since every SelfPod would echo it; the reply is therefore signed with a key
+    // only this install holds. Input is restricted to a short alphanumeric token, so
+    // nothing else can be reflected or signed.
+    const ping = request.query?.ping;
+    if (typeof ping === 'string' && /^[A-Za-z0-9]{1,64}$/.test(ping)) {
+      return { ...summary, ping, pong: signPing(settings.sessionSecret(), ping) };
+    }
+    return summary;
   });
 
   fastify.options('/health', async (request, reply) => {

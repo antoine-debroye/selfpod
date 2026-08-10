@@ -18,7 +18,7 @@
   <div class="right">
     <% if (it.publicBaseUrl) { %>
       <button class="public-url" type="button" data-health-test data-url="<%= it.publicBaseUrl %>/health"
-              title="Check that this address reaches SelfPod from your browser">
+              title="Test this address — from your browser, and from SelfPod itself">
         <span class="d" aria-hidden="true"></span>
         <span class="public-url__host"><%= it.publicBaseUrlHost %></span>
         <span class="public-url__action">· test</span>
