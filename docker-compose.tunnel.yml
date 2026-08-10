@@ -1,0 +1,94 @@
+# SelfPod with Cloudflare Tunnel in the same stack — no port on your network.
+#
+# Use this instead of docker-compose.yml when you reach SelfPod only through a
+# tunnel. The difference is the thing that matters: SelfPod publishes **no port at
+# all**. It is not on your LAN, not on the host's loopback, not reachable from
+# another container. The only route in is cloudflared, over the private network this
+# stack creates, and the only route to cloudflared is Cloudflare's edge.
+#
+# That is strictly stronger than binding the port to 127.0.0.1: a loopback-bound port
+# is still reachable by anything running on the NAS itself, and — more practically —
+# cloudflared in its own container cannot reach the host's loopback anyway, which is
+# why "just bind to localhost" breaks the tunnel.
+#
+# ---------------------------------------------------------------------------
+# Before you start
+# ---------------------------------------------------------------------------
+#   1. In the Cloudflare dashboard: Zero Trust → Networks → Tunnels → your tunnel →
+#      Configure, and copy the token from the Docker install command.
+#   2. Set that tunnel's public hostname to point at:  http://selfpod:8080
+#      Not localhost, not the NAS's IP — `selfpod` is this stack's own DNS name for
+#      the container, and 8080 is SelfPod's port inside it.
+#   3. Put the token in a `.env` file next to this one:
+#        TUNNEL_TOKEN=eyJhIjoi...
+#      Keep that file private: the token alone is enough to publish a tunnel.
+#
+# ---------------------------------------------------------------------------
+# Getting back in if the tunnel breaks
+# ---------------------------------------------------------------------------
+# With no published port there is no local fallback, by design. To reach SelfPod
+# again, temporarily add a `ports:` entry to the selfpod service and redeploy:
+#
+#     ports:
+#       - "31080:8080"
+#
+# Worth knowing *before* you need it.
+
+services:
+  selfpod:
+    image: ghcr.io/antoine-debroye/selfpod:latest
+    container_name: selfpod
+    restart: unless-stopped
+
+    # Deliberately no `ports:` block. Adding one is what would put SelfPod back on
+    # your network — the whole point of this file is that there isn't one.
+
+    environment:
+      PUBLIC_BASE_URL: https://podcast.example.com
+      PUID: 1000
+      PGID: 1000
+      TZ: Europe/London
+
+    volumes:
+      - /path/on/host/selfpod-data:/data
+
+    networks:
+      - selfpod-internal
+
+    init: true
+
+    # SelfPod needs no privileges of its own; the entrypoint needs a few briefly to
+    # align PUID/PGID and drop root. NET_RAW among others is gone.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: selfpod-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in a .env file next to this compose file}
+    networks:
+      - selfpod-internal
+    depends_on:
+      - selfpod
+    # It only ever connects outbound to Cloudflare and inbound to selfpod.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  # A private network for these two containers. Nothing else joins it, so nothing
+  # else on the host or the LAN can open a connection to SelfPod.
+  selfpod-internal:
+    driver: bridge

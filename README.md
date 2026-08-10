@@ -334,14 +334,39 @@ server-side on logout.
 process holds no capabilities at all, `NET_RAW` included, and no setuid binary can be
 used to climb back to root.
 
+### Taking SelfPod off your network entirely
+
+If you only ever reach SelfPod through a tunnel, it does not need to be on your
+network at all. [`docker-compose.tunnel.yml`](docker-compose.tunnel.yml) runs SelfPod
+and `cloudflared` in one stack with **no published port**, and points the tunnel at
+`http://selfpod:8080` — the stack's own private network name.
+
+Measured with exactly that arrangement:
+
+| Connecting from | Result |
+| --- | --- |
+| `cloudflared`, in the same stack | works — HTTP 200 |
+| Another container, by name | refused |
+| Another container, by the private address | refused (Docker isolates the networks) |
+| Anywhere on your LAN | no socket exists to connect to |
+
+This is stronger than the usual advice of binding the port to `127.0.0.1`, for two
+reasons. A loopback-bound port is still open to everything else running on the NAS.
+And more practically, `cloudflared` in its own container **cannot reach the host's
+loopback** — so "just bind it to localhost" silently breaks the tunnel, which is the
+first thing you discover after doing it.
+
+The trade-off is that there is no local fallback: if the tunnel is down, so is your
+admin access, until you add a `ports:` entry back and redeploy. Decide that before you
+need it, not after.
+
 ### Two things SelfPod cannot fix for you
 
 **Plain HTTP on your LAN.** SelfPod speaks HTTP and expects your proxy to terminate
 TLS. If you reach the admin UI over a LAN address, your session cookie crosses your
 network in the clear, and anything on that network can read it — a compromised smart
-TV included. If that matters to you, either reach it only through your HTTPS tunnel
-and bind the published port to `127.0.0.1`, or put TLS in front of the LAN address
-too.
+TV included. Either take it off the LAN as above, or put TLS in front of the LAN
+address too.
 
 **Egress.** Dropping capabilities stops raw packets; it does not stop ordinary TCP
 connections. A container that is compromised some other way can still try to reach
