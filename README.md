@@ -558,6 +558,11 @@ scheduler); `src/routes/` the JSON API and the public token-gated feed and media
 routes; `src/web/` the server-rendered admin UI (Eta templates plus htmx, no build
 step). The design system lives in `src/web/public/css/app.css`.
 
+## Changes
+
+[CHANGELOG.md](CHANGELOG.md) — what each release changed, and which ones your listeners
+would notice.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
