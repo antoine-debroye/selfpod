@@ -38,7 +38,7 @@ export default async function pageRoutes(fastify, services) {
       showsDir: config.showsDir,
       // Read from the in-memory registry, so the banner renders even when the
       // database or the shows folder cannot be read (spec §13.1).
-      issues: health.list(),
+      issues: health.banners(),
       shows: shows.listActive().map((show) => ({ slug: show.slug, title: show.title })),
       flash: consumeFlash(request),
       ...extra,
@@ -81,7 +81,7 @@ export default async function pageRoutes(fastify, services) {
         next: sanitiseNext(request.query?.next),
         firstRun: settings.mustChangePassword(),
         error: request.query?.error === 'invalid' ? 'That username and password combination is not correct.' : null,
-        issues: health.list(),
+        issues: health.banners(),
       },
       BARE_LAYOUT,
     );
@@ -101,7 +101,7 @@ export default async function pageRoutes(fastify, services) {
           username,
           firstRun: settings.mustChangePassword(),
           error: result.message,
-          issues: health.list(),
+          issues: health.banners(),
         },
         BARE_LAYOUT,
       );
@@ -150,7 +150,7 @@ export default async function pageRoutes(fastify, services) {
     return {
       title: 'Set up SelfPod',
       step,
-      issues: health.list(),
+      issues: health.banners(),
       publicBaseUrl: settings.publicBaseUrl() ?? config.publicBaseUrl ?? '',
       envPrefilled: Boolean(config.publicBaseUrl),
       defaultAuthorName: defaults.authorName,

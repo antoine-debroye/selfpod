@@ -7,6 +7,24 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.3.1 — 2026-08-10
+
+### Fixed
+
+- **The "live file detection isn't available" banner no longer sits on every page.**
+  On a network share, polling instead of file events is the permanent, expected state
+  — there is nothing to fix and nothing to act on — but it was recorded as a *warning*,
+  which put it in the banner reserved for faults, with no way to dismiss it. A banner
+  that is always there is a banner nobody reads when something is genuinely broken.
+
+  Health states can now be informational, and those stay out of the banner while still
+  appearing in **Settings → Live file detection** and in `/api/status`. The dashboard
+  still mentions it once, dismissibly. Switching live detection off yourself is treated
+  the same way — being nagged about your own setting on every page is not a diagnostic.
+
+  Real faults are unchanged and still banner loudly: a watcher that dies with `ENOSPC`,
+  an unwritable data directory, a shows folder SelfPod cannot read.
+
 ## 1.3.0 — 2026-08-10
 
 ### Added

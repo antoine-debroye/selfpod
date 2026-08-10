@@ -19,11 +19,21 @@ export function createHealth({ config, events, logger }) {
   const issues = new Map();
 
   const api = {
+    /**
+     * `level` is `error`, `warn` or `info`.
+     *
+     * `info` exists for a state that is worth reporting but is not a fault — running
+     * on a network share where live file events are never delivered, for instance.
+     * That condition is permanent and expected, and a banner on every page for it
+     * trains people to scroll past banners, which costs exactly when something is
+     * actually wrong. Informational states stay out of `banners()` and appear in
+     * Settings and `/api/status` instead.
+     */
     set(key, { level = 'error', message, detail = null } = {}) {
       const existing = issues.get(key);
       if (existing && existing.message === message && existing.level === level) return;
       issues.set(key, { key, level, message, detail, since: new Date().toISOString() });
-      logger?.[level === 'error' ? 'error' : 'warn']({ issue: key, detail }, message);
+      logger?.[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']({ issue: key, detail }, message);
       events?.emit(EVENTS.HEALTH_CHANGED, { key, state: 'set' });
     },
 
@@ -38,6 +48,15 @@ export function createHealth({ config, events, logger }) {
 
     list() {
       return [...issues.values()];
+    },
+
+    /**
+     * The subset that earns a banner across the top of every page: things that are
+     * wrong, not things that are merely true. Informational states are deliberately
+     * excluded — see `set()`.
+     */
+    banners() {
+      return [...issues.values()].filter((issue) => issue.level === 'error' || issue.level === 'warn');
     },
 
     hasErrors() {

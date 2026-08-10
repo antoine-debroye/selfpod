@@ -307,9 +307,13 @@ frequently deliver no filesystem events at all, with no error to see: the episod
 simply never appears. So a **periodic rescan** (every 5 minutes by default) is
 what actually guarantees correctness.
 
-If SelfPod notices the watcher isn't reporting changes that the periodic scan
-keeps finding, it switches itself to polling and says so in the UI. That message
-is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
+If SelfPod notices the watcher isn't reporting changes that the periodic scan keeps
+finding, it switches itself to polling. That is normal for SMB and NFS shares and
+everything keeps working, so it is reported as information rather than as a fault: the
+dashboard mentions it once, dismissibly, and **Settings → Live file detection** always
+shows the current mode. It deliberately does not sit in a banner across every page —
+a banner that is always there is a banner nobody reads when something is actually
+wrong.
 
 ## Security
 

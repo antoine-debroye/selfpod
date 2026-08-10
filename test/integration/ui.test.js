@@ -384,6 +384,47 @@ describe('degraded states surface in the UI', () => {
     assert.ok(login.body.includes('banner--err'));
   });
 
+  /**
+   * A permanent, expected state must not occupy the banner reserved for faults.
+   * Polling mode on a network share is normal, unfixable and not worth a warning on
+   * every page — and a banner that is always there is a banner nobody reads when
+   * something is genuinely broken.
+   */
+  it('keeps an informational state out of the top banner', async () => {
+    server.health.clear('watcher');
+    server.health.set('watcher', {
+      level: 'info',
+      message: "Live file detection isn't available on this volume — SelfPod is checking for new files every 5 minutes instead.",
+    });
+    await server.login();
+
+    for (const url of ['/', '/settings', '/activity']) {
+      const body = (await server.get(url, { accept: 'text/html' })).body;
+      assert.ok(!body.includes('banner--warn'), `${url} raised a banner for an informational state`);
+      assert.ok(!body.includes('banner--err'), `${url} raised an error banner`);
+    }
+
+    // Still reported where someone would go looking for it.
+    const status = (await server.get('/api/status')).json();
+    const watcher = status.issues.find((i) => i.key === 'watcher');
+    assert.ok(watcher, 'the state must still be reported by /api/status');
+    assert.equal(watcher.level, 'info');
+    assert.equal(status.status, 'ok', 'an informational state is not a degraded instance');
+  });
+
+  it('still banners a real fault', async () => {
+    server.health.clear('watcher');
+    server.health.set('inotify', {
+      level: 'warn',
+      message: 'Live file detection stopped working (ENOSPC).',
+    });
+    await server.login();
+    const body = (await server.get('/', { accept: 'text/html' })).body;
+    assert.ok(body.includes('banner--warn'), 'a genuine fault must still be impossible to miss');
+    assert.ok(body.includes('ENOSPC'));
+    server.health.clear('inotify');
+  });
+
   it('shows the degraded-watcher notice on the dashboard', async () => {
     server.health.set('watcher', {
       level: 'warn',
