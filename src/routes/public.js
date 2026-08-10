@@ -1,8 +1,9 @@
 import { stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { EPISODE_STATUS, SHOW_STATUS } from '../constants.js';
 import { ACCESS_KIND } from '../services/stats.js';
+import { resolveContained } from '../lib/contained-path.js';
 import { notFound } from '../lib/errors.js';
 import { signPing } from '../lib/instance-proof.js';
 import { isSafeFilename } from '../lib/slug.js';
@@ -182,7 +183,18 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     const show = resolveShow(slug, token);
     if (!show.cover_filename) throw notFound('No artwork for this show.', 'no_cover');
 
-    const path = join(shows.dirFor(show), show.cover_filename);
+    // Same containment rule as episode audio: artwork is a file from a network
+    // share, so a symlink there must not become a way to read the host.
+    const resolvedCover = await resolveContained(shows.dirFor(show), show.cover_filename);
+    if (!resolvedCover.path) {
+      request.log.warn(
+        { file: show.cover_filename, show: show.slug, reason: resolvedCover.reason },
+        'artwork could not be served from inside its show folder',
+      );
+      throw notFound('No artwork for this show.', 'no_cover');
+    }
+    const path = resolvedCover.path;
+
     // Named for what it is, and to avoid shadowing the stats service.
     let coverStats;
     try {
@@ -214,7 +226,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       totalBytes: coverStats.size,
       name: show.cover_filename,
     });
-    return reply.sendFile(show.cover_filename, shows.dirFor(show), {
+    return reply.sendFile(basename(path), dirname(path), {
       cacheControl: false,
       contentType: false,
       etag: false,
@@ -240,20 +252,19 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     void filename;
 
     const showDir = shows.dirFor(show);
-    const absolute = resolve(join(showDir, episode.filename));
-    // Defence in depth: the resolved path must still be inside the show folder.
-    if (!absolute.startsWith(resolve(showDir))) throw notFound('No episode here.', 'not_found');
+    // Resolves symlinks and proves the result is genuinely inside the show folder.
+    // A lexical prefix check is not sufficient: `/data/shows` is usually a network
+    // share, and a symlink placed there by anyone who can write to it would
+    // otherwise publish a file from elsewhere on the host through this feed.
+    const resolved = await resolveContained(showDir, episode.filename);
 
-    let fileStats;
-    try {
-      fileStats = await stat(absolute);
-    } catch (err) {
-      request.log.warn(
-        { file: episode.filename, code: err.code },
-        'a subscriber requested an episode whose file could not be read',
-      );
-      // Recorded before throwing: a subscriber failing to download is exactly the
-      // event the owner needs to see, and it was previously invisible here.
+    /**
+     * One place to record a file that could not be served, in the owner's language.
+     * A subscriber failing to download is exactly the event they need to see, and it
+     * used to be invisible here.
+     */
+    const refuse = (error, code) => {
+      request.log.warn({ file: episode.filename, show: show.slug, code }, error);
       if (!isOwnRequest(request)) {
         stats?.record({
           kind: ACCESS_KIND.DOWNLOAD,
@@ -262,15 +273,41 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
           statusCode: 404,
           rangeHeader: request.headers.range ?? null,
           userAgent: request.headers['user-agent'] ?? null,
-          error:
-            err.code === 'EACCES'
-              ? `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`
-              : `${episode.filename} is not on disk.`,
+          error,
         });
       }
-      throw notFound(
+      return notFound(
         'That episode file is not readable right now.',
-        err.code === 'EACCES' ? 'permission_denied' : 'file_missing',
+        code === 'EACCES' ? 'permission_denied' : 'file_missing',
+      );
+    };
+
+    if (!resolved.path) {
+      if (resolved.reason === 'escapes') {
+        throw refuse(
+          `${episode.filename} does not resolve to a file inside this show's folder, so SelfPod refused to serve it. If it is a symlink pointing elsewhere on the host, replace it with the real file — SelfPod only serves what is genuinely in the folder.`,
+          null,
+        );
+      }
+      if (resolved.code === 'EACCES') {
+        throw refuse(
+          `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`,
+          'EACCES',
+        );
+      }
+      throw refuse(`${episode.filename} is not on disk.`, resolved.code);
+    }
+
+    const absolute = resolved.path;
+    let fileStats;
+    try {
+      fileStats = await stat(absolute);
+    } catch (err) {
+      throw refuse(
+        err.code === 'EACCES'
+          ? `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`
+          : `${episode.filename} is not on disk.`,
+        err.code,
       );
     }
 
@@ -300,7 +337,14 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     // Range handling (206 responses, `Accept-Ranges`, 416 for an unsatisfiable
     // range) comes from the static plugin — hand-rolling it is how seeking breaks.
     // Only its content-type and caching are overridden.
-    return reply.sendFile(episode.filename, showDir, { cacheControl: false, contentType: false });
+    //
+    // The *resolved* path is handed over, not the stored filename: passing the name
+    // again would make the static handler walk the symlink a second time, after the
+    // containment check, and re-open the question that check just answered.
+    return reply.sendFile(basename(absolute), dirname(absolute), {
+      cacheControl: false,
+      contentType: false,
+    });
   });
 
   void config;

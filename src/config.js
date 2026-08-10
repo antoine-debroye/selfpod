@@ -116,6 +116,14 @@ export function loadConfig(env = process.env) {
       }),
     ),
 
+    /**
+     * Opt-in HSTS. Off by default because SelfPod is normally reachable on a plain
+     * HTTP LAN address as well as through an HTTPS tunnel, and a browser that has
+     * seen HSTS for a hostname will refuse plain HTTP to it for months — excellent
+     * when chosen, a lockout when it arrives by surprise.
+     */
+    hstsEnabled: env.ENABLE_HSTS === '1' || env.ENABLE_HSTS === 'true',
+
     adminUsername: env.ADMIN_USERNAME?.trim() || 'admin',
     adminPassword: env.ADMIN_PASSWORD?.length ? env.ADMIN_PASSWORD : null,
     sessionSecretSeed: env.SESSION_SECRET?.length ? env.SESSION_SECRET : null,

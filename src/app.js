@@ -8,6 +8,7 @@ import Fastify from 'fastify';
 import authPlugin from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import { loggerRedactPaths, loggerSerializers } from './plugins/log-redaction.js';
+import securityHeadersPlugin from './plugins/security-headers.js';
 import sessionPlugin from './plugins/session.js';
 import apiRoutes from './routes/api/index.js';
 import publicRoutes from './routes/public.js';
@@ -41,6 +42,9 @@ export async function buildApp(services) {
   });
 
   await fastify.register(errorHandlerPlugin);
+  // Registered before any route so the headers apply to every response, including
+  // errors produced by the handlers below.
+  await fastify.register(securityHeadersPlugin, { settings: services.settings, config });
   await fastify.register(fastifyFormbody);
   await fastify.register(fastifyMultipart, {
     limits: {

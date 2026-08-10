@@ -288,6 +288,68 @@ If SelfPod notices the watcher isn't reporting changes that the periodic scan
 keeps finding, it switches itself to polling and says so in the UI. That message
 is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
 
+## Security
+
+SelfPod is built to be published to the internet, so the design assumes the address
+is known and the login page is being probed.
+
+**What is reachable without signing in.** Only four things: `/health`, a show's RSS
+feed, its cover art, and its episode audio. The last three require that show's
+22-character token (≈131 bits, compared in constant time). A wrong token and a
+show that does not exist return byte-identical 404s, so feeds cannot be found by
+guessing slugs, and nothing anywhere returns 403 — which would confirm a hit.
+Everything else redirects to the login page or answers 401.
+
+**Files it will serve.** Only files that genuinely live inside a show's own folder.
+Filenames from the database are validated, and the resolved real path is checked to
+be inside that folder — so a symlink dropped into your media share cannot be used to
+publish something else from the host. The URL's filename segment is decorative:
+episodes are looked up by id, so nothing you put there changes which file is read.
+The audio directory is registered with `serve: false`, meaning there is no open
+static root over your media at all.
+
+**Getting from SelfPod onto your network.** SelfPod makes exactly one kind of
+outbound request: the optional public-address self-test, which fetches the address in
+Settings and nothing else. It takes no URL from the request, it is rate limited, and
+it returns nothing from the response body unless the reply cryptographically proves
+it came from this same instance. No unauthenticated request causes any outbound
+traffic. There is no shell execution, no `eval`, and no dynamic code loading anywhere
+in the app.
+
+**If a browser bug ever did get through.** Responses carry
+`Content-Security-Policy: script-src 'self'` with no `unsafe-inline` — every script in
+SelfPod is a file under `/assets`, so injected markup cannot execute — plus
+`frame-ancestors 'none'`, `nosniff`, `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer` (the feed token is printed on the show page, and this
+guarantees no navigation carries the URL off-site). Changing the password always
+requires the current one, so a stolen session cannot lock you out of your own
+instance.
+
+**Passwords.** bcrypt, with per-account exponential backoff keyed so that forging
+`X-Forwarded-For` buys nothing. Sessions live in SQLite and are invalidated
+server-side on logout.
+
+**Container.** Runs as the UID you choose, never root unless you ask. With the
+`cap_drop`/`security_opt` block in [`docker-compose.yml`](docker-compose.yml) the app
+process holds no capabilities at all, `NET_RAW` included, and no setuid binary can be
+used to climb back to root.
+
+### Two things SelfPod cannot fix for you
+
+**Plain HTTP on your LAN.** SelfPod speaks HTTP and expects your proxy to terminate
+TLS. If you reach the admin UI over a LAN address, your session cookie crosses your
+network in the clear, and anything on that network can read it — a compromised smart
+TV included. If that matters to you, either reach it only through your HTTPS tunnel
+and bind the published port to `127.0.0.1`, or put TLS in front of the LAN address
+too.
+
+**Egress.** Dropping capabilities stops raw packets; it does not stop ordinary TCP
+connections. A container that is compromised some other way can still try to reach
+other hosts on your network, because Docker's default bridge allows it. Capabilities
+are the wrong tool for that — the right one is a network policy that denies egress
+except to what SelfPod needs (which is nothing, unless you use the self-test). Worth
+doing if the NAS shares a network with things you care about.
+
 ## Testing your public address
 
 The hostname in the top bar is a button. Clicking it tests that address twice: once

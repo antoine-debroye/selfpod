@@ -23,8 +23,43 @@ import { VERSION } from '../../version.js';
  */
 const TIMEOUT_MS = 8000;
 
+/**
+ * This is the only place SelfPod makes an outbound request, which makes it the only
+ * place it could be turned into a way to probe the network the NAS sits on. Three
+ * things keep that bounded:
+ *
+ *  1. It takes **no URL parameter**. The target is always the configured public base
+ *     URL, so aiming it somewhere else means writing a setting first — an
+ *     admin-only, logged change, not a free-form fetch.
+ *  2. Nothing from the response body is passed back unless the reply proves it came
+ *     from this instance, so it cannot be used to read what a service on the LAN
+ *     says.
+ *  3. It is rate limited, so even an attacker holding an admin session cannot sweep
+ *     a subnet through it at any useful speed.
+ *
+ * Every check is logged with its target, so a sweep leaves a trail.
+ */
+const RATE_LIMIT = { max: 6, windowMs: 60_000 };
+const recentChecks = [];
+
+function rateLimited() {
+  const cutoff = Date.now() - RATE_LIMIT.windowMs;
+  while (recentChecks.length && recentChecks[0] < cutoff) recentChecks.shift();
+  if (recentChecks.length >= RATE_LIMIT.max) return true;
+  recentChecks.push(Date.now());
+  return false;
+}
+
 export default async function reachabilityRoutes(fastify, { settings, logger }) {
-  fastify.post('/reachability', { preHandler: fastify.requireAdminApi }, async () => {
+  fastify.post('/reachability', { preHandler: fastify.requireAdminApi }, async (request, reply) => {
+    if (rateLimited()) {
+      reply.status(429);
+      return {
+        checked: false,
+        reason: 'rate_limited',
+        message: 'That test has run several times in the last minute. Wait a moment and try again.',
+      };
+    }
     const baseUrl = settings.publicBaseUrl();
     if (!baseUrl) {
       return {
@@ -59,13 +94,20 @@ export default async function reachabilityRoutes(fastify, { settings, logger }) 
       // proves only that *a* SelfPod answered. The proof has to be computed with
       // this install's own key.
       const sameInstance = pingMatches(settings.sessionSecret(), ping, body?.pong);
+      logger?.info(
+        { host: hostOf(baseUrl), status: response.status, sameInstance, elapsedMs },
+        'public address reachability checked',
+      );
       return {
         checked: true,
         reachable: response.ok,
         status: response.status,
         elapsedMs,
         sameInstance,
-        version: body?.version ?? null,
+        // Deliberately only when the reply proved it came from this instance.
+        // Otherwise this field would hand back a slice of whatever a service on the
+        // network answered, turning an operator's diagnostic into a way to read it.
+        version: sameInstance ? (body?.version ?? null) : null,
         // Spelling out the three outcomes here rather than in the browser keeps the
         // wording in one place, and the server is the only side that knows which
         // one happened.
@@ -97,15 +139,18 @@ export default async function reachabilityRoutes(fastify, { settings, logger }) 
  * is in `err.cause.code`, which names the actual failure — DNS, refused connection,
  * TLS — rather than the generic "fetch failed".
  */
+function hostOf(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return String(baseUrl);
+  }
+}
+
 function describeFetchFailure(err, baseUrl, elapsedMs) {
   const code = err?.cause?.code ?? err?.code ?? null;
   const name = err?.name ?? '';
-  let host = baseUrl;
-  try {
-    host = new URL(baseUrl).host;
-  } catch {
-    /* keep the raw value */
-  }
+  const host = hostOf(baseUrl);
 
   if (name === 'TimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
     return `Nothing answered at ${host} within ${Math.round(elapsedMs / 1000)} seconds. A tunnel that has just started can be slow on its first request, so try once more; if it keeps timing out, the tunnel or proxy is not forwarding to SelfPod.`;

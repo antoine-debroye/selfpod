@@ -44,7 +44,29 @@ services:
       - /path/on/host/selfpod-data:/data
 
     ports:
+      # Reachable on every interface. If you only ever reach SelfPod through a
+      # tunnel or reverse proxy on this same host, bind it to loopback instead —
+      # `127.0.0.1:8080:8080` — and nothing else on your network can even open a
+      # connection to it, let alone try passwords against it.
       - "8080:8080"
 
     # Reaps any stray child process, so a restart never leaves zombies behind.
     init: true
+
+    # ---------------------------------------------------------------- hardening
+    # SelfPod needs no privileges of its own. The entrypoint briefly needs a few
+    # to align PUID/PGID and then drop to that user; everything else is removed,
+    # including NET_RAW, so nothing in this container can craft raw packets at
+    # your network. Verified: with exactly these settings the node process runs
+    # with no effective capabilities at all.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN         # give the app user its own node_modules
+      - DAC_OVERRIDE  # read /data as the target user during the self-test
+      - FOWNER
+      - SETUID        # su-exec drops root
+      - SETGID
+    security_opt:
+      # A setuid binary inside the image cannot be used to climb back to root.
+      - no-new-privileges:true
