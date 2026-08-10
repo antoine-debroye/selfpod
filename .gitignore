@@ -6,3 +6,8 @@ node_modules/
 .env
 .env.*
 coverage/
+
+# Personal work logs. These describe a specific deployment — internal addresses,
+# ports, UIDs, accepted risks — which is exactly the wrong thing to publish in a
+# public repository.
+WORKLOG-*.md
