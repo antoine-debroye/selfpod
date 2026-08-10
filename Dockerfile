@@ -73,6 +73,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
 LABEL org.opencontainers.image.title="SelfPod" \
-      org.opencontainers.image.description="Self-hosted podcast server. Drop a file in a folder; it's an episode." \
+      org.opencontainers.image.description="Self-hosted podcast server for private feeds. Drop a file in a folder; it's an episode." \
       org.opencontainers.image.source="https://github.com/antoine-debroye/selfpod" \
       org.opencontainers.image.licenses="MIT"
