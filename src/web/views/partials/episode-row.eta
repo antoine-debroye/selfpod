@@ -39,8 +39,8 @@
       </a>
     <% } %>
   </td>
-  <td><span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span></td>
-  <td>
+  <td class="ep-status"><span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span></td>
+  <td class="ep-actions">
     <div class="actions">
       <a class="icon-btn" href="/shows/<%= encodeURIComponent(show.slug) %>/episodes/<%= encodeURIComponent(episode.id) %>"
          aria-label="Edit <%= episode.title %>" title="Edit">
