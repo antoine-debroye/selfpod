@@ -72,7 +72,8 @@ Then:
    prints it once.
 2. Open the app, sign in, and pick your own password in the three-step setup.
 3. Make a folder under `/data/shows/`, drop audio into it, and subscribe to the
-   feed URL the show page gives you (there is a QR code for your phone).
+   feed URL the show page gives you — see
+   [Subscribing from a podcast app](#subscribing-from-a-podcast-app).
 
 Or use [`docker-compose.yml`](docker-compose.yml) from this repo, which is the
 same thing in file form.
@@ -286,6 +287,32 @@ what actually guarantees correctness.
 If SelfPod notices the watcher isn't reporting changes that the periodic scan
 keeps finding, it switches itself to polling and says so in the UI. That message
 is not a fault — it's normal for SMB and NFS shares, and everything keeps working.
+
+## Subscribing from a podcast app
+
+Every SelfPod feed is **private and unlisted**, and that changes how you add it.
+
+Some apps treat a subscribe link as a *lookup in their own public directory* rather
+than a feed to fetch. Your feed is in no directory, so those apps open and say
+something like "unable to find podcast, please contact the podcast author" — even
+though the very same URL pasted into their search box works immediately. **Pocket
+Casts behaves this way**, and its own documentation says an unlisted feed should be
+added by pasting the URL into the app's search bar.
+
+So the show page offers two different things, per app:
+
+- **Apple Podcasts, Overcast, Castro** — a QR code carrying that app's subscribe
+  scheme. Scan it with your phone's camera and the app opens and subscribes.
+- **Pocket Casts, and any other app** — the instruction that works: copy the feed
+  URL and paste it into the app's search or "add by URL" box. No QR, because there
+  is nothing useful to encode.
+
+Do not put the plain `https://` feed URL in a QR code and expect it to subscribe:
+a phone camera hands it to the browser, which shows the raw XML with no way onward
+to a podcast app.
+
+If an app that should work says it can't find the podcast, paste the URL in instead.
+That path depends on nothing but the app being able to fetch a URL.
 
 ## Statistics, and what they honestly mean
 

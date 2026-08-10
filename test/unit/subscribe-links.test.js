@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  ADD_METHOD,
   DEFAULT_SUBSCRIBE_TARGET,
   SUBSCRIBE_TARGETS,
   buildSubscribeLinks,
@@ -19,10 +20,41 @@ describe('subscribe links', () => {
 
   it('strips the scheme for the apps that expect it', () => {
     assert.equal(byId.apple, 'podcast://selfpod.example.com/feeds/late-night/vSajnf5MUzA6iDOiHWygwf.xml');
-    assert.equal(byId.pocketcasts, 'pktc://subscribe/selfpod.example.com/feeds/late-night/vSajnf5MUzA6iDOiHWygwf.xml');
     assert.equal(byId.castro, 'castros://subscribe/selfpod.example.com/feeds/late-night/vSajnf5MUzA6iDOiHWygwf.xml');
-    for (const id of ['apple', 'pocketcasts', 'castro']) {
+    for (const id of ['apple', 'castro']) {
       assert.ok(!byId[id].includes('https://'), `${id} must not carry the feed's own scheme`);
+    }
+  });
+
+  /**
+   * Pocket Casts' `pktc://subscribe/` is a lookup in its public directory, not a
+   * fetch. Confirmed against a real private feed: the app opens and reports "unable
+   * to find podcast, please contact the podcast author", while the same URL pasted
+   * into its search box subscribes at once. Offering that link again would be
+   * shipping a button that cannot work.
+   */
+  it('does not offer Pocket Casts a subscribe link it cannot resolve', () => {
+    const pocketcasts = SUBSCRIBE_TARGETS.find((t) => t.id === 'pocketcasts');
+    assert.equal(pocketcasts.method, ADD_METHOD.PASTE);
+    assert.equal(byId.pocketcasts, FEED, 'the plain URL is what actually works there');
+    for (const url of Object.values(byId)) {
+      assert.ok(!url.startsWith('pktc://'), 'no pktc:// link may be generated for a private feed');
+    }
+  });
+
+  it('tells the paste-only apps where to paste', () => {
+    for (const target of SUBSCRIBE_TARGETS) {
+      if (target.method !== ADD_METHOD.PASTE) continue;
+      assert.ok(target.where, `${target.id} must say where the URL goes`);
+    }
+  });
+
+  it('marks every target with how the feed actually gets in', () => {
+    for (const { id, method } of buildSubscribeLinks(FEED)) {
+      assert.ok(
+        method === ADD_METHOD.LINK || method === ADD_METHOD.PASTE,
+        `${id} has no add method`,
+      );
     }
   });
 

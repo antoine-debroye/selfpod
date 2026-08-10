@@ -1468,3 +1468,11 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 .ep-table--pinned .dur,
 .ep-table--pinned .size { white-space: nowrap; }
 .log-range { font-size: 11px; color: var(--ink-soft); margin-top: 4px; }
+
+/* Paste-only subscribe pane: for apps whose subscribe link is a directory lookup,
+   which a private feed can never satisfy. No QR, because there is nothing useful to
+   encode — the instruction is the feature. */
+.subscribe__paste { font-size: 12px; color: var(--ink-soft); line-height: 1.55; }
+.subscribe__paste p { margin: 0 0 8px; }
+.subscribe__paste strong { color: var(--ink); }
+.subscribe__paste .btn { margin-top: 2px; }

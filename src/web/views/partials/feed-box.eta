@@ -37,19 +37,39 @@
           <% for (const code of codes) { %>
             <div class="subscribe__pane<%= code.id === defaultTarget ? ' is-active' : '' %>"
                  data-subscribe-pane="<%= code.id %>"<%= code.id === defaultTarget ? '' : ' hidden' %>>
-              <div class="qr"><%~ code.svg %></div>
-              <div class="subscribe__hint">
-                <% if (code.id === 'url') { %>
-                  <p>Paste this into your app's <span class="mono">Add by URL</span> box. Scanning this
-                    one opens the feed in a browser rather than a podcast app, which is why it is not
-                    the default.</p>
-                <% } else { %>
+              <% if (code.method === 'paste') { %>
+                <%
+                  /* No QR here on purpose. This app resolves a subscribe link through
+                     its public directory, and a private feed is in no directory — the
+                     app opens and says it cannot find the podcast. Pasting the URL is
+                     the route that works, so that is the only one offered. */
+                %>
+                <div class="subscribe__paste">
+                  <p>
+                    <strong><%= code.label %></strong> can't take this feed from a link or a QR code.
+                    It looks subscribe links up in its public directory, and a private feed is in no
+                    directory — the app opens and says it can't find the podcast.
+                  </p>
+                  <p>
+                    Copy the feed URL above and paste it into <%~ code.where ? code.where : 'the app' %>.
+                    That works straight away.
+                  </p>
+                  <button class="btn btn-ghost btn-sm" type="button" data-copy-target="#feed-url-<%= show.id %>">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                    Copy feed URL
+                  </button>
+                </div>
+              <% } else { %>
+                <div class="qr"><%~ code.svg %></div>
+                <div class="subscribe__hint">
                   <p>Scan with your phone's camera — it opens <strong><%= code.label %></strong> and
                     subscribes.</p>
                   <a class="subscribe__open" href="<%= code.url %>">Open in <%= code.label %></a>
-                  <p class="subscribe__aside">That link works if you are reading this on the phone itself.</p>
-                <% } %>
-              </div>
+                  <p class="subscribe__aside">That link works if you are reading this on the phone itself.
+                    If the app says it can't find the podcast, it wants the URL pasted in instead — private
+                    feeds appear in no app's directory.</p>
+                </div>
+              <% } %>
             </div>
           <% } %>
         </div>
