@@ -360,6 +360,34 @@ The trade-off is that there is no local fallback: if the tunnel is down, so is y
 admin access, until you add a `ports:` entry back and redeploy. Decide that before you
 need it, not after.
 
+### Or: restricting the published port to your own subnet
+
+If you want to keep the port but only allow your own network, filter it in Docker's
+`DOCKER-USER` chain — **not** the usual `INPUT` chain, which never sees published
+container ports because Docker's rules run in `FORWARD` after address translation.
+
+Two things make a naive rule wrong. Matching `--dport` catches the *container* port
+(8080) and would hit every other container using it, so match the original port with
+conntrack instead. And a reverse proxy running in another container reaches SelfPod
+from a **Docker address**, not a LAN one — so allowing only your subnet silently kills
+your own tunnel. Both are handled here (replace `31080` and the subnet with yours):
+
+```bash
+iptables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport 31080 -s 192.168.10.0/24 -j RETURN
+iptables -I DOCKER-USER 2 -p tcp -m conntrack --ctorigdstport 31080 -s 172.16.0.0/12 -j RETURN
+iptables -I DOCKER-USER 3 -p tcp -m conntrack --ctorigdstport 31080 -j DROP
+```
+
+Check it before trusting it: the app should still load from a machine on your subnet,
+the public hostname should still work (that proves the proxy rule is right), and a
+host on another VLAN should time out. To undo, swap `-I` for `-D` and run the three
+again — or reboot, since these are not persistent. On TrueNAS, make them persistent
+with **System Settings → Advanced → Init/Shutdown Scripts**, as a *Post Init* command.
+
+Worth being clear about what this buys: if your network is flat, the port was already
+only reachable from that subnet and this changes nothing. It helps when other networks
+— a guest VLAN, IoT devices, VPN clients — can route to the NAS.
+
 ### Two things SelfPod cannot fix for you
 
 **Plain HTTP on your LAN.** SelfPod speaks HTTP and expects your proxy to terminate
