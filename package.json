@@ -1,6 +1,6 @@
 {
   "name": "selfpod",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "description": "SelfPod \u2014 a self-hosted podcast server. Drop a file in a folder; it's an episode.",
   "license": "MIT",
   "type": "module",
@@ -13,7 +13,7 @@
     "start": "node src/index.js",
     "dev": "DATA_DIR=./.devdata LOG_LEVEL=debug node --watch src/index.js",
     "scan": "node scripts/scan-once.js",
-    "test": "node --test \"test/unit/*.test.js\" \"test/integration/*.test.js\"",
+    "test": "node --test \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/security/*.test.js\"",
     "test:unit": "node --test \"test/unit/*.test.js\"",
     "test:integration": "node --test \"test/integration/*.test.js\"",
     "reset-password": "node scripts/reset-password.js"
