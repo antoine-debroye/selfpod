@@ -129,11 +129,33 @@ jobs:
             type=sha,format=short
 
       - name: Create the multi-arch manifest
+        env:
+          # Passed through the environment rather than substituted into the script.
+          # A `${{ }}` expression is pasted in as literal text before bash sees it, so
+          # a single apostrophe anywhere in the metadata closes the quoting and breaks
+          # the command — and the repository description, which is arbitrary prose,
+          # ends up in this JSON. The same substitution is how a workflow gets
+          # injected, so the environment is the right route regardless.
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
         run: |
           cd /tmp/digests
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
-            $(for f in *; do echo -n "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$(cat "$f") "; done)
+          # Arrays throughout, so nothing depends on word splitting.
+          tag_args=()
+          while IFS= read -r tag; do
+            tag_args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<< "$METADATA_JSON")
+
+          digest_args=()
+          for file in *; do
+            digest_args+=("${REGISTRY}/${IMAGE_NAME}@$(cat "$file")")
+          done
+
+          if [ "${#tag_args[@]}" -eq 0 ] || [ "${#digest_args[@]}" -eq 0 ]; then
+            echo "Refusing to publish: ${#tag_args[@]} tags and ${#digest_args[@]} digests." >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
 
       - name: Show what was published
         run: docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
