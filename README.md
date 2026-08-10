@@ -274,6 +274,29 @@ of it can be changed later in **Settings** without touching the container.
 
 ---
 
+## When the feed no longer matches the folder
+
+**Rescan** (top of a show page) re-reads every file and re-hashes it, so it catches
+audio you replaced even when the name, size and modification time all look unchanged.
+This is the one to reach for, and it costs subscribers nothing.
+
+What a rescan deliberately will *not* do is undo your own decisions. It never
+overwrites a title, date or description you edited here; it never brings back an
+episode you removed from the feed; and a description taken from a file's tags is read
+only when SelfPod first sees that file. Those are the right defaults — but together
+they mean a library that has been renamed, re-tagged and re-encoded outside SelfPod can
+end up with a feed that no longer resembles the folder.
+
+**Rebuild from disk** (Danger zone, on the show page) is the way back. SelfPod forgets
+every episode of that show and reads the folder again from scratch: titles, dates and
+descriptions come from the files and their tags, and any audio still in the folder is
+back in the feed. **No audio file is touched.**
+
+It is confirmed twice — tick the acknowledgement *and* type the folder name — because
+the cost lands on your listeners rather than on you: episodes get new identities, so
+podcast apps treat the whole back catalogue as new, download it again, and lose what
+was marked played. Try Rescan first.
+
 ## How it finds new episodes
 
 Two mechanisms, on purpose.

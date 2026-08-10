@@ -60,15 +60,31 @@
 <%~ include('../partials/episode-table', { show, episodes: show.episodes, helpers: it.helpers }) %>
 
 <section class="form-card danger-zone">
-      <div class="ftitle">Danger zone</div>
-      <div class="fdesc">Removing a show never touches your audio unless you explicitly ask it to.</div>
-      <div class="set-row" style="border-bottom:none">
-        <div class="info">
-          <div class="t">Remove this show</div>
-          <div class="d">Choose whether to keep the folder and its audio, or delete everything.</div>
-        </div>
-        <button class="btn btn-danger btn-sm" type="button"
-                hx-get="/ui/modals/delete-show/<%= encodeURIComponent(show.slug) %>"
-                hx-target="#modal-root" hx-swap="innerHTML">Remove show…</button>
+  <div class="ftitle">Danger zone</div>
+  <div class="fdesc">Nothing here touches your audio unless you explicitly ask it to.</div>
+
+  <div class="set-row">
+    <div class="info">
+      <div class="t">Rebuild this feed from disk</div>
+      <div class="d">
+        Forgets every episode and reads the folder again — for when files have been renamed,
+        re-tagged or replaced outside SelfPod and the feed no longer matches them. Subscribers
+        re-download everything, so try <strong>Rescan</strong> first: it already picks up
+        changed audio without affecting anyone.
       </div>
-    </section>
+    </div>
+    <button class="btn btn-danger btn-sm" type="button"
+            hx-get="/ui/modals/rebuild-show/<%= encodeURIComponent(show.slug) %>"
+            hx-target="#modal-root" hx-swap="innerHTML">Rebuild…</button>
+  </div>
+
+  <div class="set-row" style="border-bottom:none">
+    <div class="info">
+      <div class="t">Remove this show</div>
+      <div class="d">Choose whether to keep the folder and its audio, or delete everything.</div>
+    </div>
+    <button class="btn btn-danger btn-sm" type="button"
+            hx-get="/ui/modals/delete-show/<%= encodeURIComponent(show.slug) %>"
+            hx-target="#modal-root" hx-swap="innerHTML">Remove show…</button>
+  </div>
+</section>

@@ -1,0 +1,61 @@
+<%
+  const show = it.show;
+  const total = show.counts.total;
+%>
+<dialog class="modal" id="modal" aria-labelledby="modal-title">
+  <h2 class="modal__title" id="modal-title">Rebuild “<%= show.title %>” from disk?</h2>
+  <form class="modal__body" method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/rebuild"
+        hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/rebuild"
+        hx-target="#modal-root" hx-swap="innerHTML">
+
+    <p>
+      SelfPod will forget everything it knows about this show's
+      <strong><%= total %> episode<%= total === 1 ? '' : 's' %></strong> and read the folder again
+      from scratch. <strong>No audio file is touched or deleted.</strong>
+    </p>
+
+    <div class="notice warn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+      <div>
+        <strong>Every subscriber will re-download every episode.</strong>
+        Episodes get new identities, so podcast apps see the whole back catalogue as new
+        and lose what was marked played. If you only need SelfPod to notice changed audio,
+        <em>Rescan</em> does that without affecting anyone.
+      </div>
+    </div>
+
+    <p class="help-note">
+      Rebuilding also discards titles, dates and descriptions you edited here, taking them
+      from the files and their tags instead, and drops episodes you removed from the feed —
+      any file still in the folder comes back.
+    </p>
+
+    <%
+      /* Two independent confirmations, as asked: acknowledge the consequence, then type
+         the folder name. Either one alone is too easy to click through on a page whose
+         other buttons are harmless. */
+    %>
+    <label class="choice choice--danger" style="margin-bottom:14px">
+      <input type="checkbox" name="acknowledge" value="1"
+             data-confirm-check data-confirm-target="#confirm-rebuild-show">
+      <span class="choice__body">
+        <strong>I understand every subscriber will re-download this show</strong>
+        <small>There is no undo. Played state and any edits made in SelfPod are lost.</small>
+      </span>
+    </label>
+
+    <div class="field<%= it.errors && it.errors.confirm ? ' is-invalid' : '' %>">
+      <label for="confirm-slug">Then type the folder name to confirm: <code><%= show.slug %></code></label>
+      <input id="confirm-slug" name="confirm" class="mono mono-input" autocomplete="off"
+             data-confirm-match="<%= show.slug %>" data-confirm-target="#confirm-rebuild-show">
+      <% if (it.errors && it.errors.confirm) { %><div class="field-error"><%= it.errors.confirm %></div><% } %>
+    </div>
+
+    <div class="modal__actions">
+      <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
+      <button class="btn btn-danger btn-sm" type="submit" id="confirm-rebuild-show" disabled>
+        Rebuild from disk
+      </button>
+    </div>
+  </form>
+</dialog>

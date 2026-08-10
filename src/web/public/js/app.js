@@ -127,22 +127,44 @@
 
   /* --------------------------------------------------- confirm gate helpers */
 
-  // "Type the show name to confirm" — enables the destructive button only on an
-  // exact match (spec §11.6).
-  document.addEventListener('input', function (event) {
-    var input = event.target.closest('[data-confirm-match]');
-    if (!input) return;
-    var expected = input.getAttribute('data-confirm-match');
-    var target = document.querySelector(input.getAttribute('data-confirm-target'));
-    if (target) target.disabled = input.value !== expected;
-  });
+  /**
+   * Confirmation gates: "type the show name", "tick to acknowledge" (spec §11.6).
+   *
+   * Every control pointing at the same button must be satisfied before it unlocks.
+   * Evaluating them together is the whole point — when each control set `disabled`
+   * from its own state alone, a modal asking for two confirmations was unlocked by
+   * whichever one the user happened to touch last, which is not a double
+   * confirmation at all.
+   */
+  function gateControlSatisfied(control) {
+    if (control.hasAttribute('data-confirm-match')) {
+      return control.value === control.getAttribute('data-confirm-match');
+    }
+    if (control.hasAttribute('data-confirm-check')) return control.checked;
+    // Not a gate control; nothing to satisfy.
+    return true;
+  }
 
-  document.addEventListener('change', function (event) {
-    var check = event.target.closest('[data-confirm-check]');
-    if (!check) return;
-    var target = document.querySelector(check.getAttribute('data-confirm-target'));
-    if (target) target.disabled = !check.checked;
-  });
+  function refreshConfirmGate(selector) {
+    if (!selector) return;
+    var target = document.querySelector(selector);
+    if (!target) return;
+    var controls = document.querySelectorAll('[data-confirm-target="' + selector + '"]');
+    var unlocked = controls.length > 0;
+    Array.prototype.forEach.call(controls, function (control) {
+      if (!gateControlSatisfied(control)) unlocked = false;
+    });
+    target.disabled = !unlocked;
+  }
+
+  function onGateInteraction(event) {
+    var control = event.target.closest('[data-confirm-target]');
+    if (!control) return;
+    refreshConfirmGate(control.getAttribute('data-confirm-target'));
+  }
+
+  document.addEventListener('input', onGateInteraction);
+  document.addEventListener('change', onGateInteraction);
 
   /* --------------------------------------------------------------- toggles */
 

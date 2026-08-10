@@ -1,4 +1,4 @@
-import { SCAN_TRIGGER } from '../../constants.js';
+import { SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
@@ -123,6 +123,71 @@ export default async function fragmentRoutes(fastify, services) {
           helpers: fastify.viewHelpers,
         });
       }
+    });
+
+    scoped.get('/ui/modals/rebuild-show/:slug', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      return reply.view('partials/modal-rebuild-show.eta', {
+        show: presentShow(show),
+        helpers: fastify.viewHelpers,
+      });
+    });
+
+    /**
+     * Rebuilds a show's feed from disk. Both confirmations are re-checked here: the
+     * gate in the browser is a convenience, and a form post can arrive without it.
+     */
+    scoped.post('/ui/shows/:slug/rebuild', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const acknowledged = request.body?.acknowledge === '1';
+      const typed = String(request.body?.confirm ?? '') === show.slug;
+
+      if (!acknowledged || !typed) {
+        reply.status(422);
+        return reply.view('partials/modal-rebuild-show.eta', {
+          show: presentShow(show),
+          errors: {
+            confirm: !acknowledged
+              ? 'Tick the box to confirm you understand subscribers will re-download.'
+              : `Type "${show.slug}" exactly to confirm.`,
+          },
+          helpers: fastify.viewHelpers,
+        });
+      }
+
+      if (show.status === SHOW_STATUS.FOLDER_MISSING) {
+        reply.status(409);
+        return reply.view('partials/modal-rebuild-show.eta', {
+          show: presentShow(show),
+          errors: {
+            confirm: 'This show\'s folder is missing, so there is nothing on disk to rebuild from.',
+          },
+          helpers: fastify.viewHelpers,
+        });
+      }
+
+      const forgotten = episodes.forgetAllForShow(show.id);
+      await scanner.scanShowNow(show.id, SCAN_TRIGGER.MANUAL, { rehash: true });
+      const after = episodes.counts(show.id);
+
+      const entry = activity.start({
+        showId: show.id,
+        trigger: SCAN_TRIGGER.MANUAL,
+        note: 'feed rebuilt from disk',
+      });
+      activity.finish(entry, {
+        filesFound: after.total,
+        added: after.total,
+        removed: forgotten,
+        note: `Rebuilt from disk at the owner's request: ${forgotten} episode${forgotten === 1 ? '' : 's'} forgotten, ${after.total} re-imported with new identities. Every subscriber re-downloads.`,
+      });
+
+      const message = `“${show.title}” was rebuilt from disk — ${after.total} episode${after.total === 1 ? '' : 's'} re-imported. Every subscriber will re-download.`;
+      const path = `/shows/${encodeURIComponent(show.slug)}`;
+      if (!isHtmx(request)) return redirectBack(request, reply, path, message, 'warn');
+      services.setFlash(request, message, 'warn');
+      reply.header('HX-Redirect', path);
+      return reply.send('');
     });
 
     scoped.post('/ui/shows/:slug/delete', async (request, reply) => {

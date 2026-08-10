@@ -16,7 +16,8 @@ import { sanitiseUploadFilename } from '../../lib/slug.js';
 import { newId } from '../../lib/tokens.js';
 
 export default async function showRoutes(fastify, services) {
-  const { config, settings, shows, episodes, covers, scanner, feeds, presentShow, presentEpisode } = services;
+  const { config, settings, shows, episodes, covers, scanner, feeds, activity, presentShow, presentEpisode } =
+    services;
 
   fastify.addHook('onRequest', fastify.requireAdminApi);
 
@@ -95,6 +96,57 @@ export default async function showRoutes(fastify, services) {
   fastify.post('/rescan', async () => {
     const record = await scanner.scanAllNow(SCAN_TRIGGER.MANUAL, { rehash: false });
     return { ok: true, scan: record };
+  });
+
+  /**
+   * Rebuilds a show's feed from what is on disk right now, discarding everything
+   * SelfPod remembers about its episodes.
+   *
+   * Not a rescan. A rescan protects the owner's edits, keeps removed episodes
+   * removed, and leaves tag-derived descriptions as they were first read — correct
+   * behaviour that a library reorganised outside SelfPod can nonetheless leave
+   * stranded. This is the way back, and it costs every subscriber a re-download,
+   * which is why it is confirmed twice in the UI and reported plainly here.
+   */
+  fastify.post('/shows/:id/rebuild', async (request) => {
+    const show = findShow(request.params.id);
+    if (show.status === SHOW_STATUS.FOLDER_MISSING) {
+      throw conflict(
+        'This show\'s folder is missing, so there is nothing on disk to rebuild from. Put the folder back first.',
+        'folder_missing',
+      );
+    }
+
+    const before = episodes.counts(show.id);
+    const forgotten = episodes.forgetAllForShow(show.id);
+    const record = await scanner.scanShowNow(show.id, SCAN_TRIGGER.MANUAL, { rehash: true });
+    const after = episodes.counts(show.id);
+
+    // Recorded in the activity log, because "every episode suddenly looks new to
+    // every app" is exactly the kind of event someone will want to explain later.
+    const entry = activity.start({
+      showId: show.id,
+      trigger: SCAN_TRIGGER.MANUAL,
+      note: 'feed rebuilt from disk',
+    });
+    activity.finish(entry, {
+      filesFound: after.total,
+      added: after.total,
+      removed: forgotten,
+      note: `Rebuilt from disk at the owner's request: ${forgotten} episode${forgotten === 1 ? '' : 's'} forgotten, ${after.total} re-imported with new identities. Every subscriber re-downloads.`,
+    });
+
+    return {
+      ok: true,
+      forgotten,
+      imported: after.total,
+      before,
+      after,
+      scan: record,
+      show: presentShow(shows.get(show.id)),
+      note:
+        'The feed now matches the folder. Every episode has a new identity, so podcast apps will treat them all as new and download them again.',
+    };
   });
 
   /* ------------------------------------------------------------------ cover */

@@ -293,6 +293,35 @@ export function createEpisodes({ db, config, events, shows, logger }) {
     },
 
     /**
+     * Forgets every episode of a show, without touching a single file.
+     *
+     * This exists for the case a rescan deliberately cannot fix. The scanner is
+     * built never to overwrite what the owner typed and never to resurrect what they
+     * removed, and a tag-derived description is written only when an episode is first
+     * seen. All three are the right defaults, and together they mean a library that
+     * has been re-tagged, renamed and re-encoded outside SelfPod can end up with a
+     * feed that no longer matches the folder — with no way back short of this.
+     *
+     * The cost is real and falls on subscribers, not on the owner: identities are
+     * minted fresh on the next scan, so every episode looks new to every podcast app.
+     * That is why the only route to it is a double-confirmed action.
+     */
+    forgetAllForShow(showId) {
+      const rows = db.prepare('SELECT id FROM episodes WHERE show_id = ?').all(showId);
+      if (!rows.length) return 0;
+      const run = db.transaction(() => {
+        for (const row of rows) deleteEpisode.run(row.id);
+      });
+      run();
+      events?.emit(EVENTS.SHOW_CHANGED, { showId });
+      logger?.warn(
+        { showId, forgotten: rows.length },
+        'forgot every episode of a show at the owner\'s request; the next scan will re-import them with new identities',
+      );
+      return rows.length;
+    },
+
+    /**
      * Grace-period sweep (spec §6.3): a file that has been missing longer than
      * the configured window stops appearing in the feed. Runs from the scheduler,
      * not the scanner, so a brief network-share blip can never drop an episode.
