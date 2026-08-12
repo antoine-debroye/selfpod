@@ -44,7 +44,6 @@ export default async function statusRoutes(fastify, { settings, health, watcher,
       maxUploadSizeMb: config.maxUploadSizeMb,
       watcher: watcher?.status() ?? { mode: 'off', enabled: false, degraded: false, lastEventAt: null },
       scheduler: scheduler?.status() ?? null,
-      watcherNoticeDismissed: settings.watcherNoticeDismissed(),
       shows: {
         total: shows.list().length,
         paused: shows.list().filter((s) => s.status === SHOW_STATUS.FOLDER_MISSING).length,

@@ -7,6 +7,25 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.3.3 — 2026-08-12
+
+### Changed
+
+- **The dashboard no longer mentions periodic scanning at all.** How a volume behaves is
+  reference information, not something to act on, so it belongs in one place rather than
+  on the busiest page — and a notice you have to dismiss is still a notice you had to
+  read first. **Settings → Live file detection** now always states the current mode:
+  live events, checking every *n* minutes, or switched off, with the interval named.
+
+### Removed
+
+- The dashboard notice, its dismiss button and route, and the
+  `watcher_notice_dismissed` setting it persisted — dead once the notice was gone, and
+  the client handler had the dismiss URL hardcoded, so leaving it would have been a
+  broken request waiting to happen. `watcherNoticeDismissed` is also gone from
+  `/api/settings` and `/api/status`. An existing value in the database is inert and
+  needs no migration.
+
 ## 1.3.2 — 2026-08-12
 
 ### Added

@@ -223,12 +223,6 @@ export default async function pageRoutes(fastify, services) {
 
   fastify.get('/', guarded, async (request, reply) => {
     const all = shows.list().map((show) => presentShow(show));
-    const watcherStatus = watcher?.status();
-    const notice =
-      watcherStatus?.degraded && !settings.watcherNoticeDismissed()
-        ? health.get('watcher')?.message ?? null
-        : null;
-
     return reply.view(
       'pages/dashboard.eta',
       shell(request, {
@@ -237,7 +231,6 @@ export default async function pageRoutes(fastify, services) {
         shows: all.filter((s) => s.status === SHOW_STATUS.ACTIVE),
         pausedShows: all.filter((s) => s.status === SHOW_STATUS.FOLDER_MISSING),
         lastScan: activity.latestGlobal(),
-        watcherNotice: notice,
         topbarActions: dashboardActions(),
       }),
       APP_LAYOUT,

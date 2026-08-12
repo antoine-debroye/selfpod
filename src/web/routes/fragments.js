@@ -627,11 +627,6 @@ export default async function fragmentRoutes(fastify, services) {
       return reply.send('');
     });
 
-    scoped.post('/ui/settings/dismiss-watcher-notice', async (request, reply) => {
-      settings.update({ [SETTING_KEYS.WATCHER_NOTICE_DISMISSED]: '1' });
-      return reply.send('');
-    });
-
     scoped.post('/ui/settings/password', async (request, reply) => {
       const bcrypt = (await import('bcryptjs')).default;
       const { currentPassword, password, passwordConfirm } = request.body ?? {};

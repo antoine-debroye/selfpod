@@ -425,28 +425,43 @@ describe('degraded states surface in the UI', () => {
     server.health.clear('inotify');
   });
 
-  it('shows the degraded-watcher notice on the dashboard', async () => {
+  /**
+   * Polling mode is reference information about how a volume behaves, not something to
+   * act on, so the dashboard says nothing about it. Settings is the single place that
+   * states the current mode — a permanent notice on the busiest page is just something
+   * to scroll past.
+   */
+  it('says nothing about polling mode on the dashboard', async () => {
     server.health.set('watcher', {
-      level: 'warn',
+      level: 'info',
       message: "Live file detection isn't available on this volume — SelfPod is checking for new files every 5 minutes instead.",
     });
     server.services.watcher.status = () => ({ mode: 'polling', enabled: true, degraded: true, lastEventAt: null });
     await server.login();
 
     const body = (await server.get('/', { accept: 'text/html' })).body;
-    assert.ok(body.includes('Live file detection'));
-    assert.ok(body.includes('checking for new files every 5 minutes'));
-    assert.ok(body.includes('watcher-notice'));
+    assert.ok(!body.includes('watcher-notice'), 'the dashboard notice should be gone');
+    assert.ok(!body.includes('checking for new files every'), 'and its wording with it');
+    assert.ok(!body.includes('banner--warn') && !body.includes('banner--err'), 'and no banner either');
   });
 
-  it('does not repeat the notice once dismissed', async () => {
-    server.health.set('watcher', { level: 'warn', message: 'polling mode' });
+  it('states the current mode in Settings, which is now the only place', async () => {
     server.services.watcher.status = () => ({ mode: 'polling', enabled: true, degraded: true, lastEventAt: null });
-    server.settings.update({ [SETTING_KEYS.WATCHER_NOTICE_DISMISSED]: '1' });
     await server.login();
-    const body = (await server.get('/', { accept: 'text/html' })).body;
-    assert.ok(!body.includes('watcher-notice'));
+    const body = (await server.get('/settings', { accept: 'text/html' })).body;
+    assert.match(body, /Live file detection/);
+    assert.match(body, /Currently checking every/);
+    assert.match(body, /normal for SMB and NFS shares/);
   });
+
+  it('states live-events mode too, not only the fallback', async () => {
+    server.services.watcher.status = () => ({ mode: 'events', enabled: true, degraded: false, lastEventAt: null });
+    await server.login();
+    const body = (await server.get('/settings', { accept: 'text/html' })).body;
+    assert.match(body, /Currently using live events/);
+  });
+
+
 
   it('surfaces scan errors on the show page', async () => {
     const show = await seed();

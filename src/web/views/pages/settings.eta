@@ -55,9 +55,23 @@
       <div class="d">
         Watches the folder for changes so new files appear within seconds. Falls back to periodic
         scanning on its own when a volume does not deliver file events.
-        <% if (r.watcher && r.watcher.degraded) { %>
-          <br><strong>Currently using periodic scanning</strong> — this volume is not delivering file
-          events, which is normal for SMB/NFS shares.
+        <%
+          /* The current mode is always stated here, because this is the only place it is
+             stated. It is reference information — a network share that never delivers
+             file events cannot be fixed, and it does not belong in a banner or on the
+             dashboard, where a permanent notice just gets scrolled past. */
+          const mode = r.watcher && r.watcher.mode;
+          const every = it.helpers.formatInterval(s.rescanIntervalSeconds);
+        %>
+        <% if (mode === 'events') { %>
+          <br><strong>Currently using live events</strong> — new files appear within seconds, and the
+          <%= every %> scan runs as a safety net.
+        <% } else if (mode === 'polling') { %>
+          <br><strong>Currently checking every <%= every %></strong> — this volume does not deliver
+          file events, which is normal for SMB and NFS shares. Nothing is broken; new episodes just
+          take a little longer to appear.
+        <% } else { %>
+          <br><strong>Switched off</strong> — SelfPod finds new files on its <%= every %> scan.
         <% } %>
       </div>
     </div>

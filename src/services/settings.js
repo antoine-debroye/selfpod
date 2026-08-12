@@ -35,7 +35,6 @@ export const SETTING_KEYS = Object.freeze({
   MUST_CHANGE_PASSWORD: 'must_change_password',
   SETUP_COMPLETE: 'setup_complete',
   SESSION_SECRET: 'session_secret',
-  WATCHER_NOTICE_DISMISSED: 'watcher_notice_dismissed',
   INSTALLED_VERSION: 'installed_version',
   CREATED_AT: 'created_at',
 });
@@ -186,9 +185,6 @@ export function createSettings({ db, config, events, logger }) {
       return getRaw(SETTING_KEYS.SESSION_SECRET);
     },
 
-    watcherNoticeDismissed() {
-      return getBool(SETTING_KEYS.WATCHER_NOTICE_DISMISSED, false);
-    },
 
     /**
      * Applies a batch of changes in one transaction, then announces which keys

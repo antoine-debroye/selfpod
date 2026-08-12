@@ -24,7 +24,6 @@ export default async function settingsRoutes(fastify, { config, settings, watche
       sessionTtlHours: settings.sessionTtlHours(),
       adminUsername: settings.adminUsername(),
       setupComplete: settings.setupComplete(),
-      watcherNoticeDismissed: settings.watcherNoticeDismissed(),
     },
     runtime: {
       timeZone: config.timeZone,
@@ -106,9 +105,6 @@ export default async function settingsRoutes(fastify, { config, settings, watche
       }
     }
 
-    if (body.watcherNoticeDismissed !== undefined) {
-      patch[SETTING_KEYS.WATCHER_NOTICE_DISMISSED] = isTrue(body.watcherNoticeDismissed) ? '1' : '0';
-    }
 
     if (Object.keys(fields).length) {
       throw unprocessable('Some of those values need fixing.', 'validation_failed', fields);

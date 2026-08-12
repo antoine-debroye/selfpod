@@ -477,19 +477,6 @@
     if (toggle) toggle.setAttribute('aria-expanded', 'false');
   }
 
-  /* ---------------------------------------------------- dismissible notices */
-
-  document.addEventListener('click', function (event) {
-    var button = event.target.closest('[data-dismiss]');
-    if (!button) return;
-    var key = button.getAttribute('data-dismiss');
-    var target = document.querySelector('[data-dismissible="' + key + '"]');
-    if (target) target.remove();
-    if (window.htmx) {
-      window.htmx.ajax('POST', '/ui/settings/dismiss-watcher-notice', { target: 'body', swap: 'none' });
-    }
-  });
-
   /* ------------------------------------------------------- cover drag/drop */
 
   var coverZone = document.querySelector('[data-cover-dropzone]');

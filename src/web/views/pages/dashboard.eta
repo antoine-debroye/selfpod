@@ -8,14 +8,11 @@
   </div>
 </div>
 
-<% if (it.watcherNotice) { %>
-  <div class="notice info" id="watcher-notice" data-dismissible="watcher-notice">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-    <div><%= it.watcherNotice %></div>
-    <button class="notice__dismiss" type="button" data-dismiss="watcher-notice" aria-label="Dismiss">×</button>
-  </div>
-<% } %>
-
+<%
+  /* No notice about periodic scanning here. It is reference information about how this
+     volume behaves, not something to act on, so it lives in Settings → Live file
+     detection, where the current mode is always shown. */
+%>
 <div id="scan-progress-slot">
   <%~ it.scanProgress || '' %>
 </div>
