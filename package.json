@@ -1,6 +1,6 @@
 {
   "name": "selfpod",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "SelfPod \u2014 a self-hosted podcast server. Drop a file in a folder; it's an episode.",
   "license": "MIT",
   "type": "module",
