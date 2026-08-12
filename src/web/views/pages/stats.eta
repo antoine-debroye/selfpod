@@ -95,7 +95,12 @@
               <td class="mono"><%= row.downloads.toLocaleString('en') %></td>
               <td class="mono"><%= row.streams.toLocaleString('en') %></td>
               <td class="size"><%= it.helpers.formatBytes(row.bytes) %></td>
-              <td class="mono"><%= row.feedFetches.toLocaleString('en') %></td>
+              <td class="mono" title="<%= row.feedLastAt ? 'Last checked ' + it.helpers.formatDateTime(row.feedLastAt) + (row.feedLastClient ? ' by ' + row.feedLastClient : '') : 'No podcast app has checked this feed yet' %>">
+                <%= row.feedFetches.toLocaleString('en') %>
+                <% if (row.feedLastAt) { %>
+                  <small class="dim">· <%= it.helpers.relativeTime(row.feedLastAt) %></small>
+                <% } %>
+              </td>
               <td class="dim"><%= row.clients.length ? row.clients.map((c) => c.client).join(', ') : '—' %></td>
               <td>
                 <% if (row.failures) { %>

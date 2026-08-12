@@ -102,6 +102,40 @@ describe('play and download statistics', () => {
     assert.equal(rollup.streams, 0);
   });
 
+  /**
+   * The count alone does not answer the question people actually ask, which is "why
+   * has my podcast app not picked up the new episode?". If nothing has fetched the
+   * feed since the episode appeared, there is nothing wrong to investigate.
+   */
+  it('reports when the feed was last checked, and by which app', async () => {
+    clearLog();
+    await server.app.inject({
+      url: `/feeds/${show.slug}/${show.feed_token}.xml`,
+      headers: { 'user-agent': 'Pocket Casts/7.5 (server)' },
+    });
+    await settle();
+
+    const rollup = server.stats.forShow(show.id);
+    assert.equal(rollup.feedFetches, 1);
+    assert.ok(rollup.feedLastAt, 'the time of the last feed check must be available');
+    assert.equal(rollup.feedLastClient, 'Pocket Casts');
+
+    // And it must reach the show page, next to the count.
+    const page = await server.request({ method: 'GET', url: `/shows/${show.slug}` });
+    assert.match(page.body, /feed checks/i);
+    assert.match(page.body, /Pocket Casts/);
+  });
+
+  it('says so plainly when no app has ever checked the feed', async () => {
+    clearLog();
+    const rollup = server.stats.forShow(show.id);
+    assert.equal(rollup.feedFetches, 0);
+    assert.equal(rollup.feedLastAt, null);
+    assert.equal(rollup.feedLastClient, null);
+    const page = await server.request({ method: 'GET', url: `/shows/${show.slug}` });
+    assert.equal(page.statusCode, 200);
+  });
+
   it('records a failure with a reason when the file is gone', async () => {
     clearLog();
     const path = join(server.config.showsDir, 'metrics', episode.filename);

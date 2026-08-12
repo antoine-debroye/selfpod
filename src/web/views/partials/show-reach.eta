@@ -39,9 +39,23 @@
         <div class="reach-stat__n"><%= it.helpers.formatBytes(s.bytes) %></div>
         <div class="reach-stat__l">served</div>
       </div>
+      <%
+        /* The timestamp matters more than the count. "My new episode isn't showing up
+           in my podcast app" is nearly always answered here: apps poll on their own
+           schedule — Pocket Casts does it server-side — so if nothing has fetched the
+           feed since the episode appeared, there is nothing wrong to go looking for. */
+      %>
       <div class="reach-stat">
         <div class="reach-stat__n"><%= s.feedFetches.toLocaleString('en') %></div>
         <div class="reach-stat__l">feed checks</div>
+        <div class="reach-stat__when">
+          <% if (s.feedLastAt) { %>
+            last <%= it.helpers.relativeTime(s.feedLastAt) %><%
+            %><% if (s.feedLastClient) { %> · <%= s.feedLastClient %><% } %>
+          <% } else { %>
+            never checked
+          <% } %>
+        </div>
       </div>
       <div class="reach-stat<%= s.failures ? ' reach-stat--bad' : '' %>">
         <div class="reach-stat__n"><%= s.failures.toLocaleString('en') %></div>

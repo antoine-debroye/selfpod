@@ -173,6 +173,18 @@ export function createStats({ db, logger }) {
              FROM media_access WHERE show_id = ? AND kind = 'feed' AND status_code < 400`,
         )
         .get(showId);
+      // Which app last asked, and when. "A new episode is not showing up in my
+      // podcast app" is almost always answered by this one fact: podcast apps poll on
+      // their own schedule — some of them server-side — so if nothing has fetched the
+      // feed since the episode appeared, there is nothing wrong to find.
+      const feedLast = db
+        .prepare(
+          `SELECT client, requested_at AS at
+             FROM media_access
+            WHERE show_id = ? AND kind = 'feed' AND status_code < 400
+            ORDER BY requested_at DESC, id DESC LIMIT 1`,
+        )
+        .get(showId);
       const clients = db
         .prepare(
           `SELECT client, COUNT(*) AS n
@@ -190,6 +202,7 @@ export function createStats({ db, logger }) {
         lastAt: row?.lastAt ?? null,
         feedFetches: feedFetches?.n ?? 0,
         feedLastAt: feedFetches?.lastAt ?? null,
+        feedLastClient: feedLast?.client ?? null,
         clients,
       };
     },

@@ -7,6 +7,18 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.3.2 — 2026-08-12
+
+### Added
+
+- **When a feed was last checked, and by which app**, under the feed-check count on a
+  show's Reach panel and in the per-show table on Statistics. The count on its own did
+  not answer the question people actually ask — *why hasn't my podcast app picked up the
+  new episode?* — and the answer is usually that nothing has fetched the feed since it
+  appeared. Podcast apps poll on their own schedule, and some (Pocket Casts among them)
+  do it from their own servers rather than from the phone, so refreshing in the app only
+  asks that server what it already knows.
+
 ## 1.3.1 — 2026-08-10
 
 ### Fixed

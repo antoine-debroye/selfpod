@@ -1427,6 +1427,14 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   margin-top: 2px;
 }
 .reach-stat--bad .reach-stat__n { color: var(--err); }
+/* When a feed was last polled, under the count. This is the line that answers
+   "why hasn't my podcast app picked up the new episode?", so it is worth the space. */
+.reach-stat__when {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin-top: 3px;
+  white-space: nowrap;
+}
 .reach-clients {
   display: flex;
   flex-wrap: wrap;
