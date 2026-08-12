@@ -1,21 +1,21 @@
+<%
+  /* Two logs on one URL. The timeline bar owns `event` and `timelineShow`; the scan
+     bar owns `showId`, `trigger` and `outcome`. Each renders the other's active keys
+     as hidden inputs, so filtering one card can never quietly reset the other.
+
+     Every chip is a real submit button with a name and a value, which is what makes
+     the bars work with JavaScript switched off: the browser submits the clicked
+     button along with the rest of the form, and the server answers a whole page.
+     htmx only changes what comes back. The selects restate the chip-owned key in
+     hx-vals because htmx does not include submit buttons when it gathers a form. */
+  const f = it.filter;
+  const heldEvent = f.event || '';
+  const heldOutcome = f.outcome || '';
+%>
 <div class="page-title">
   <div>
-    <div class="sub">Newest first · <%= it.total %> scan<%= it.total === 1 ? '' : 's' %> recorded</div>
-    <h1>Scan history</h1>
-  </div>
-  <div class="actions">
-    <form class="inline-form" method="get" action="/activity">
-      <label class="sr-only" for="show-filter">Filter by show</label>
-      <select id="show-filter" name="showId"
-              hx-get="/ui/activity" hx-include="this" hx-target="#activity-list" hx-swap="outerHTML"
-              hx-push-url="false">
-        <option value="">All shows</option>
-        <% for (const show of it.shows) { %>
-          <option value="<%= show.slug %>"<%= it.showFilter === show.slug ? ' selected' : '' %>><%= show.title %></option>
-        <% } %>
-      </select>
-      <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
-    </form>
+    <div class="sub">Newest first · <%= it.timeline.total %> episode event<%= it.timeline.total === 1 ? '' : 's' %> · <%= it.total %> scan<%= it.total === 1 ? '' : 's' %></div>
+    <h1>Activity</h1>
   </div>
 </div>
 
@@ -29,6 +29,103 @@
   You should never need to read container logs over SSH to understand what happened.
 </p>
 
+<div class="form-card" style="margin-bottom:18px">
+  <div class="ftitle">Episode timeline</div>
+  <div class="fdesc">
+    What happened to individual episodes — when each one arrived, went missing, or left the feed.
+    Scans are logged separately, below.
+  </div>
+
+  <p class="help-note" style="margin:12px 0 14px">
+    SelfPod works this out from the state each episode is in now, rather than from a running log — so
+    an episode that went missing and later came back leaves no trace of ever having gone, and putting a
+    removed episode back in the feed erases its removal. That trade is deliberate: a proper event log
+    could only ever describe episodes scanned after it was added, while this covers your whole library
+    back to the first file you dropped in.
+  </p>
+
+  <form class="filter-bar" method="get" action="/activity" style="margin-bottom:14px">
+    <% for (const [name, value] of it.timeline.filter.carry(['event', 'timelineShow'])) { %>
+      <input type="hidden" name="<%= name %>" value="<%= value %>">
+    <% } %>
+
+    <span class="filter-bar__label" id="event-label">Event</span>
+    <div class="chips" role="group" aria-labelledby="event-label">
+      <button class="chip<%= !f.event ? ' is-active' : '' %>" type="submit" name="event" value=""
+              <%~ !f.event ? 'aria-current="true"' : '' %>
+              hx-get="/ui/activity/timeline" hx-include="closest form" hx-vals='{"event":""}'
+              hx-target="#episode-timeline" hx-swap="outerHTML">All</button>
+      <% for (const opt of it.eventOptions) { %>
+        <button class="chip<%= f.event === opt.key ? ' is-active' : '' %>" type="submit" name="event" value="<%= opt.key %>"
+                <%~ f.event === opt.key ? 'aria-current="true"' : '' %>
+                hx-get="/ui/activity/timeline" hx-include="closest form" hx-vals='{"event":"<%= opt.key %>"}'
+                hx-target="#episode-timeline" hx-swap="outerHTML"><%= opt.label %></button>
+      <% } %>
+    </div>
+
+    <label class="sr-only" for="timeline-show">Filter the timeline by show</label>
+    <select id="timeline-show" name="timelineShow"
+            hx-get="/ui/activity/timeline" hx-include="closest form" hx-vals='{"event":"<%= heldEvent %>"}'
+            hx-target="#episode-timeline" hx-swap="outerHTML">
+      <option value="">All shows</option>
+      <% for (const show of it.shows) { %>
+        <option value="<%= show.slug %>"<%= f.timelineSlug === show.slug ? ' selected' : '' %>><%= show.title %></option>
+      <% } %>
+    </select>
+
+    <span class="filter-bar__spacer"></span>
+    <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+  </form>
+
+  <%~ include('../partials/episode-timeline', { ...it.timeline, helpers: it.helpers }) %>
+</div>
+
 <div class="form-card activity-card">
+  <div class="ftitle">Scan history</div>
+  <div class="fdesc">Every scan SelfPod has run, what it found, and anything that went wrong.</div>
+
+  <form class="filter-bar" method="get" action="/activity" style="margin:12px 0 14px">
+    <% for (const [name, value] of f.carry(['showId', 'trigger', 'outcome'])) { %>
+      <input type="hidden" name="<%= name %>" value="<%= value %>">
+    <% } %>
+
+    <span class="filter-bar__label" id="outcome-label">Outcome</span>
+    <div class="chips" role="group" aria-labelledby="outcome-label">
+      <button class="chip<%= !f.outcome ? ' is-active' : '' %>" type="submit" name="outcome" value=""
+              <%~ !f.outcome ? 'aria-current="true"' : '' %>
+              hx-get="/ui/activity" hx-include="closest form" hx-vals='{"outcome":""}'
+              hx-target="#activity-list" hx-swap="outerHTML">All</button>
+      <% for (const opt of it.outcomeOptions) { %>
+        <button class="chip<%= f.outcome === opt.key ? ' is-active' : '' %>" type="submit" name="outcome" value="<%= opt.key %>"
+                <%~ f.outcome === opt.key ? 'aria-current="true"' : '' %>
+                hx-get="/ui/activity" hx-include="closest form" hx-vals='{"outcome":"<%= opt.key %>"}'
+                hx-target="#activity-list" hx-swap="outerHTML"><%= opt.label %></button>
+      <% } %>
+    </div>
+
+    <label class="sr-only" for="scan-show">Filter scans by show</label>
+    <select id="scan-show" name="showId"
+            hx-get="/ui/activity" hx-include="closest form" hx-vals='{"outcome":"<%= heldOutcome %>"}'
+            hx-target="#activity-list" hx-swap="outerHTML">
+      <option value="">All shows</option>
+      <% for (const show of it.shows) { %>
+        <option value="<%= show.slug %>"<%= f.scanSlug === show.slug ? ' selected' : '' %>><%= show.title %></option>
+      <% } %>
+    </select>
+
+    <label class="sr-only" for="scan-trigger">Filter scans by what started them</label>
+    <select id="scan-trigger" name="trigger"
+            hx-get="/ui/activity" hx-include="closest form" hx-vals='{"outcome":"<%= heldOutcome %>"}'
+            hx-target="#activity-list" hx-swap="outerHTML">
+      <option value="">Any trigger</option>
+      <% for (const opt of it.triggerOptions) { %>
+        <option value="<%= opt.value %>"<%= f.trigger === opt.value ? ' selected' : '' %>><%= opt.label %></option>
+      <% } %>
+    </select>
+
+    <span class="filter-bar__spacer"></span>
+    <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+  </form>
+
   <%~ include('../partials/activity-list', it) %>
 </div>

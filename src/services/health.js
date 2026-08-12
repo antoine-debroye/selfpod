@@ -127,6 +127,26 @@ export function createHealth({ config, events, logger }) {
         });
       }
 
+      // 4. The per-episode artwork cache. A warning, not an error, and worded as
+      //    one: without it every episode simply falls back to the show cover, which
+      //    is exactly what SelfPod did before per-episode artwork existed.
+      try {
+        await mkdir(config.episodeArtDir, { recursive: true });
+        const probe = join(config.episodeArtDir, '.selfpod-write-test');
+        await writeFile(probe, 'ok', 'utf8');
+        await unlink(probe);
+        api.clear('episode_art_writable');
+      } catch (err) {
+        api.set('episode_art_writable', {
+          level: 'warn',
+          message: `SelfPod cannot write to its episode artwork folder \`${config.episodeArtDir}\`. Episodes will fall back to the show's cover art. ${describeFsError(
+            err,
+            { path: config.episodeArtDir, uid, gid },
+          )}`,
+          detail: { path: config.episodeArtDir, uid, gid, code: err.code ?? null },
+        });
+      }
+
       return api.list();
     },
 

@@ -70,7 +70,13 @@ export function createCovers({ config, logger }) {
       }
     },
 
-    describeDimensions({ width, height }) {
+    /**
+     * `label` names the artwork the sentence is about. Per-episode artwork asks
+     * exactly the same question of exactly the same numbers, so it borrows this
+     * rather than growing a second copy of Apple's range — one place to change
+     * when they change it.
+     */
+    describeDimensions({ width, height }, { label = 'Cover art' } = {}) {
       if (!width || !height) return null;
       const isSquare = width === height;
       const inRange =
@@ -89,7 +95,7 @@ export function createCovers({ config, logger }) {
         width,
         height,
         problems,
-        message: `Cover art is ${width}×${height}px (${problems.join(
+        message: `${label} is ${width}×${height}px (${problems.join(
           ' and ',
         )}). Podcast directories typically require square artwork between ${ARTWORK_MIN_PX}–${ARTWORK_MAX_PX}px. The feed still works; artwork may look wrong where subscribers view it full size.`,
       };

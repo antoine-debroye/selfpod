@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { FILE_NAMES, SHOW_STATUS } from '../constants.js';
+import { DIRECTORY_LISTINGS, FILE_NAMES, SHOW_STATUS, SHOW_TYPES } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
@@ -23,17 +23,17 @@ import {
  * control if they like (spec §5, §7.1). The feed token is deliberately excluded
  * from it — that value is a credential.
  */
-export function createShows({ db, config, events, logger, settings }) {
+export function createShows({ db, config, events, logger, settings, episodeArt }) {
   const selectById = db.prepare('SELECT * FROM shows WHERE id = ?');
   const selectBySlug = db.prepare('SELECT * FROM shows WHERE slug = ?');
   const selectAll = db.prepare('SELECT * FROM shows ORDER BY title COLLATE NOCASE ASC');
   const insertShow = db.prepare(
     `INSERT INTO shows (id, slug, title, description, author_name, author_email, language,
-                        itunes_category, itunes_subcategory, explicit, feed_token, status,
-                        created_at, updated_at)
+                        itunes_category, itunes_subcategory, explicit, itunes_type, feed_token,
+                        status, created_at, updated_at)
      VALUES (@id, @slug, @title, @description, @author_name, @author_email, @language,
-             @itunes_category, @itunes_subcategory, @explicit, @feed_token, @status,
-             @created_at, @updated_at)`,
+             @itunes_category, @itunes_subcategory, @explicit, @itunes_type, @feed_token,
+             @status, @created_at, @updated_at)`,
   );
   const deleteShow = db.prepare('DELETE FROM shows WHERE id = ?');
 
@@ -96,6 +96,7 @@ export function createShows({ db, config, events, logger, settings }) {
         itunes_category: imported.category ?? defaults.category,
         itunes_subcategory: imported.subcategory ?? defaults.subcategory ?? null,
         explicit: (imported.explicit ?? defaults.explicit) ? 1 : 0,
+        itunes_type: imported.itunesType ?? 'episodic',
         feed_token: newFeedToken(),
         status: SHOW_STATUS.ACTIVE,
         created_at: nowIso(),
@@ -204,6 +205,17 @@ export function createShows({ db, config, events, logger, settings }) {
       }
       if (patch.explicit !== undefined) {
         fields.explicit = toBoolInt(patch.explicit);
+      }
+      if (patch.itunesType !== undefined) {
+        const value = String(patch.itunesType ?? '').trim().toLowerCase();
+        if (!SHOW_TYPES.includes(value)) invalid.itunesType = 'Choose episodic or serial.';
+        else fields.itunes_type = value;
+      }
+      if (patch.directoryListing !== undefined) {
+        const value = String(patch.directoryListing ?? '').trim().toLowerCase();
+        if (!DIRECTORY_LISTINGS.includes(value)) {
+          invalid.directoryListing = 'Choose whether directories may list this show.';
+        } else fields.directory_listing = value;
       }
 
       if (Object.keys(invalid).length) {
@@ -320,6 +332,9 @@ export function createShows({ db, config, events, logger, settings }) {
       }
 
       deleteShow.run(id); // cascades to episodes and scan_log rows
+      // The episode rows go with the cascade; their cached artwork does not, and it
+      // lives outside the database where nothing else would ever collect it.
+      episodeArt?.forgetShow(id);
 
       // When the folder stays, remember that its removal was deliberate. Without
       // this, the next scan re-adopts the folder with a new id, a new feed token
@@ -371,6 +386,11 @@ export function createShows({ db, config, events, logger, settings }) {
           subcategory: legacy?.subcategory ?? cleanString(parsed.subcategory) ?? null,
           explicit:
             parsed.explicit === undefined ? null : parsed.explicit === true || parsed.explicit === 'true',
+          // Checked against the allow-list here rather than trusted to the column's
+          // CHECK constraint: this value comes from a hand-edited file, and a typo
+          // that reached the insert would fail the whole discovery of the folder
+          // rather than the one field it came from.
+          itunesType: matchShowType(parsed.itunes_type ?? parsed.itunesType),
         };
       } catch (err) {
         if (err.code !== 'ENOENT') {
@@ -413,7 +433,13 @@ export function createShows({ db, config, events, logger, settings }) {
         category: show.itunes_category,
         subcategory: show.itunes_subcategory,
         explicit: show.explicit === 1,
+        itunes_type: show.itunes_type,
       };
+      // `directory_listing` is deliberately in neither direction — not written here,
+      // not read on import. `blocked` emits <itunes:block>, which also refuses a
+      // deliberate submission to a directory, so it is a choice the owner opts into
+      // in the app and never one a file arrives carrying. The same reasoning keeps the
+      // feed token out of this payload: a safe default must not be flipped by a file.
       try {
         await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
         await rename(tmp, target);
@@ -480,6 +506,12 @@ function cleanString(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+/** The show type from a `show.json`, or null for anything not in the allow-list. */
+function matchShowType(value) {
+  const type = cleanString(typeof value === 'string' ? value : null)?.toLowerCase();
+  return type && SHOW_TYPES.includes(type) ? type : null;
 }
 
 function toBoolInt(value) {

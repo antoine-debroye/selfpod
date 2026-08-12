@@ -1,0 +1,101 @@
+<%
+  /* Would a podcast directory accept this feed?
+
+     Everything here is checked against the feed SelfPod actually builds, and every fix
+     is on this same page — which is why the panel lives here rather than on a page of
+     its own listing problems whose remedies are all somewhere else.
+
+     Severity is carried by the words "Blocking" and "Advisory", not by colour: the
+     distinction is the whole point of the panel, and it has to survive being read by
+     someone who cannot tell the two tints apart. */
+  const show = it.show;
+  const checks = show.readiness?.checks ?? [];
+  const blocking = checks.filter((c) => !c.ok && c.level === 'error');
+  const advisory = checks.filter((c) => !c.ok && c.level === 'warn');
+  const passing = checks.filter((c) => c.ok);
+
+  /* Where a fix lives is a fact about this page, not about readiness, so the map is
+     here and every target is something already on screen. */
+  const goTo = {
+    base_url: { label: 'Settings', href: '/settings' },
+    artwork_present: { label: 'Artwork', href: '#cover-box' },
+    artwork_format: { label: 'Artwork', href: '#cover-box' },
+    artwork_size: { label: 'Artwork', href: '#cover-box' },
+    description: { label: 'Show details', href: '#show-meta-form' },
+    owner_email: { label: 'Show details', href: '#show-meta-form' },
+    category: { label: 'Show details', href: '#show-meta-form' },
+    author_name: { label: 'Show details', href: '#show-meta-form' },
+    directory_listing: { label: 'Show details', href: '#show-meta-form' },
+    episodes_present: { label: 'Upload audio', href: `/shows/${encodeURIComponent(show.slug)}/upload` },
+    episodes_on_disk: { label: 'Activity', href: `/activity?showId=${encodeURIComponent(show.slug)}` },
+    episode_durations: { label: 'Activity', href: `/activity?showId=${encodeURIComponent(show.slug)}` },
+  };
+%>
+<div class="form-card" id="feed-readiness"
+     hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/readiness"
+     hx-trigger="sse:scan-finished-<%= show.id %> from:body, selfpod:show-updated from:body"
+     hx-swap="outerHTML">
+  <div class="episode-table__head" style="justify-content:space-between">
+    <div>
+      <div class="ftitle" style="margin:0">Directory readiness</div>
+      <div class="fdesc" style="margin:2px 0 0">
+        <% if (blocking.length) { %>
+          <%= blocking.length %> thing<%= blocking.length === 1 ? '' : 's' %> here would stop Apple
+          Podcasts or Spotify accepting this feed. Anyone already subscribed is unaffected.
+        <% } else { %>
+          Nothing here would stop Apple Podcasts or Spotify accepting this feed.
+        <% } %>
+      </div>
+    </div>
+    <span class="badge <%= blocking.length ? 'badge-err' : 'badge-ok' %>">
+      <span class="d" aria-hidden="true"></span><%= blocking.length ? blocking.length + ' blocking' : 'Ready to submit' %>
+    </span>
+  </div>
+
+  <% if (blocking.length || advisory.length) { %>
+    <ul class="readiness">
+      <% for (const check of [...blocking, ...advisory]) { %>
+        <li class="set-row">
+          <span class="badge <%= check.level === 'error' ? 'badge-err' : 'badge-warn' %> readiness__mark">
+            <%= check.level === 'error' ? 'Blocking' : 'Advisory' %>
+          </span>
+          <div class="info">
+            <div class="t"><%= check.label %></div>
+            <div class="d"><%= check.detail %></div>
+          </div>
+          <% if (goTo[check.id]) { %>
+            <a class="btn btn-ghost btn-sm" href="<%= goTo[check.id].href %>"><%= goTo[check.id].label %></a>
+          <% } %>
+        </li>
+      <% } %>
+    </ul>
+  <% } %>
+
+  <% if (passing.length) { %>
+    <%
+      /* Collapsed, not hidden. A checklist that only lists failures never tells you
+         what was actually checked, which is the difference between "nothing is wrong"
+         and "nothing was looked at". */
+    %>
+    <details class="readiness__passing">
+      <summary><%= passing.length %> check<%= passing.length === 1 ? '' : 's' %> already pass</summary>
+      <ul class="readiness">
+        <% for (const check of passing) { %>
+          <li class="set-row readiness-row--ok">
+            <span class="badge badge-ok readiness__mark"><span class="d" aria-hidden="true"></span>OK</span>
+            <div class="info">
+              <div class="t"><%= check.label %></div>
+              <div class="d"><%= check.detail %></div>
+            </div>
+          </li>
+        <% } %>
+      </ul>
+    </details>
+  <% } %>
+
+  <p class="help-note">
+    These are the requirements Apple Podcasts and Spotify publish, checked against the feed
+    SelfPod builds. SelfPod cannot submit a show for you, and a directory can still decline for
+    reasons of its own.
+  </p>
+</div>

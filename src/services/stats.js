@@ -69,6 +69,133 @@ export function classifyClient(userAgent) {
   return 'Other';
 }
 
+/**
+ * Sortable columns for the access log.
+ *
+ * A map rather than string interpolation: the text that reaches the SQL is always one
+ * of these literals, never anything a query string supplied. `bytes_sent` is coalesced
+ * so a null (an aborted request that sent nothing measurable) sorts as zero instead of
+ * drifting to one end depending on direction.
+ */
+const SORT_COLUMNS = Object.freeze({
+  time: 'a.requested_at',
+  bytes: 'COALESCE(a.bytes_sent, 0)',
+  status: 'a.status_code',
+  kind: 'a.kind',
+  client: 'a.client',
+});
+
+const SORT_DIRECTIONS = Object.freeze({ asc: 'ASC', desc: 'DESC' });
+
+/** The sort keys a caller may ask for, for whoever has to validate a query string. */
+export const SORT_KEYS = Object.freeze(Object.keys(SORT_COLUMNS));
+
+const KINDS = new Set(Object.values(ACCESS_KIND));
+
+/** Ceiling on one `list` call. Sized for the CSV export, not for a page of rows. */
+const MAX_LIST_ROWS = 50_000;
+
+/**
+ * The one place a media_access filter becomes SQL.
+ *
+ * `list` and `count` used to build this twice, and differently — one with an `a.`
+ * prefix and one without. Two builders that must agree is how a filter gets added to
+ * the rows but not the total, and the log then reads "40 of 312" while showing
+ * something else entirely. Everything that filters the log goes through here.
+ */
+function accessWhere({
+  showId = null,
+  episodeId = null,
+  failuresOnly = false,
+  from = null,
+  to = null,
+  kinds = null,
+  client = null,
+} = {}) {
+  const clauses = [];
+  const params = {};
+
+  if (showId) {
+    clauses.push('a.show_id = @showId');
+    params.showId = showId;
+  }
+  if (episodeId) {
+    clauses.push('a.episode_id = @episodeId');
+    params.episodeId = episodeId;
+  }
+  if (failuresOnly) clauses.push('a.status_code >= 400');
+  // Half-open, always: a request stamped exactly on the boundary belongs to the period
+  // that starts there, so two adjacent ranges never both claim it.
+  if (from) {
+    clauses.push('a.requested_at >= @from');
+    params.from = from;
+  }
+  if (to) {
+    clauses.push('a.requested_at < @to');
+    params.to = to;
+  }
+
+  // Placeholders are generated from the surviving whitelist entries, so the statement
+  // text can only ever be one of a handful of shapes and no caller value is inlined.
+  const wanted = (Array.isArray(kinds) ? kinds : []).map(String).filter((kind) => KINDS.has(kind));
+  if (wanted.length && wanted.length < KINDS.size) {
+    clauses.push(`a.kind IN (${wanted.map((_, i) => `@kind${i}`).join(', ')})`);
+    wanted.forEach((kind, i) => {
+      params[`kind${i}`] = kind;
+    });
+  }
+
+  if (client) {
+    clauses.push('a.client = @client');
+    params.client = client;
+  }
+
+  return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
+}
+
+function accessOrder(sort, direction) {
+  const column = SORT_COLUMNS[sort] ?? SORT_COLUMNS.time;
+  const dir = SORT_DIRECTIONS[String(direction).toLowerCase()] ?? 'DESC';
+  // The id tiebreaker is on every sort, not just time. Without it, paging by OFFSET
+  // over a column full of ties — every successful request shares status code 200 —
+  // reorders between pages, so rows appear twice and others are never seen.
+  return `ORDER BY ${column} ${dir}, a.id DESC`;
+}
+
+/** Range-only clauses, for the aggregate queries that have their own fixed WHERE. */
+function rangeClauses({ from = null, to = null } = {}) {
+  const clauses = [];
+  const params = {};
+  if (from) {
+    clauses.push('a.requested_at >= @from');
+    params.from = from;
+  }
+  if (to) {
+    clauses.push('a.requested_at < @to');
+    params.to = to;
+  }
+  return { clauses, params };
+}
+
+/**
+ * Period-over-period change for one figure.
+ *
+ * A rise from nothing has no percentage. "+100%" measured from zero is a number the
+ * app would be inventing, so the change is reported without one and the UI says "new".
+ * Direction is reported as a fact; whether up is good is the caller's business — more
+ * downloads and more failures are not the same news.
+ */
+export function changeFrom(current, previous) {
+  if (previous === null || previous === undefined) return null;
+  const absolute = current - previous;
+  return {
+    absolute,
+    previous,
+    percent: previous === 0 ? null : (absolute / previous) * 100,
+    direction: absolute === 0 ? 'flat' : absolute > 0 ? 'up' : 'down',
+  };
+}
+
 export function createStats({ db, logger }) {
   const insert = db.prepare(
     `INSERT INTO media_access
@@ -111,20 +238,22 @@ export function createStats({ db, logger }) {
       }
     },
 
-    /** Totals for one episode. */
-    forEpisode(episodeId) {
+    /** Totals for one episode, optionally within a period. */
+    forEpisode(episodeId, range = {}) {
+      const { clauses, params } = rangeClauses(range);
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN kind = 'download' AND status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN kind = 'stream'   AND status_code < 400 THEN 1 ELSE 0 END) AS streams,
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(COALESCE(bytes_sent, 0)) AS bytes,
-             MAX(requested_at) AS lastAt
-           FROM media_access
-           WHERE episode_id = ? AND kind IN ('download','stream')`,
+             SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+             SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+             MAX(a.requested_at) AS lastAt
+           FROM media_access a
+           WHERE a.episode_id = @episodeId AND a.kind IN ('download','stream')
+                 ${clauses.map((clause) => `AND ${clause}`).join(' ')}`,
         )
-        .get(episodeId);
+        .get({ ...params, episodeId });
       return {
         downloads: row?.downloads ?? 0,
         streams: row?.streams ?? 0,
@@ -135,64 +264,125 @@ export function createStats({ db, logger }) {
     },
 
     /** Totals for every episode of a show, keyed by episode id. */
-    forShowEpisodes(showId) {
+    forShowEpisodes(showId, range = {}) {
+      const { clauses, params } = rangeClauses(range);
       const rows = db
         .prepare(
-          `SELECT episode_id AS episodeId,
-                  SUM(CASE WHEN kind = 'download' AND status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-                  SUM(CASE WHEN kind = 'stream'   AND status_code < 400 THEN 1 ELSE 0 END) AS streams,
-                  SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-                  SUM(COALESCE(bytes_sent, 0)) AS bytes,
-                  MAX(requested_at) AS lastAt
-             FROM media_access
-            WHERE show_id = ? AND kind IN ('download','stream')
-            GROUP BY episode_id`,
+          `SELECT a.episode_id AS episodeId,
+                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+                  MAX(a.requested_at) AS lastAt
+             FROM media_access a
+            WHERE a.show_id = @showId AND a.kind IN ('download','stream')
+                  ${clauses.map((clause) => `AND ${clause}`).join(' ')}
+            GROUP BY a.episode_id`,
         )
-        .all(showId);
+        .all({ ...params, showId });
       return Object.fromEntries(rows.map((row) => [row.episodeId, row]));
     },
 
+    /**
+     * Rollups for every show at once, keyed by show id.
+     *
+     * The stats page used to call `forShow` in a loop, which is four queries per show
+     * on a page that renders them all. This is the same fix `forShowEpisodes` already
+     * applies to episodes: two grouped queries regardless of how many shows there are.
+     * It omits the per-show client list and last-feed-client, which only the show page
+     * needs and which `forShow` still provides.
+     */
+    forShows(range = {}) {
+      const { clauses, params } = rangeClauses(range);
+      const extra = clauses.map((clause) => `AND ${clause}`).join(' ');
+
+      const media = db
+        .prepare(
+          `SELECT a.show_id AS showId,
+                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+                  COUNT(DISTINCT a.episode_id) AS episodesTouched,
+                  MAX(a.requested_at) AS lastAt
+             FROM media_access a
+            WHERE a.kind IN ('download','stream') ${extra}
+            GROUP BY a.show_id`,
+        )
+        .all(params);
+
+      const feeds = db
+        .prepare(
+          `SELECT a.show_id AS showId, COUNT(*) AS feedFetches, MAX(a.requested_at) AS feedLastAt
+             FROM media_access a
+            WHERE a.kind = 'feed' AND a.status_code < 400 ${extra}
+            GROUP BY a.show_id`,
+        )
+        .all(params);
+
+      const byShow = {};
+      for (const row of media) {
+        const { showId, ...rest } = row;
+        byShow[showId] = { ...rest, feedFetches: 0, feedLastAt: null };
+      }
+      for (const row of feeds) {
+        byShow[row.showId] = {
+          ...NO_ACCESS,
+          episodesTouched: 0,
+          ...byShow[row.showId],
+          feedFetches: row.feedFetches,
+          feedLastAt: row.feedLastAt,
+        };
+      }
+      return byShow;
+    },
+
     /** Show-level rollup, including how many distinct episodes saw any traffic. */
-    forShow(showId) {
+    forShow(showId, range = {}) {
+      const { clauses, params } = rangeClauses(range);
+      const extra = clauses.map((clause) => `AND ${clause}`).join(' ');
+      const scoped = { ...params, showId };
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN kind = 'download' AND status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN kind = 'stream'   AND status_code < 400 THEN 1 ELSE 0 END) AS streams,
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(COALESCE(bytes_sent, 0)) AS bytes,
-             COUNT(DISTINCT episode_id) AS episodesTouched,
-             MAX(requested_at) AS lastAt
-           FROM media_access
-           WHERE show_id = ? AND kind IN ('download','stream')`,
+             SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+             SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+             COUNT(DISTINCT a.episode_id) AS episodesTouched,
+             MAX(a.requested_at) AS lastAt
+           FROM media_access a
+           WHERE a.show_id = @showId AND a.kind IN ('download','stream') ${extra}`,
         )
-        .get(showId);
+        .get(scoped);
       const feedFetches = db
         .prepare(
-          `SELECT COUNT(*) AS n, MAX(requested_at) AS lastAt
-             FROM media_access WHERE show_id = ? AND kind = 'feed' AND status_code < 400`,
+          `SELECT COUNT(*) AS n, MAX(a.requested_at) AS lastAt
+             FROM media_access a
+            WHERE a.show_id = @showId AND a.kind = 'feed' AND a.status_code < 400 ${extra}`,
         )
-        .get(showId);
+        .get(scoped);
       // Which app last asked, and when. "A new episode is not showing up in my
       // podcast app" is almost always answered by this one fact: podcast apps poll on
       // their own schedule — some of them server-side — so if nothing has fetched the
       // feed since the episode appeared, there is nothing wrong to find.
       const feedLast = db
         .prepare(
-          `SELECT client, requested_at AS at
-             FROM media_access
-            WHERE show_id = ? AND kind = 'feed' AND status_code < 400
-            ORDER BY requested_at DESC, id DESC LIMIT 1`,
+          `SELECT a.client AS client, a.requested_at AS at
+             FROM media_access a
+            WHERE a.show_id = @showId AND a.kind = 'feed' AND a.status_code < 400 ${extra}
+            ORDER BY a.requested_at DESC, a.id DESC LIMIT 1`,
         )
-        .get(showId);
+        .get(scoped);
       const clients = db
         .prepare(
-          `SELECT client, COUNT(*) AS n
-             FROM media_access
-            WHERE show_id = ? AND kind IN ('download','stream') AND status_code < 400
-            GROUP BY client ORDER BY n DESC LIMIT 5`,
+          `SELECT a.client AS client, COUNT(*) AS n
+             FROM media_access a
+            WHERE a.show_id = @showId AND a.kind IN ('download','stream')
+                  AND a.status_code < 400 ${extra}
+            GROUP BY a.client ORDER BY n DESC LIMIT 5`,
         )
-        .all(showId);
+        .all(scoped);
       return {
         downloads: row?.downloads ?? 0,
         streams: row?.streams ?? 0,
@@ -207,26 +397,168 @@ export function createStats({ db, logger }) {
       };
     },
 
-    /** Instance-wide rollup for the dashboard. */
-    overview() {
+    /**
+     * Instance-wide rollup, optionally within a period and compared with the one
+     * before it.
+     *
+     * When `prevFrom` is given the comparison is one scan of `[prevFrom, to)` split by
+     * a CASE rather than two scans of adjacent ranges — the index is seeked once and
+     * most of the same pages are read either way.
+     */
+    overview({ from = null, to = null, prevFrom = null } = {}) {
+      const lastEverAt =
+        db.prepare(`SELECT MAX(a.requested_at) AS at FROM media_access a`).get()?.at ?? null;
+
+      // All time. Comparing it with anything would mean inventing an earlier period,
+      // and a CASE against a null boundary silently reports zeros rather than saying so.
+      if (!from || !prevFrom) {
+        const row = db
+          .prepare(
+            `SELECT
+               SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+               SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+               SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+               SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+               MAX(a.requested_at) AS lastAt
+             FROM media_access a WHERE a.kind IN ('download','stream')`,
+          )
+          .get();
+        return {
+          downloads: row?.downloads ?? 0,
+          streams: row?.streams ?? 0,
+          failures: row?.failures ?? 0,
+          bytes: row?.bytes ?? 0,
+          lastAt: row?.lastAt ?? null,
+          lastEverAt,
+          previous: null,
+          change: null,
+        };
+      }
+
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN kind = 'download' AND status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN kind = 'stream'   AND status_code < 400 THEN 1 ELSE 0 END) AS streams,
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(COALESCE(bytes_sent, 0)) AS bytes,
-             MAX(requested_at) AS lastAt
-           FROM media_access WHERE kind IN ('download','stream')`,
+             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.requested_at >= @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+             SUM(CASE WHEN a.requested_at >= @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
+             MAX(CASE WHEN a.requested_at >= @from THEN a.requested_at END) AS lastAt,
+             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS prevDownloads,
+             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS prevStreams,
+             SUM(CASE WHEN a.requested_at < @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS prevFailures,
+             SUM(CASE WHEN a.requested_at < @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS prevBytes
+           FROM media_access a
+           WHERE a.requested_at >= @prevFrom AND a.requested_at < @to
+             AND a.kind IN ('download','stream')`,
         )
-        .get();
-      return {
+        .get({ from, to, prevFrom });
+
+      const current = {
         downloads: row?.downloads ?? 0,
         streams: row?.streams ?? 0,
         failures: row?.failures ?? 0,
         bytes: row?.bytes ?? 0,
-        lastAt: row?.lastAt ?? null,
       };
+      const previous = {
+        downloads: row?.prevDownloads ?? 0,
+        streams: row?.prevStreams ?? 0,
+        failures: row?.prevFailures ?? 0,
+        bytes: row?.prevBytes ?? 0,
+      };
+
+      return {
+        ...current,
+        lastAt: row?.lastAt ?? null,
+        lastEverAt,
+        previous,
+        change: {
+          downloads: changeFrom(current.downloads, previous.downloads),
+          streams: changeFrom(current.streams, previous.streams),
+          failures: changeFrom(current.failures, previous.failures),
+          bytes: changeFrom(current.bytes, previous.bytes),
+        },
+      };
+    },
+
+    /**
+     * Counts per time bucket, for the chart.
+     *
+     * Buckets arrive as explicit `[start, end)` instants rather than being derived in
+     * SQL, because `date(requested_at)` groups by UTC days and a single fixed offset is
+     * wrong on either side of a clock change — which is exactly the week someone looks
+     * at a chart and finds it disagrees with the log. Every bucket comes back, zeros
+     * included: a quiet Tuesday is a fact, and a chart that closes the gap tells a
+     * different story from the data.
+     */
+    daily({ buckets = [], showId = null } = {}) {
+      if (!buckets.length) return [];
+
+      const args = [];
+      buckets.forEach((bucket, index) => args.push(index, bucket.start, bucket.end));
+      // The show filter belongs in the JOIN condition, not a WHERE: a WHERE against a
+      // column of the right-hand table turns the LEFT JOIN into an inner one and the
+      // empty days vanish from the chart instead of being drawn as zero.
+      const showClause = showId ? 'AND a.show_id = ?' : '';
+      if (showId) args.push(showId);
+
+      const rows = db
+        .prepare(
+          `WITH bucket(idx, start_at, end_at) AS (VALUES ${buckets.map(() => '(?,?,?)').join(', ')})
+           SELECT b.idx AS idx,
+                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes
+             FROM bucket b
+             LEFT JOIN media_access a
+               ON a.requested_at >= b.start_at
+              AND a.requested_at <  b.end_at
+              AND a.kind IN ('download','stream')
+              ${showClause}
+            GROUP BY b.idx
+            ORDER BY b.idx`,
+        )
+        .all(...args);
+
+      const byIndex = new Map(rows.map((row) => [row.idx, row]));
+      return buckets.map((bucket, index) => {
+        const row = byIndex.get(index);
+        return {
+          ...bucket,
+          downloads: row?.downloads ?? 0,
+          streams: row?.streams ?? 0,
+          failures: row?.failures ?? 0,
+          bytes: row?.bytes ?? 0,
+        };
+      });
+    },
+
+    /** Which app families are fetching, busiest first. */
+    byClient({ from = null, to = null, showId = null } = {}) {
+      const { clauses, params } = rangeClauses({ from, to });
+      if (showId) {
+        clauses.push('a.show_id = @showId');
+        params.showId = showId;
+      }
+      const extra = clauses.map((clause) => `AND ${clause}`).join(' ');
+      return db
+        .prepare(
+          `SELECT COALESCE(a.client, 'Unknown') AS client,
+                  SUM(CASE WHEN a.kind = 'download' THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   THEN 1 ELSE 0 END) AS streams,
+                  COUNT(*) AS n,
+                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes
+             FROM media_access a
+            WHERE a.kind IN ('download','stream') AND a.status_code < 400 ${extra}
+            GROUP BY COALESCE(a.client, 'Unknown')
+            ORDER BY n DESC, client ASC`,
+        )
+        .all(params);
+    },
+
+    /** The oldest request still on record — where "all time" actually starts. */
+    firstAccessAt() {
+      return db.prepare(`SELECT MIN(a.requested_at) AS at FROM media_access a`).get()?.at ?? null;
     },
 
     /**
@@ -235,7 +567,13 @@ export function createStats({ db, logger }) {
      * Ordered by downloads first: a completed download is a stronger signal of
      * interest than a stream, of which one listener can generate dozens by seeking.
      */
-    busiest(limit = 10) {
+    busiest(limit = 10, { from = null, to = null, showId = null } = {}) {
+      const { clauses, params } = rangeClauses({ from, to });
+      if (showId) {
+        clauses.push('a.show_id = @showId');
+        params.showId = showId;
+      }
+      const extra = clauses.map((clause) => `AND ${clause}`).join(' ');
       return db
         .prepare(
           `SELECT a.episode_id AS episodeId,
@@ -249,28 +587,18 @@ export function createStats({ db, logger }) {
              FROM media_access a
              JOIN episodes e ON e.id = a.episode_id
              JOIN shows s ON s.id = a.show_id
-            WHERE a.kind IN ('download','stream') AND a.status_code < 400
+            WHERE a.kind IN ('download','stream') AND a.status_code < 400 ${extra}
             GROUP BY a.episode_id
             ORDER BY downloads DESC, streams DESC, bytes DESC
-            LIMIT ?`,
+            LIMIT @limit`,
         )
-        .all(Math.min(Math.max(1, limit), 100));
+        .all({ ...params, limit: Math.min(Math.max(1, limit), 100) });
     },
 
-    /** The raw log, newest first — the "what actually happened" view. */
-    list({ showId = null, episodeId = null, failuresOnly = false, limit = 50, offset = 0 } = {}) {
-      const clauses = [];
-      const params = { limit: Math.min(Math.max(1, limit), 500), offset: Math.max(0, offset) };
-      if (showId) {
-        clauses.push('a.show_id = @showId');
-        params.showId = showId;
-      }
-      if (episodeId) {
-        clauses.push('a.episode_id = @episodeId');
-        params.episodeId = episodeId;
-      }
-      if (failuresOnly) clauses.push('a.status_code >= 400');
-      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    /** The raw log — the "what actually happened" view. Newest first by default. */
+    list(filter = {}) {
+      const { limit = 50, offset = 0, sort = 'time', dir = 'desc' } = filter;
+      const { where, params } = accessWhere(filter);
 
       return db
         .prepare(
@@ -280,10 +608,17 @@ export function createStats({ db, logger }) {
              LEFT JOIN episodes e ON e.id = a.episode_id
              LEFT JOIN shows s ON s.id = a.show_id
              ${where}
-             ORDER BY a.requested_at DESC, a.id DESC
+             ${accessOrder(sort, dir)}
              LIMIT @limit OFFSET @offset`,
         )
-        .all(params)
+        .all({
+          ...params,
+          // The ceiling is high because the CSV export is one call for a whole filtered
+          // period. Routes that take a limit from a query string clamp it themselves to
+          // something a page can render.
+          limit: Math.min(Math.max(1, limit), MAX_LIST_ROWS),
+          offset: Math.max(0, offset),
+        })
         .map((row) => ({
           ...row,
           requestedAt: row.requested_at,
@@ -308,25 +643,15 @@ export function createStats({ db, logger }) {
         }));
     },
 
-    count({ showId = null, episodeId = null, failuresOnly = false } = {}) {
-      const clauses = [];
-      const params = {};
-      if (showId) {
-        clauses.push('show_id = @showId');
-        params.showId = showId;
-      }
-      if (episodeId) {
-        clauses.push('episode_id = @episodeId');
-        params.episodeId = episodeId;
-      }
-      if (failuresOnly) clauses.push('status_code >= 400');
-      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-      return db.prepare(`SELECT COUNT(*) AS n FROM media_access ${where}`).get(params).n;
+    /** How many rows `list` would return for the same filter, ignoring paging. */
+    count(filter = {}) {
+      const { where, params } = accessWhere(filter);
+      return db.prepare(`SELECT COUNT(*) AS n FROM media_access a ${where}`).get(params).n;
     },
 
     /** Recent failures, for the surface that has to make them impossible to miss. */
-    recentFailures(limit = 10) {
-      return api.list({ failuresOnly: true, limit });
+    recentFailures(limit = 10, { from = null, to = null, showId = null } = {}) {
+      return api.list({ failuresOnly: true, limit, from, to, showId });
     },
 
     /** Keeps the log bounded; the default keeps a year, which is plenty of history. */

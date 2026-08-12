@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import sharp from 'sharp';
 
-import { SCAN_TRIGGER } from '../../src/constants.js';
+import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER } from '../../src/constants.js';
 import { SETTING_KEYS } from '../../src/services/settings.js';
-import { createTestInstance } from '../helpers/harness.js';
+import { createTestInstance, mp3WithEmbeddedArtwork } from '../helpers/harness.js';
 
 let app;
 
@@ -273,3 +273,336 @@ describe('feed caching (spec §8.1)', () => {
 function countOccurrences(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
+
+/**
+ * Forwarding subscribers after the public address changes.
+ *
+ * `<itunes:new-feed-url>` is the only mechanism that moves a subscription across, and
+ * it is emitted for a bounded window rather than for ever — so what these check is not
+ * only that it appears, but that it stops.
+ */
+describe('itunes:new-feed-url after a base-URL change', () => {
+  const NEW_HOST = 'https://moved.example.org';
+
+  function newFeedUrls(xml) {
+    return [...xml.matchAll(/<itunes:new-feed-url>([^<]+)<\/itunes:new-feed-url>/g)].map((m) => m[1]);
+  }
+
+  /** Backdates the recorded move without waiting sixty days for it. */
+  function backdate(days) {
+    app.settings.setRaw(
+      SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT,
+      new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString(),
+    );
+    app.feeds.invalidate();
+  }
+
+  it('is absent from a feed when no move has been recorded', async () => {
+    await seed('no-move');
+    const { xml } = await buildFeed('no-move');
+    assert.ok(
+      !xml.includes('itunes:new-feed-url'),
+      'a show that has never moved must not tell apps to go anywhere',
+    );
+  });
+
+  it('names the current feed URL once the base URL changes', async () => {
+    const show = await seed('moved');
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+
+    const { xml } = await buildFeed('moved');
+    assert.deepEqual(
+      newFeedUrls(xml),
+      [`${NEW_HOST}/feeds/moved/${show.feed_token}.xml`],
+      'the element carries where the feed is now, not where it was',
+    );
+
+    // The same document is served at both addresses, so the value has to equal the
+    // feed's own self link — an app already on the new address then does nothing.
+    const self = xml.match(/<atom:link href="([^"]+)" rel="self"/)?.[1];
+    assert.equal(newFeedUrls(xml)[0], self, 'new-feed-url and atom:link self must agree');
+  });
+
+  it('disappears once the move is forgotten', async () => {
+    await seed('forgotten');
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+    assert.equal(newFeedUrls((await buildFeed('forgotten')).xml).length, 1);
+
+    app.settings.forgetPreviousBaseUrl();
+
+    const { xml } = await buildFeed('forgotten');
+    assert.ok(!xml.includes('itunes:new-feed-url'), 'the owner said the move is done');
+  });
+
+  it('disappears once the recorded change is older than the window', async () => {
+    await seed('expired-window');
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+
+    backdate(PREVIOUS_BASE_URL_WINDOW_DAYS - 1);
+    assert.equal(
+      newFeedUrls((await buildFeed('expired-window')).xml).length,
+      1,
+      'still inside the window, so apps that poll rarely still get moved',
+    );
+
+    backdate(PREVIOUS_BASE_URL_WINDOW_DAYS + 1);
+    assert.ok(
+      !newFeedUrls((await buildFeed('expired-window')).xml).length,
+      'a forwarding note nobody switched off must not become permanent',
+    );
+  });
+
+  /**
+   * The cache entry is keyed on the base URL, so the previous one has to be part of
+   * that key too. Without it the element outlives the state it is built from: it
+   * lingers for up to a TTL after being switched off — and the expiry of the window,
+   * which fires no event at all, would never invalidate anything.
+   */
+  it('changes within the same build rather than lingering behind the cache', async () => {
+    const show = await seed('cache-forwarding');
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+    const before = app.feeds.build(show.id);
+    assert.equal(newFeedUrls(before.xml).length, 1);
+
+    // Deliberately no invalidate() and no event the feed cache listens to: only the
+    // recorded timestamp moves, exactly as it does when the window quietly runs out.
+    app.settings.setRaw(
+      SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT,
+      new Date(Date.now() - (PREVIOUS_BASE_URL_WINDOW_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString(),
+    );
+
+    const after = app.feeds.build(show.id);
+    assert.ok(!after.xml.includes('itunes:new-feed-url'), 'the very next build must be honest');
+    assert.notEqual(after.etag, before.etag, 'and the ETag moves with the body');
+  });
+
+  it('records the move whichever caller changes the address', async () => {
+    // The setup wizard and the settings page are separate callers of settings.update;
+    // recording in either route alone is how one of them silently forwards nobody.
+    await seed('wizard-move');
+    assert.equal(app.settings.previousPublicBaseUrl(), null);
+
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+    assert.equal(app.settings.previousPublicBaseUrl(), 'https://podcast.example.com');
+
+    // Re-saving the same address is not a move, and must not restart the window.
+    const setAt = app.settings.getRaw(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT);
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: `${NEW_HOST}/` });
+    assert.equal(app.settings.previousPublicBaseUrl(), 'https://podcast.example.com');
+    assert.equal(app.settings.getRaw(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT), setAt);
+  });
+
+  it('is not exported to config.json, since a finished move must not come back', async () => {
+    await seed('not-exported');
+    app.settings.update({ [SETTING_KEYS.PUBLIC_BASE_URL]: NEW_HOST });
+    await app.settings.exportToDisk();
+
+    const exported = JSON.parse(await readFile(app.config.configPath, 'utf8'));
+    assert.equal(exported[SETTING_KEYS.PUBLIC_BASE_URL], NEW_HOST);
+    assert.ok(!(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL in exported));
+    assert.ok(!(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT in exported));
+  });
+});
+
+/**
+ * Publish dates in the future.
+ *
+ * The episode form has always offered a datetime picker, and a date in the future
+ * looked exactly like scheduling while publishing the episode immediately — the app
+ * did something reasonable and never said it had.
+ *
+ * It also caused a quieter fault. `lastBuildDate` takes the newest timestamp among the
+ * feed's items and clamps it to now; a future date always won that comparison, so the
+ * clamp returned `Date.now()` on every rebuild, the build date churned every minute,
+ * the ETag churned with it, and every conditional poll re-downloaded the whole feed for
+ * as long as any episode carried a future date.
+ */
+describe('scheduled episodes', () => {
+  function reschedule(show, offsetMs) {
+    const episode = app.episodes.listByShow(show.id)[0];
+    app.db
+      .prepare('UPDATE episodes SET pub_date = ? WHERE id = ?')
+      .run(new Date(Date.now() + offsetMs).toISOString(), episode.id);
+    app.feeds.invalidate(show.id);
+    return episode;
+  }
+
+  it('keeps an episode with a future publish date out of the feed', async () => {
+    const show = await seed('sched');
+    const episode = reschedule(show, 60 * 60 * 1000);
+
+    const { xml } = await buildFeed('sched');
+    assert.ok(!xml.includes(episode.id), 'a scheduled episode has no item in the feed');
+    assert.ok(!xml.includes('<item>'), 'and with only that episode, the feed has no items at all');
+  });
+
+  it('puts it in the feed once its date has passed', async () => {
+    const show = await seed('sched-due');
+    const episode = reschedule(show, -60 * 1000);
+
+    const { xml } = await buildFeed('sched-due');
+    assert.ok(xml.includes(episode.id), 'once the time passes the episode publishes itself');
+  });
+
+  it('emits the scheduled instant as the item pubDate, not the moment it went live', async () => {
+    const show = await seed('sched-date');
+    // Far enough back that "the scheduled time" and "now" cannot be confused for
+    // each other by a coarse comparison.
+    const episode = reschedule(show, -3 * 60 * 60 * 1000);
+    const stored = app.episodes.get(episode.id).pub_date;
+
+    const { xml } = await buildFeed('sched-date');
+    const published = xml.match(/<pubDate>([^<]+)<\/pubDate>/)?.[1];
+    assert.ok(published, 'the item carries a pubDate');
+    assert.equal(
+      new Date(published).getTime(),
+      Math.floor(new Date(stored).getTime() / 1000) * 1000,
+      'a subscriber is told when the owner said it was published, not when the feed noticed',
+    );
+    assert.ok(
+      Date.now() - new Date(published).getTime() > 2 * 60 * 60 * 1000,
+      'and that is hours ago, not the moment of the build',
+    );
+  });
+
+  it('keeps lastBuildDate and the ETag still while an episode is scheduled', async () => {
+    const show = await seed('sched-stable');
+    reschedule(show, 24 * 60 * 60 * 1000);
+
+    const first = app.feeds.build(show.id);
+    app.feeds.invalidate(show.id);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const second = app.feeds.build(show.id);
+
+    assert.equal(
+      second.etag,
+      first.etag,
+      'a rebuild a second later must not churn the ETag, or every poll re-downloads the feed',
+    );
+    assert.equal(
+      second.lastModified.getTime(),
+      first.lastModified.getTime(),
+      'and the build date holds still too',
+    );
+  });
+
+  it('counts a scheduled episode apart from the ones in the feed', async () => {
+    const show = await seed('sched-counts');
+    reschedule(show, 60 * 60 * 1000);
+
+    const counts = app.episodes.counts(show.id);
+    assert.equal(counts.scheduled, 1, 'it is counted as scheduled');
+    assert.equal(counts.inFeed, 0, 'and not as in the feed');
+    assert.equal(counts.active, 1, 'while still being an ordinary active episode');
+    assert.equal(
+      counts.inFeed,
+      app.episodes.listForFeed(show.id).length,
+      'inFeed is exactly what the feed query returns, or the two have drifted',
+    );
+  });
+
+  it('does not treat a removed episode with a future date as scheduled', async () => {
+    const show = await seed('sched-removed');
+    const episode = reschedule(show, 60 * 60 * 1000);
+    app.episodes.removeFromFeed(episode.id);
+
+    assert.equal(
+      app.episodes.isScheduled(app.episodes.get(episode.id)),
+      false,
+      'removed means the owner took it out, which is not the same as waiting',
+    );
+  });
+
+  it('leaves a schedule alone across a rescan', async () => {
+    const show = await seed('sched-rescan');
+    const episode = reschedule(show, 60 * 60 * 1000);
+    const before = app.episodes.get(episode.id).pub_date;
+
+    await app.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    assert.equal(
+      app.episodes.get(episode.id).pub_date,
+      before,
+      'a scan must never move a publish date the owner set',
+    );
+  });
+});
+
+describe('per-episode artwork in the feed', () => {
+  async function seedWithArt(slug, { cover = true, art = true } = {}) {
+    const dir = await app.makeShowFolder(slug);
+    if (art) {
+      await writeFile(
+        join(dir, 'ep-one.mp3'),
+        await mp3WithEmbeddedArtwork(
+          await sharp({ create: { width: 1500, height: 1500, channels: 3, background: '#204020' } })
+            .jpeg()
+            .toBuffer(),
+        ),
+      );
+    } else {
+      await app.addAudio(slug, 'sample.mp3', 'ep-one.mp3');
+    }
+    if (cover) {
+      await writeFile(
+        join(dir, 'cover.jpg'),
+        await sharp({ create: { width: 1500, height: 1500, channels: 3, background: '#3E2D4A' } })
+          .jpeg()
+          .toBuffer(),
+      );
+    }
+    await app.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    return app.shows.getBySlug(slug);
+  }
+
+  /** The `<itunes:image>` inside `<item>`, as opposed to the channel's own. */
+  function itemImages(xml) {
+    const items = xml.split('<item>').slice(1);
+    return items.flatMap((item) => [...item.matchAll(/<itunes:image href="([^"]+)"/g)].map((m) => m[1]));
+  }
+
+  it('points an item at the episode’s own artwork when it has some', async () => {
+    const show = await seedWithArt('art-own');
+    const [episode] = app.episodes.listByShow(show.id);
+    const { xml } = await buildFeed('art-own');
+
+    const [href] = itemImages(xml);
+    assert.ok(href, 'the item should carry an image');
+    assert.ok(
+      href.startsWith(
+        `https://podcast.example.com/media/art-own/${show.feed_token}/${episode.id}/cover.jpg`,
+      ),
+      `episode artwork URL expected, got ${href}`,
+    );
+  });
+
+  it('busts the cache with the artwork’s own content hash', async () => {
+    const show = await seedWithArt('art-hash');
+    const [episode] = app.episodes.listByShow(show.id);
+    const { xml } = await buildFeed('art-hash');
+
+    const [href] = itemImages(xml);
+    // The hash and not a timestamp: replacing the image gives it a URL nothing has
+    // cached, and re-extracting the identical image leaves the URL alone.
+    assert.ok(href.endsWith(`?v=${episode.art_etag}`), `expected the art hash in ${href}`);
+    assert.match(episode.art_etag, /^[0-9a-f]{64}$/);
+  });
+
+  it('falls back to the show cover for an episode with no artwork of its own', async () => {
+    const show = await seedWithArt('art-fallback', { art: false });
+    const { xml } = await buildFeed('art-fallback');
+
+    const [href] = itemImages(xml);
+    assert.ok(
+      href.startsWith(`https://podcast.example.com/media/art-fallback/${show.feed_token}/cover.jpg`),
+      `show cover URL expected, got ${href}`,
+    );
+  });
+
+  it('omits the element entirely when there is neither', async () => {
+    await seedWithArt('art-none', { art: false, cover: false });
+    const { xml } = await buildFeed('art-none');
+
+    assert.deepEqual(itemImages(xml), [], 'no artwork anywhere means no element, never an empty one');
+  });
+});

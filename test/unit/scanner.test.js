@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
@@ -57,6 +57,43 @@ describe('show discovery (spec §5)', () => {
     assert.equal(show.itunes_category, 'Arts');
     assert.equal(show.itunes_subcategory, 'Books');
     assert.equal(show.explicit, 1);
+  });
+
+  /**
+   * `itunes_type` is portable; `directory_listing` deliberately is not.
+   *
+   * Blocking a show also refuses a deliberate submission to a directory, so it stays a
+   * choice made in the app — never one a copied folder arrives already carrying.
+   */
+  it('carries the show type through show.json, and never the directory-listing choice', async () => {
+    const dir = await app.makeShowFolder('serialised');
+    await writeFile(
+      join(dir, 'show.json'),
+      JSON.stringify({ title: 'Serial', itunes_type: 'serial', directory_listing: 'blocked' }),
+    );
+    await scanAll();
+
+    const show = app.shows.getBySlug('serialised');
+    assert.equal(show.itunes_type, 'serial');
+    assert.equal(
+      show.directory_listing,
+      'allowed',
+      'a file must not be able to hide a show from every podcast directory',
+    );
+
+    // An unrecognised type falls back to the default rather than failing the whole
+    // discovery of the folder on a CHECK constraint.
+    const odd = await app.makeShowFolder('odd-type');
+    await writeFile(join(odd, 'show.json'), JSON.stringify({ itunes_type: 'weekly' }));
+    await scanAll();
+    assert.equal(app.shows.getBySlug('odd-type').itunes_type, 'episodic');
+
+    app.shows.update(show.id, { directoryListing: 'blocked' });
+    await app.shows.writeShowConfig(show.id);
+    const written = JSON.parse(await readFile(join(dir, 'show.json'), 'utf8'));
+    assert.equal(written.itunes_type, 'serial', 'the type goes back out with the export');
+    assert.ok(!('directory_listing' in written), 'and the listing choice is not written either');
+    assert.ok(!('feed_token' in written), 'the token is a credential, not configuration');
   });
 
   it('never lets show.json override a later edit (the database is authoritative)', async () => {

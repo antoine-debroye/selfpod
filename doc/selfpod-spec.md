@@ -1,4 +1,4 @@
-# Podhost — Self-Hosted Podcast Server
+# SelfPod — Self-Hosted Podcast Server
 
 ## Specification for implementation
 

@@ -12,7 +12,6 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "DATA_DIR=./.devdata LOG_LEVEL=debug node --watch src/index.js",
-    "scan": "node scripts/scan-once.js",
     "test": "node --test \"test/unit/*.test.js\" \"test/integration/*.test.js\" \"test/security/*.test.js\"",
     "test:unit": "node --test \"test/unit/*.test.js\"",
     "test:integration": "node --test \"test/integration/*.test.js\"",

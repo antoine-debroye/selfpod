@@ -1,5 +1,7 @@
 import { parseFile } from 'music-metadata';
 
+import { EMBEDDED_ART_MAX_BYTES } from '../constants.js';
+
 /**
  * Audio metadata extraction.
  *
@@ -20,6 +22,10 @@ export function createMetadata({ logger } = {}) {
         description: null,
         season: null,
         episodeNumber: null,
+        /** `{ data, format }` from the file's own tags, or null. */
+        picture: null,
+        /** True when a picture was present but too big to buffer — see below. */
+        pictureTooLarge: false,
         error: null,
       };
 
@@ -28,12 +34,29 @@ export function createMetadata({ logger } = {}) {
         // formats where the header has no reliable length (VBR MP3 without a
         // Xing frame, some WAV/FLAC), and it costs a full-file read — so it is
         // only used when the cheap attempt came back empty.
-        let parsed = await parseFile(filePath, { duration: false, skipCovers: true });
+        //
+        // `skipCovers: false` on the *first* pass and `true` on the second looks
+        // backwards and is not. ID3v2 and MP4 store the picture inside the tag
+        // region music-metadata has already read into memory by the end of pass 1;
+        // the flag only decides whether those bytes are handed back as a picture
+        // object, so asking for it here costs a reference, not a read. Pass 2 is
+        // the expensive one — it streams the whole file for a duration — and by
+        // then the picture question is already settled, so it opts out.
+        let parsed = await parseFile(filePath, { duration: false, skipCovers: false });
+        const firstPass = parsed;
         if (!Number.isFinite(parsed?.format?.duration)) {
           parsed = await parseFile(filePath, { duration: true, skipCovers: true });
         }
 
         const { format = {}, common = {} } = parsed ?? {};
+        const picture = firstPass?.common?.picture?.[0] ?? null;
+        if (picture?.data) {
+          if (picture.data.byteLength > EMBEDDED_ART_MAX_BYTES) {
+            result.pictureTooLarge = true;
+          } else {
+            result.picture = { data: picture.data, format: picture.format ?? null };
+          }
+        }
 
         if (Number.isFinite(format.duration) && format.duration > 0) {
           result.durationSeconds = Math.round(format.duration);

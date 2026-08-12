@@ -4,6 +4,7 @@ import { RESCAN_INTERVAL_MAX_SECONDS, RESCAN_INTERVAL_MIN_SECONDS } from '../../
 import { unprocessable } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
+import { isValidCategory, isValidSubcategory } from '../../web/lib/apple-categories.js';
 import { MIN_PASSWORD_LENGTH } from './setup.js';
 
 export default async function settingsRoutes(fastify, { config, settings, watcher, scheduler, shows }) {
@@ -69,6 +70,43 @@ export default async function settingsRoutes(fastify, { config, settings, watche
         fields.defaultLanguage = 'Use a language code like "en" or "en-gb".';
       } else {
         patch[SETTING_KEYS.DEFAULT_LANGUAGE] = language || 'en';
+      }
+    }
+
+    if (body.defaultCategory !== undefined) {
+      const category = String(body.defaultCategory).trim();
+      if (!isValidCategory(category)) {
+        fields.defaultCategory =
+          'Choose a category from the list — podcast directories reject anything else.';
+      } else {
+        patch[SETTING_KEYS.DEFAULT_CATEGORY] = category;
+      }
+    }
+    if (body.defaultSubcategory !== undefined) {
+      // Checked against the category this same request is setting, when there is one,
+      // so a category and its subcategory can be changed together in a single call.
+      const category = patch[SETTING_KEYS.DEFAULT_CATEGORY] ?? settings.defaults().category;
+      const subcategory = String(body.defaultSubcategory ?? '').trim();
+      if (subcategory && !isValidSubcategory(category, subcategory)) {
+        fields.defaultSubcategory = `"${subcategory}" isn't a subcategory of ${category}.`;
+      } else {
+        // Empty means "none": stored as an absent row rather than an empty string, so
+        // it reads back as null the way a show with no subcategory does.
+        patch[SETTING_KEYS.DEFAULT_SUBCATEGORY] = subcategory || null;
+      }
+    }
+    if (body.defaultExplicit !== undefined) {
+      patch[SETTING_KEYS.DEFAULT_EXPLICIT] = isTrue(body.defaultExplicit) ? '1' : '0';
+    }
+
+    // A subcategory belongs to exactly one category, so one left behind by a change of
+    // category is not merely a stale preference: new shows are created from these
+    // defaults without going through the validating update path, so the pair would end
+    // up in a feed as a nested itunes:category that Apple rejects.
+    if (patch[SETTING_KEYS.DEFAULT_CATEGORY] && body.defaultSubcategory === undefined) {
+      const current = settings.defaults().subcategory;
+      if (current && !isValidSubcategory(patch[SETTING_KEYS.DEFAULT_CATEGORY], current)) {
+        patch[SETTING_KEYS.DEFAULT_SUBCATEGORY] = null;
       }
     }
 

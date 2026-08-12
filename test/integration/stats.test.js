@@ -477,3 +477,306 @@ describe('a download that used to fail is recorded as a success', () => {
     }
   });
 });
+
+/**
+ * Filtering and sorting the access log.
+ *
+ * The log grew from two filters to seven, and a sort. Two failure modes are worth
+ * pinning down. The first is a filter reaching the rows but not the total, which used
+ * to be structurally possible because `list` and `count` built their WHERE clauses
+ * separately — the log would then read "40 of 312" while showing something else.
+ *
+ * The second is the sort key: it is the only part of this query that becomes SQL text
+ * rather than a bound parameter, so it has to come from a whitelist and nowhere else.
+ */
+describe('filtering and sorting the access log', () => {
+  let server;
+  let show;
+  let episode;
+
+  before(async () => {
+    server = await createTestServer();
+    await server.addAudio('logfilter', 'sample.m4a', 'first-episode.m4a');
+    await server.scanner.scanAllNow('manual');
+    show = server.shows.getBySlug('logfilter');
+    episode = server.episodes.listByShow(show.id)[0];
+    await server.login();
+  });
+
+  after(async () => {
+    await server.cleanup();
+  });
+
+  function clearLog() {
+    server.db.prepare('DELETE FROM media_access').run();
+  }
+
+  function logRow({
+    kind = 'download',
+    statusCode = 200,
+    client = 'Overcast',
+    bytes = 1000,
+    at = new Date().toISOString(),
+  } = {}) {
+    server.db
+      .prepare(
+        `INSERT INTO media_access
+           (episode_id, show_id, requested_at, kind, status_code, bytes_sent, total_bytes, client)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(episode.id, show.id, at, kind, statusCode, bytes, bytes, client);
+  }
+
+  /** The invariant behind the "N of M" line under every log. */
+  function assertAgree(filter, expected, message) {
+    assert.equal(server.stats.list({ ...filter, limit: 500 }).length, expected, `${message} (rows)`);
+    assert.equal(server.stats.count(filter), expected, `${message} (total)`);
+  }
+
+  it('filters by request type, and treats all four types as no filter at all', () => {
+    clearLog();
+    logRow({ kind: 'download' });
+    logRow({ kind: 'stream' });
+    logRow({ kind: 'feed' });
+    logRow({ kind: 'cover' });
+
+    assertAgree({ kinds: ['download'] }, 1, 'only downloads');
+    assertAgree({ kinds: ['download', 'stream'] }, 2, 'downloads and streams');
+    assertAgree({ kinds: ['download', 'stream', 'feed', 'cover'] }, 4, 'every type is no narrowing');
+    assertAgree({}, 4, 'and neither is no filter');
+  });
+
+  it('ignores a request type it does not recognise rather than returning nothing', () => {
+    clearLog();
+    logRow({ kind: 'download' });
+    assertAgree({ kinds: ['nonsense'] }, 1, 'an unknown type drops out of the filter');
+  });
+
+  it('matches an app exactly rather than by substring', () => {
+    clearLog();
+    logRow({ client: 'Pocket Casts' });
+    logRow({ client: 'Apple Podcasts' });
+
+    assertAgree({ client: 'Pocket Casts' }, 1, 'the named app');
+    assertAgree({ client: 'Pocket' }, 0, 'a prefix is not a match');
+  });
+
+  it('keeps rows and total in step for every combination', () => {
+    clearLog();
+    logRow({ kind: 'download', statusCode: 200, client: 'Overcast' });
+    logRow({ kind: 'download', statusCode: 404, client: 'Overcast' });
+    logRow({ kind: 'stream', statusCode: 200, client: 'Castro' });
+
+    assertAgree({ failuresOnly: true }, 1, 'failures only');
+    assertAgree({ failuresOnly: true, client: 'Overcast' }, 1, 'failures from one app');
+    assertAgree({ kinds: ['stream'], client: 'Overcast' }, 0, 'a combination nothing matches');
+    assertAgree({ showId: show.id, kinds: ['download'] }, 2, 'one show, one type');
+  });
+
+  it('sorts by size sent, largest first', () => {
+    clearLog();
+    logRow({ bytes: 10 });
+    logRow({ bytes: 5000 });
+    logRow({ bytes: 300 });
+
+    const rows = server.stats.list({ sort: 'bytes', dir: 'desc' });
+    assert.deepEqual(rows.map((row) => row.bytesSent), [5000, 300, 10], 'largest first');
+
+    const ascending = server.stats.list({ sort: 'bytes', dir: 'asc' });
+    assert.deepEqual(ascending.map((row) => row.bytesSent), [10, 300, 5000], 'and the other way');
+  });
+
+  it('shows each row exactly once when paging through a column full of ties', () => {
+    clearLog();
+    // Every row shares a status code, which is the ordinary case: without a tiebreaker
+    // the database is free to return them in a different order per page, so rows appear
+    // twice and others are never seen at all.
+    for (let i = 0; i < 10; i += 1) logRow({ statusCode: 200, bytes: i });
+
+    const filter = { sort: 'status', dir: 'desc' };
+    const first = server.stats.list({ ...filter, limit: 5, offset: 0 });
+    const second = server.stats.list({ ...filter, limit: 5, offset: 5 });
+    const ids = new Set([...first, ...second].map((row) => row.id));
+    assert.equal(ids.size, 10, 'ten rows over two pages, none repeated and none skipped');
+  });
+
+  it('falls back to newest-first when the sort key is not one it offers', () => {
+    clearLog();
+    logRow({ at: '2026-01-01T00:00:00.000Z' });
+    logRow({ at: '2026-06-01T00:00:00.000Z' });
+
+    const rows = server.stats.list({ sort: 'filename' });
+    assert.equal(rows[0].requestedAt, '2026-06-01T00:00:00.000Z', 'newest first, as if unsorted');
+  });
+
+  it('cannot have its query rewritten through the sort key or direction', () => {
+    clearLog();
+    logRow();
+    logRow();
+
+    // If either reached the SQL as text, this would throw or return the wrong rows.
+    const bySort = server.stats.list({ sort: 'a.requested_at; DROP TABLE media_access; --' });
+    const byDir = server.stats.list({ sort: 'time', dir: 'DESC; DROP TABLE media_access; --' });
+    assert.equal(bySort.length, 2, 'a smuggled sort key changes nothing');
+    assert.equal(byDir.length, 2, 'and neither does a smuggled direction');
+    assert.equal(server.stats.count({}), 2, 'the table is still there');
+  });
+
+  it('carries every filter through the htmx fragment and the pager', async () => {
+    clearLog();
+    for (let i = 0; i < 60; i += 1) logRow({ client: 'Castro' });
+
+    const fragment = await server.get('/ui/stats/log?client=Castro&kind=download&failuresOnly=');
+    assert.equal(fragment.statusCode, 200, 'the fragment renders');
+    assert.ok(!fragment.body.includes('<html'), 'a fragment must not be wrapped in a layout');
+    assert.match(
+      fragment.body,
+      /\/ui\/stats\/log\/rows\?[^"]*client=Castro/,
+      'the pager URL keeps the app filter',
+    );
+    assert.match(fragment.body, /\/ui\/stats\/log\/rows\?[^"]*kind=download/, 'and the type filter');
+  });
+
+  it('puts the page URL in the address bar while fetching the fragment', async () => {
+    const fragment = await server.get('/ui/stats/log?client=Castro');
+    assert.equal(
+      fragment.headers['hx-push-url'],
+      '/stats?client=Castro',
+      'what someone reloads or bookmarks is the page, not the fragment',
+    );
+
+    const rows = await server.get('/ui/stats/log/rows?client=Castro&offset=40');
+    assert.equal(
+      rows.headers['hx-push-url'],
+      'false',
+      'paging is not a filter, so it must not reach the address bar',
+    );
+  });
+
+  it('returns only rows from the pager, so appending cannot duplicate the table', async () => {
+    clearLog();
+    for (let i = 0; i < 60; i += 1) logRow();
+
+    const rows = await server.get('/ui/stats/log/rows?offset=40');
+    assert.ok(!rows.body.includes('id="access-log"'), 'the pager response is not the whole container');
+    assert.ok(!rows.body.includes('<thead'), 'nor a second table head');
+    assert.ok(rows.body.trim().startsWith('<tr'), 'it is rows, which is what a tbody can accept');
+  });
+
+  it('offers the opposite direction on the column that is already sorted', async () => {
+    clearLog();
+    logRow();
+
+    const page = await server.get('/stats?sort=bytes&dir=desc');
+    assert.match(page.body, /href="\/stats\?[^"]*sort=bytes[^"]*dir=asc"/, 'clicking it flips to ascending');
+    assert.match(page.body, /aria-sort="descending"/, 'and a screen reader is told which way it runs');
+  });
+});
+
+/**
+ * Conditional polls are still polls.
+ *
+ * "When was this feed last checked, and by which app" exists to answer *why hasn't my
+ * podcast app picked up the new episode?* — and the answer is nearly always that
+ * nothing has fetched the feed since it appeared. That figure was being computed from
+ * 200s alone, so an app behaving perfectly and receiving 304s was invisible: in the
+ * steady state the count sat still and the "last checked" time went stale while the app
+ * was polling every fifteen minutes.
+ */
+describe('recording conditional feed polls', () => {
+  let server;
+  let show;
+
+  before(async () => {
+    server = await createTestServer();
+    await server.addAudio('polled', 'sample.m4a', 'first-episode.m4a');
+    await server.scanner.scanAllNow('manual');
+    show = server.shows.getBySlug('polled');
+    await server.login();
+  });
+
+  after(async () => {
+    await server.cleanup();
+  });
+
+  /** Recording happens once the response ends, so give the event loop a turn. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  function clearLog() {
+    server.db.prepare('DELETE FROM media_access').run();
+  }
+
+  function poll(headers = {}) {
+    return server.app.inject({
+      method: 'GET',
+      url: `/feeds/${show.slug}/${show.feed_token}.xml`,
+      headers: { 'user-agent': 'Pocket Casts/7.5 (iPhone; iOS 18.2)', ...headers },
+    });
+  }
+
+  it('counts a 304 as a feed check, so a well-behaved app is not invisible', async () => {
+    clearLog();
+    const first = await poll();
+    await settle();
+    const afterFirst = server.stats.forShow(show.id).feedFetches;
+
+    const second = await poll({ 'if-none-match': first.headers.etag });
+    assert.equal(second.statusCode, 304, 'the second poll revalidates');
+    await settle();
+
+    assert.equal(
+      server.stats.forShow(show.id).feedFetches,
+      afterFirst + 1,
+      'the revalidation is a feed check like any other',
+    );
+  });
+
+  it('records zero bytes for a 304, not null, because nothing is not the same as unknown', async () => {
+    clearLog();
+    const first = await poll();
+    await settle();
+    await poll({ 'if-none-match': first.headers.etag });
+    await settle();
+
+    const rows = server.db
+      .prepare("SELECT bytes_sent, status_code FROM media_access WHERE kind = 'feed' ORDER BY id")
+      .all();
+    assert.equal(rows.length, 2, 'both polls are on record');
+    assert.equal(rows[1].status_code, 304, 'the second is the revalidation');
+    assert.equal(
+      rows[1].bytes_sent,
+      0,
+      'null is reserved for a transfer that died and cannot be measured',
+    );
+  });
+
+  it('moves the last-checked time and names the app on a 304', async () => {
+    clearLog();
+    const first = await poll();
+    await settle();
+    const before = server.stats.forShow(show.id).feedLastAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await poll({ 'if-none-match': first.headers.etag, 'user-agent': 'Overcast/2024 (+http://overcast.fm/)' });
+    await settle();
+
+    const after = server.stats.forShow(show.id);
+    assert.notEqual(after.feedLastAt, before, 'the page can say when it was really last checked');
+    assert.equal(after.feedLastClient, 'Overcast', 'and by which app');
+  });
+
+  it('leaves the served-bytes total at zero however often the feed is polled', async () => {
+    clearLog();
+    const first = await poll();
+    await settle();
+    for (let i = 0; i < 5; i += 1) {
+      await poll({ 'if-none-match': first.headers.etag });
+      await settle();
+    }
+    assert.equal(
+      server.stats.forShow(show.id).bytes,
+      0,
+      'feed traffic has never counted as audio served, and counting 304s must not change that',
+    );
+  });
+});

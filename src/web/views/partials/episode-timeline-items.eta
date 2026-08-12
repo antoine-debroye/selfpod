@@ -1,0 +1,39 @@
+<%
+  /* Items only, with no wrapper element of its own.
+     "Show older" targets the pager itself and swaps it for the next page of items
+     followed by a fresh pager, which is what makes paging append instead of replace.
+     Wrapping these rows in a container would put a second copy of the card's id
+     inside the first — the bug this split exists to kill. */
+  const NOTES = {
+    added: 'Picked up from disk and added to the feed.',
+    missing: 'Its file stopped being on disk. It stays in the feed until the grace period passes.',
+    removed: 'Taken out of the feed by hand. The audio file is untouched.',
+    expired: 'Dropped from the feed — its file stayed missing past the grace period.',
+  };
+%>
+<% for (const row of it.entries) { %>
+  <% const badge = it.helpers.episodeEventBadge(row.event); %>
+  <article class="log-item">
+    <div class="time">
+      <%= it.helpers.formatTime(row.at) %>
+      <small><%= it.helpers.formatDate(row.at) %></small>
+    </div>
+    <div class="body">
+      <b><a href="/shows/<%= encodeURIComponent(row.showSlug) %>/episodes/<%= encodeURIComponent(row.episodeId) %>"><%= row.episodeTitle %></a></b>
+      <span class="dim">· <%= row.showTitle %></span>
+      <span class="log-item__note"><%= NOTES[row.event] %></span>
+    </div>
+    <div class="trig">
+      <span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span>
+    </div>
+  </article>
+<% } %>
+
+<% if (it.hasMore) { %>
+  <div class="log-more" id="timeline-more">
+    <button class="btn btn-ghost btn-sm" type="button"
+            hx-get="/ui/activity/timeline/items?<%= it.filter.qs %><%= it.filter.qs ? '&' : '' %>timelineOffset=<%= it.nextOffset %>"
+            hx-target="#timeline-more" hx-swap="outerHTML">Show older</button>
+    <span class="dim"><%= it.loaded %> of <%= it.total %> shown</span>
+  </div>
+<% } %>

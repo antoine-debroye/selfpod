@@ -49,7 +49,50 @@ export const CANONICAL_COVER_FILENAME = 'cover.jpg';
 export const ARTWORK_MIN_PX = 1400;
 export const ARTWORK_MAX_PX = 3000;
 
+/** The only image formats Apple Podcasts accepts. WebP is a valid cover file here and a rejection there. */
+export const DIRECTORY_IMAGE_FORMATS = Object.freeze(['jpeg', 'png']);
+
+/**
+ * Sidecar artwork extensions for an episode, checked case-insensitively in this
+ * order against the audio file's own stem — `ep-one.mp3` → `ep-one.jpg`.
+ *
+ * These are already in the scanner's `knownNonAudio` list, so an image sitting
+ * beside an episode has never produced a "SelfPod doesn't serve that file type"
+ * warning and still doesn't.
+ */
+export const EPISODE_ART_SIDECAR_EXTENSIONS = Object.freeze(['.jpg', '.jpeg', '.png', '.webp']);
+
+/**
+ * Ceiling on embedded artwork SelfPod will pull out of an audio file.
+ *
+ * Artwork is read into memory to be hashed and written, and a tagger that embedded
+ * a 60 MB uncompressed TIFF would otherwise have every scan buffer it. Past this the
+ * picture is dropped with a warning naming the file, rather than silently — the owner
+ * needs to know why that episode fell back to the show cover.
+ */
+export const EMBEDDED_ART_MAX_BYTES = 12 * 1024 * 1024;
+
 export const GENERATOR = 'SelfPod';
+
+/**
+ * What a podcast app should make of an episode.
+ *
+ * Apple treats a missing value as `full`, which is why the feed always states one:
+ * otherwise the ordinary case is implicit and only the rare ones are visible.
+ */
+export const EPISODE_TYPES = Object.freeze(['full', 'trailer', 'bonus']);
+
+/** Whether a show is meant to be heard newest-first or from the beginning. */
+export const SHOW_TYPES = Object.freeze(['episodic', 'serial']);
+
+/**
+ * Whether podcast directories may list a show.
+ *
+ * `allowed` emits nothing, which is what every feed has always done. `blocked` emits
+ * `<itunes:block>`, which also refuses a deliberate submission — so it is opted into,
+ * never defaulted, and the readiness panel says so when it is on.
+ */
+export const DIRECTORY_LISTINGS = Object.freeze(['allowed', 'blocked']);
 
 export const EPISODE_STATUS = Object.freeze({
   ACTIVE: 'active',
@@ -90,9 +133,28 @@ export const DEFAULT_MISSING_GRACE_SECONDS = 24 * 60 * 60;
 /** Feed XML is cached this long as a backstop; scanner events invalidate it sooner. */
 export const FEED_CACHE_TTL_MS = 60_000;
 
+/**
+ * How long a feed keeps naming its new address after the public base URL changes.
+ *
+ * `<itunes:new-feed-url>` is the only thing that moves a subscriber whose app is still
+ * polling the old address, and it only works for as long as SelfPod keeps saying it.
+ * Apple's guidance is a fortnight at minimum; 60 days covers apps that poll rarely
+ * without turning a completed move into a permanent element nobody remembers switching on.
+ */
+export const PREVIOUS_BASE_URL_WINDOW_DAYS = 60;
+
 export const DIRECTORY_NAMES = Object.freeze({
   SHOWS: 'shows',
   TEMP: '.tmp',
+  /**
+   * Cached per-episode artwork, as `/data/.art/{show_id}/{episode_id}.{jpg|png}`.
+   *
+   * Dot-prefixed and outside `shows/` on purpose: a show folder is the user's own
+   * file share, and SelfPod does not create files there that the user did not ask
+   * for (spec §13, lesson 5). Everything under here is derived, and every art_*
+   * column on `episodes` exists so it can be rebuilt.
+   */
+  EPISODE_ART: '.art',
 });
 
 export const FILE_NAMES = Object.freeze({

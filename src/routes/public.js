@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
-import { EPISODE_STATUS, SHOW_STATUS } from '../constants.js';
+import { EPISODE_STATUS, SHOW_STATUS, imageMimeType } from '../constants.js';
 import { ACCESS_KIND } from '../services/stats.js';
 import { resolveContained } from '../lib/contained-path.js';
 import { notFound } from '../lib/errors.js';
+import { etagMatches, notModifiedSince, preferredEncoding } from '../lib/http-headers.js';
 import { signPing } from '../lib/instance-proof.js';
 import { isSafeFilename } from '../lib/slug.js';
 import { tokensMatch } from '../lib/tokens.js';
@@ -60,8 +61,14 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
         showId: extra.showId ?? null,
         statusCode: reply.statusCode,
         // On an abort the Content-Length header describes what was promised, not
-        // what arrived, so claiming it as "sent" would be a lie.
-        bytesSent: aborted ? null : Number(reply.getHeader('content-length')) || null,
+        // what arrived, so claiming it as "sent" would be a lie. A 304 is the opposite
+        // case — a response that completed and deliberately carried no body — so its
+        // caller states the zero. `??` and not `||`, because `0 || null` is null, and
+        // recording a zero that is a fact as the null that means "unknowable" is the
+        // very confusion this line exists to avoid.
+        bytesSent: aborted
+          ? null
+          : (extra.bytesSent ?? (Number(reply.getHeader('content-length')) || null)),
         totalBytes: extra.totalBytes ?? null,
         rangeHeader: request.headers.range ?? null,
         userAgent: request.headers['user-agent'] ?? null,
@@ -160,17 +167,45 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     const built = feeds.build(show.id, { baseUrl });
     if (!built) throw notFound('No feed here.', 'not_found');
 
-    if (request.headers['if-none-match'] === built.etag) {
+    // Set before the answer is chosen, so a 304 carries its validators too. A 304 that
+    // omits them leaves the app with nothing to revalidate against next time — the
+    // cover route has always got this right and the feed never did. `vary` is what
+    // stops a shared cache handing a compressed body to a client that never asked.
+    reply
+      .header('etag', built.etag)
+      .header('last-modified', built.lastModified.toUTCString())
+      // Short: a podcast app polling every few minutes should see edits quickly.
+      .header('cache-control', 'public, max-age=60, must-revalidate')
+      .header('vary', 'accept-encoding');
+
+    // If-None-Match decides on its own when present; If-Modified-Since is consulted
+    // only in its absence. An ETag is a statement about the bytes and a date is a guess
+    // about them, and the two disagreeing is not this handler's to arbitrate.
+    const ifNoneMatch = request.headers['if-none-match'];
+    const stillFresh =
+      ifNoneMatch === undefined
+        ? notModifiedSince(request.headers['if-modified-since'], built.lastModified)
+        : etagMatches(ifNoneMatch, built.etag);
+
+    if (stillFresh) {
+      // Recorded, and recorded *before* the reply goes out. This used to return above
+      // trackAccess, so an app polling every fifteen minutes and correctly getting 304s
+      // was invisible here — and the show page reported a "last checked" that could be
+      // days stale while the app was doing everything right.
+      trackAccess(request, reply, { kind: ACCESS_KIND.FEED, showId: show.id, bytesSent: 0 });
       return reply.status(304).send();
     }
 
-    reply
-      .type('application/rss+xml; charset=utf-8')
-      .header('etag', built.etag)
-      // Short: a podcast app polling every few minutes should see edits quickly.
-      .header('cache-control', 'public, max-age=60, must-revalidate');
+    reply.type('application/rss+xml; charset=utf-8');
+
+    // Negotiated here and nowhere else, which is what keeps compression away from
+    // /media: that route serves already-compressed audio with byte ranges.
+    const coding = preferredEncoding(request.headers['accept-encoding']);
+    const body = coding ? built.encoded[coding] : null;
+    if (body) reply.header('content-encoding', coding);
+
     trackAccess(request, reply, { kind: ACCESS_KIND.FEED, showId: show.id });
-    return built.xml;
+    return body ?? built.xml;
   });
 
   /**
@@ -204,8 +239,18 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     }
 
     const etag = await covers.etag(path);
-    if (etag && request.headers['if-none-match'] === etag) {
+    // The same two fixes as the feed above, for the same reasons: a validator rewritten
+    // in transit still has to match, and a conditional fetch is still a fetch. Two
+    // routes answering the same question differently is where the next bug hides.
+    if (etagMatches(request.headers['if-none-match'], etag)) {
       reply.header('etag', etag);
+      trackAccess(request, reply, {
+        kind: ACCESS_KIND.COVER,
+        showId: show.id,
+        totalBytes: coverStats.size,
+        name: show.cover_filename,
+        bytesSent: 0,
+      });
       return reply.status(304).send();
     }
 
@@ -225,6 +270,93 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       showId: show.id,
       totalBytes: coverStats.size,
       name: show.cover_filename,
+    });
+    return reply.sendFile(basename(path), dirname(path), {
+      cacheControl: false,
+      contentType: false,
+      etag: false,
+    });
+  });
+
+  /**
+   * Per-episode artwork, from the cache the scanner fills in `/data/.art`.
+   *
+   * The literal `cover.jpg` sits exactly where the audio route's `:filename`
+   * parameter is, one segment deeper than the show cover. A static segment beats a
+   * parametric one in Fastify's router, so this wins — and there is a test asserting
+   * it rather than a comment trusting it, because "which route matched" is not the
+   * kind of thing that should be discovered from a 404 in production.
+   *
+   * No content hashing per request: the ETag is the `art_etag` column, and only the
+   * scanner writes this file — in the same step that updates that column.
+   */
+  fastify.get('/media/:slug/:token/:episodeId/cover.jpg', async (request, reply) => {
+    const { slug, token, episodeId } = request.params;
+    const show = resolveShow(slug, token);
+
+    const episode = episodes.get(episodeId);
+    if (!episode || episode.show_id !== show.id) throw notFound('No artwork here.', 'no_cover');
+    if (episode.status === EPISODE_STATUS.REMOVED) throw notFound('No artwork here.', 'no_cover');
+    // An episode with no artwork of its own is not an error: the feed points such an
+    // item at the show cover, so nothing should ever ask for this URL.
+    if (!episode.art_filename) throw notFound('No artwork for this episode.', 'no_cover');
+
+    // Same containment rule as the two routes around it. This directory is SelfPod's
+    // own and holds no symlinks, but `art_filename` is a database value, and a
+    // restored or hand-edited database is exactly the input this check exists for.
+    const resolvedArt = await resolveContained(
+      join(config.episodeArtDir, episode.show_id),
+      episode.art_filename,
+    );
+    if (!resolvedArt.path) {
+      request.log.warn(
+        { file: episode.art_filename, show: show.slug, reason: resolvedArt.reason },
+        'episode artwork could not be served from inside the artwork cache',
+      );
+      throw notFound('No artwork for this episode.', 'no_cover');
+    }
+    const path = resolvedArt.path;
+
+    let artStats;
+    try {
+      artStats = await stat(path);
+    } catch {
+      throw notFound('No artwork for this episode.', 'no_cover');
+    }
+
+    // Quoted here rather than in the column, so the stored value stays a plain hash
+    // that the feed can use as a `?v=` buster without stripping anything.
+    const etag = episode.art_etag ? `"${episode.art_etag}"` : null;
+    if (etagMatches(request.headers['if-none-match'], etag)) {
+      reply.header('etag', etag);
+      trackAccess(request, reply, {
+        kind: ACCESS_KIND.COVER,
+        showId: show.id,
+        episodeId: episode.id,
+        totalBytes: artStats.size,
+        name: episode.art_filename,
+        bytesSent: 0,
+      });
+      return reply.status(304).send();
+    }
+
+    reply
+      .header('content-type', imageMimeType(episode.art_filename) ?? 'application/octet-stream')
+      // The same hour as the show cover, for the same reason: artwork changes, and
+      // the ETag is what stops well-behaved caches refetching what has not.
+      .header('cache-control', 'public, max-age=3600');
+    if (etag) reply.header('etag', etag);
+
+    // `kind` is deliberately COVER and not a new kind of its own. Artwork is artwork
+    // as far as every existing statistics query is concerned, and adding a fifth kind
+    // would split each of them for a distinction nobody has asked to see. The episode
+    // id rides along, so the split is still available to anyone who wants it later.
+    trackAccess(request, reply, {
+      kind: ACCESS_KIND.COVER,
+      showId: show.id,
+      episodeId: episode.id,
+      totalBytes: artStats.size,
+      name: episode.art_filename,
     });
     return reply.sendFile(basename(path), dirname(path), {
       cacheControl: false,

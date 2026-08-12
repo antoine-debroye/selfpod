@@ -1,0 +1,80 @@
+<%
+  const entries = it.entries || [];
+  const kindLabels = { download: 'Download', stream: 'Stream', cover: 'Artwork', feed: 'Feed check' };
+  const showEpisode = it.hideEpisode !== true;
+  const cols = showEpisode ? 6 : 5;
+  /* Rows only — no wrapper element of any kind.
+
+     "Show older" appends by swapping the pager row for the next page of rows plus a
+     fresh pager, so every byte of this response has to be a <tr>: anything else in a
+     response bound for a <tbody> is dropped by the HTML parser before htmx sees it. */
+%>
+<% for (const row of entries) { %>
+  <tr<%~ row.ok && !row.incomplete ? '' : ' class="is-missing"' %>>
+    <td class="ep-date mono" title="<%= it.helpers.formatDateTime(row.requestedAt) %>">
+      <%= it.helpers.relativeTime(row.requestedAt) %>
+    </td>
+    <td>
+      <span class="badge badge-mute badge--tight"><%= kindLabels[row.kind] || row.kind %></span>
+      <% if (!showEpisode && row.rangeHeader) { %>
+        <div class="log-range mono"><%= row.rangeHeader %></div>
+      <% } %>
+    </td>
+    <% if (showEpisode) { %>
+    <td>
+      <div class="ep-title">
+        <% if (row.episodeTitle) { %>
+          <% if (row.showSlug) { %>
+            <a href="/shows/<%= encodeURIComponent(row.showSlug) %>/episodes/<%= encodeURIComponent(row.episode_id) %>"><%= row.episodeTitle %></a>
+          <% } else { %>
+            <%= row.episodeTitle %>
+          <% } %>
+        <% } else if (row.showTitle && row.showSlug) { %>
+          <a href="/shows/<%= encodeURIComponent(row.showSlug) %>"><%= row.showTitle %></a>
+        <% } else { %>
+          <span class="dim"><%= row.showTitle || 'unknown show' %></span>
+        <% } %>
+        <% if (row.rangeHeader) { %>
+          <small class="mono">range <%= row.rangeHeader %></small>
+        <% } else if (row.episodeTitle) { %>
+          <small><%= row.showTitle %></small>
+        <% } %>
+      </div>
+    </td>
+    <% } %>
+    <td class="dim"><%= row.client || 'Unknown' %></td>
+    <td class="size">
+      <%= it.helpers.formatBytes(row.bytesSent) %><%
+      %><% if (row.totalBytes && row.bytesSent !== null && row.bytesSent < row.totalBytes) { %><%
+        %><small class="dim"> of <%= it.helpers.formatBytes(row.totalBytes) %></small><%
+      %><% } %>
+    </td>
+    <td>
+      <% if (!row.ok) { %>
+        <span class="badge badge-err badge--tight"><span class="d" aria-hidden="true"></span><%= row.statusCode %></span>
+      <% } else if (row.incomplete) { %>
+        <span class="badge badge-warn badge--tight"><span class="d" aria-hidden="true"></span>Partial</span>
+      <% } else { %>
+        <span class="badge badge-ok badge--tight"><span class="d" aria-hidden="true"></span><%= row.statusCode %></span>
+      <% } %>
+      <% if (row.error) { %>
+        <div class="log-error"><%= row.error %></div>
+      <% } %>
+    </td>
+  </tr>
+<% } %>
+
+<% if (it.hasMore && it.log) { %>
+  <tr class="log-more-row" id="access-log-more">
+    <td colspan="<%= cols %>">
+      <div class="log-more">
+        <button class="btn btn-ghost btn-sm" type="button"
+                hx-get="/ui/stats/log/rows?<%= it.log.qs %><%= it.log.qs ? '&' : '' %>offset=<%= it.nextOffset %>"
+                hx-target="#access-log-more" hx-swap="outerHTML">
+          Show older
+        </button>
+        <span class="dim"><%= it.loaded %> of <%= it.total %> shown</span>
+      </div>
+    </td>
+  </tr>
+<% } %>

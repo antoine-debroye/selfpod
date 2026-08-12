@@ -2,39 +2,55 @@
   const o = it.overview;
   const rows = it.showStats || [];
   const busiest = it.busiest || [];
+  const periodLabel = it.range.days ? `the previous ${it.range.days} days` : 'the previous period';
+
+  /* One place decides whether a movement is good news. More downloads and more failures
+     are not the same news, so the card says which way it reads and the helper works out
+     the tone; the stylesheet never has to know which card it is on. */
+  function change(key, higherIsBetter) {
+    return it.helpers.changeLine(o.change?.[key], { higherIsBetter, periodLabel });
+  }
 %>
 <div class="page-title">
   <div>
     <div class="sub">
-      <% if (o.lastAt) { %>last request <%= it.helpers.relativeTime(o.lastAt) %><% } else { %>no requests recorded yet<% } %>
+      <% if (o.lastEverAt) { %>last request <%= it.helpers.relativeTime(o.lastEverAt) %><% } else { %>no requests recorded yet<% } %>
+      · <%= it.range.label.toLowerCase() %>
     </div>
     <h1>Statistics</h1>
   </div>
 </div>
 
+<%~ include('../partials/stats-range', it) %>
+
 <div class="stat-grid">
-  <div class="stat-card">
-    <div class="stat-card__n"><%= o.downloads.toLocaleString('en') %></div>
-    <div class="stat-card__l">Downloads</div>
-    <div class="stat-card__h">whole-file fetches — an app saving an episode for offline listening</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-card__n"><%= o.streams.toLocaleString('en') %></div>
-    <div class="stat-card__l">Streams</div>
-    <div class="stat-card__h">partial fetches — a player starting playback or seeking</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-card__n"><%= it.helpers.formatBytes(o.bytes) %></div>
-    <div class="stat-card__l">Audio served</div>
-    <div class="stat-card__h">total sent to subscribers</div>
-  </div>
-  <div class="stat-card<%= o.failures ? ' stat-card--bad' : '' %>">
-    <div class="stat-card__n"><%= o.failures.toLocaleString('en') %></div>
-    <div class="stat-card__l">Failed requests</div>
-    <div class="stat-card__h">
-      <% if (o.failures) { %>something a subscriber asked for could not be served<% } else { %>nothing has failed<% } %>
+  <%
+    const cards = [
+      { n: o.downloads.toLocaleString('en'), l: 'Downloads', d: change('downloads', true),
+        h: 'whole-file fetches — an app saving an episode for offline listening' },
+      { n: o.streams.toLocaleString('en'), l: 'Streams', d: change('streams', true),
+        h: 'partial fetches — a player starting playback or seeking' },
+      { n: it.helpers.formatBytes(o.bytes), l: 'Audio served', d: change('bytes', true),
+        h: 'total sent to subscribers' },
+      { n: o.failures.toLocaleString('en'), l: 'Failed requests', d: change('failures', false),
+        bad: Boolean(o.failures),
+        h: o.failures ? 'something a subscriber asked for could not be served' : 'nothing has failed' },
+    ];
+  %>
+  <% for (const card of cards) { %>
+    <div class="stat-card<%= card.bad ? ' stat-card--bad' : '' %>">
+      <div class="stat-card__n"><%= card.n %></div>
+      <div class="stat-card__l"><%= card.l %></div>
+      <% if (card.d) { %>
+        <div class="stat-card__d stat-card__d--<%= card.d.tone %>">
+          <span aria-hidden="true"><%= card.d.glyph %></span><%= card.d.label %>
+        </div>
+      <% } else { %>
+        <div class="stat-card__d stat-card__d--none">no earlier period to compare with</div>
+      <% } %>
+      <div class="stat-card__h"><%= card.h %></div>
     </div>
-  </div>
+  <% } %>
 </div>
 
 <p class="help-note" style="margin:16px 0 18px">
@@ -64,6 +80,9 @@
   </div>
 <% } %>
 
+<%~ include('../partials/stats-chart-daily', it) %>
+<%~ include('../partials/stats-chart-apps', it) %>
+
 <div class="form-card" style="margin-bottom:18px">
   <div class="ftitle">Per show</div>
   <div class="fdesc">Downloads and streams counted separately, plus how often podcast apps checked the feed.</div>
@@ -79,7 +98,6 @@
             <th scope="col">Streams</th>
             <th scope="col">Served</th>
             <th scope="col">Feed checks</th>
-            <th scope="col">Apps</th>
             <th scope="col">Failures</th>
           </tr>
         </thead>
@@ -101,7 +119,6 @@
                   <small class="dim">· <%= it.helpers.relativeTime(row.feedLastAt) %></small>
                 <% } %>
               </td>
-              <td class="dim"><%= row.clients.length ? row.clients.map((c) => c.client).join(', ') : '—' %></td>
               <td>
                 <% if (row.failures) { %>
                   <a class="badge badge-err badge--tight" href="/stats?showId=<%= encodeURIComponent(row.slug) %>&failuresOnly=1"><span class="d" aria-hidden="true"></span><%= row.failures %></a>
@@ -154,28 +171,12 @@
 <% } %>
 
 <div class="form-card">
-  <div class="episode-table__head" style="justify-content:space-between">
-    <div>
-      <div class="ftitle" style="margin:0">Access log</div>
-      <div class="fdesc" style="margin:2px 0 0"><%= it.total.toLocaleString('en') %> request<%= it.total === 1 ? '' : 's' %> recorded</div>
-    </div>
-    <form class="inline-form" method="get" action="/stats">
-      <label class="sr-only" for="log-show">Filter by show</label>
-      <select id="log-show" name="showId"
-              hx-get="/ui/stats/log" hx-include="closest form" hx-target="#access-log" hx-swap="outerHTML">
-        <option value="">All shows</option>
-        <% for (const show of it.shows) { %>
-          <option value="<%= show.slug %>"<%= it.showFilter === show.slug ? ' selected' : '' %>><%= show.title %></option>
-        <% } %>
-      </select>
-      <label class="check-inline">
-        <input type="checkbox" name="failuresOnly" value="1"<%= it.failuresOnly ? ' checked' : '' %>
-               hx-get="/ui/stats/log" hx-include="closest form" hx-target="#access-log" hx-swap="outerHTML">
-        Failures only
-      </label>
-      <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
-    </form>
+  <div class="ftitle">Access log</div>
+  <div class="fdesc">
+    <%= it.total.toLocaleString('en') %> request<%= it.total === 1 ? '' : 's' %> match<%= it.total === 1 ? 'es' : '' %>
+    these filters. The CSV holds every one of them, not only the rows loaded here.
   </div>
 
+  <%~ include('../partials/stats-log-filters', it) %>
   <%~ include('../partials/access-log', it) %>
 </div>

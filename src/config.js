@@ -83,6 +83,7 @@ export function loadConfig(env = process.env) {
     dataDir,
     showsDir: join(dataDir, DIRECTORY_NAMES.SHOWS),
     tempDir: join(dataDir, DIRECTORY_NAMES.TEMP),
+    episodeArtDir: join(dataDir, DIRECTORY_NAMES.EPISODE_ART),
     databasePath: join(dataDir, FILE_NAMES.DATABASE),
     configPath: join(dataDir, FILE_NAMES.CONFIG),
 

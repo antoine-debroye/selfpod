@@ -9,6 +9,7 @@ import { createEventBus } from '../../src/lib/events.js';
 import { createActivity } from '../../src/services/activity.js';
 import { bootstrap } from '../../src/services/bootstrap.js';
 import { createCovers } from '../../src/services/covers.js';
+import { createEpisodeArt } from '../../src/services/episode-art.js';
 import { createEpisodes } from '../../src/services/episodes.js';
 import { createFeeds } from '../../src/services/feed.js';
 import { createHealth } from '../../src/services/health.js';
@@ -16,8 +17,11 @@ import { createMetadata } from '../../src/services/metadata.js';
 import { createPresenters } from '../../src/services/presenters.js';
 import { createScanner } from '../../src/services/scanner.js';
 import { createSettings } from '../../src/services/settings.js';
+import { createReadiness } from '../../src/services/readiness.js';
 import { createStats } from '../../src/services/stats.js';
+
 import { createShows } from '../../src/services/shows.js';
+import { createTimeline } from '../../src/services/timeline.js';
 import { copyFile } from 'node:fs/promises';
 import { FIXTURE_DIR, silentLogger } from './harness.js';
 import { SETTING_KEYS } from '../../src/services/settings.js';
@@ -41,6 +45,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
 
   await mkdir(config.showsDir, { recursive: true });
   await mkdir(config.tempDir, { recursive: true });
+  await mkdir(config.episodeArtDir, { recursive: true });
 
   const { db } = openDatabase(config.databasePath, { logger: silentLogger });
   const events = createEventBus();
@@ -52,21 +57,24 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
 
   const activity = createActivity({ db, config, logger: silentLogger });
   const covers = createCovers({ config, logger: silentLogger });
+  const episodeArt = createEpisodeArt({ config, covers, logger: silentLogger });
   const metadata = createMetadata({ logger: silentLogger });
-  const shows = createShows({ db, config, events, logger: silentLogger, settings });
-  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger });
+  const shows = createShows({ db, config, events, logger: silentLogger, settings, episodeArt });
+  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger, episodeArt });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger: silentLogger });
   const scanner = createScanner({
     db, config, settings, events, logger: silentLogger,
-    shows, episodes, covers, metadata, activity, health,
+    shows, episodes, covers, episodeArt, metadata, activity, health,
   });
 
   const stats = createStats({ db, logger: silentLogger });
-  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats });
+  const readiness = createReadiness({ covers });
+  const timeline = createTimeline({ db, logger: silentLogger });
+  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats, readiness });
 
   const services = {
-    config, logger: silentLogger, db, events, settings, health, activity, covers, metadata,
-    shows, episodes, feeds, scanner, stats, ...presenters,
+    config, logger: silentLogger, db, events, settings, health, activity, covers, episodeArt, metadata,
+    shows, episodes, feeds, scanner, stats, timeline, readiness, ...presenters,
     watcher: { status: () => ({ mode: 'events', enabled: true, degraded: false, lastEventAt: null }), restart: async () => {} },
     scheduler: { status: () => ({ running: false, intervalSeconds: 300, lastRunAt: null, nextRunAt: null }) },
   };

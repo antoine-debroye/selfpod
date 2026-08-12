@@ -1,11 +1,14 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  EMBEDDED_ART_MAX_BYTES,
+  EPISODE_ART_SIDECAR_EXTENSIONS,
   EPISODE_STATUS,
   SCAN_TRIGGER,
   SHOW_STATUS,
   audioMimeType,
+  imageMimeType,
   isSupportedAudioFile,
 } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
@@ -34,6 +37,7 @@ export function createScanner({
   shows,
   episodes,
   covers,
+  episodeArt,
   metadata,
   activity,
   health,
@@ -334,6 +338,15 @@ export function createScanner({
     const claimedIdentities = new Map();
     const audioFiles = [];
     const unsupported = [];
+    /**
+     * lowercased image filename → the name as it really is on disk.
+     *
+     * Built once from the listing the scan already has, so looking for
+     * `ep-one.jpg` beside `ep-one.mp3` costs a Map lookup rather than a readdir or
+     * four stat calls per episode. Case-insensitive because the shares these files
+     * arrive over usually are.
+     */
+    const imagesByLower = new Map();
 
     for (const entry of entries) {
       if (entry.isDirectory()) continue; // subdirectories are reserved (spec §5)
@@ -341,6 +354,7 @@ export function createScanner({
       if (entry.name.startsWith('.')) continue;
       if (isSupportedAudioFile(entry.name)) audioFiles.push(entry.name);
       else if (isNoteworthyNonAudio(entry.name)) unsupported.push(entry.name);
+      if (imageMimeType(entry.name)) imagesByLower.set(entry.name.toLowerCase(), entry.name);
     }
 
     filesFound = audioFiles.length;
@@ -395,18 +409,40 @@ export function createScanner({
           // Claim the identity even on the fast path, so a byte-identical sibling
           // later in this scan is reported rather than quietly stealing the row.
           claimedIdentities.set(byName.identity_key, filename);
+
+          const fastFields = {};
           if (
             byName.status === EPISODE_STATUS.MISSING ||
             byName.status === EPISODE_STATUS.EXPIRED
           ) {
-            episodes.setSystemFields(byName.id, {
-              status: EPISODE_STATUS.ACTIVE,
-              missing_since: null,
-              removed_at: null,
-            });
+            fastFields.status = EPISODE_STATUS.ACTIVE;
+            fastFields.missing_since = null;
+            fastFields.removed_at = null;
             if (byName.status === EPISODE_STATUS.EXPIRED) {
               warnings.push({ file: filename, message: returnedFromExpiry(filename) });
             }
+          }
+
+          // Artwork is checked even here, where nothing about the audio changed,
+          // for two reasons the fast path cannot see on its own. A sidecar image is
+          // a *different file*: replacing `ep-one.jpg` does not move `ep-one.mp3`'s
+          // name, size or mtime, so without this a swapped sidecar would never be
+          // noticed. And `/data/.art` is a cache that can be lost while the database
+          // survives — restore `db.sqlite` from a backup and every row still names an
+          // image that is not there. Neither costs a read when nothing is wrong.
+          const fastArt = await syncEpisodeArt({
+            show,
+            dir,
+            filename,
+            path,
+            episode: byName,
+            imagesByLower,
+          });
+          for (const warning of fastArt.warnings) warnings.push(warning);
+          Object.assign(fastFields, fastArt.fields);
+
+          if (Object.keys(fastFields).length) {
+            episodes.setSystemFields(byName.id, fastFields);
             updated += 1;
             changed = true;
           }
@@ -467,8 +503,9 @@ export function createScanner({
         }
 
         // Re-read duration only when the bytes actually changed.
+        let meta = null;
         if (existing.duration_seconds === null || fields.file_size_bytes !== undefined) {
-          const meta = await metadata.read(path);
+          meta = await metadata.read(path);
           if (meta.error) {
             warnings.push({
               file: filename,
@@ -483,6 +520,23 @@ export function createScanner({
             fields.title = meta.title;
           }
         }
+
+        const changedArt = await syncEpisodeArt({
+          show,
+          dir,
+          filename,
+          path,
+          episode: existing,
+          imagesByLower,
+          meta,
+          // A forced rescan means "re-derive everything from the files", and it is
+          // also the one route by which a library that predates per-episode artwork
+          // picks it up: nothing about those files changes, so no other path would
+          // ever look inside their tags again.
+          probeEmbedded: shouldRehash,
+        });
+        for (const warning of changedArt.warnings) warnings.push(warning);
+        Object.assign(fields, changedArt.fields);
 
         if (Object.keys(fields).length) {
           episodes.setSystemFields(existing.id, fields);
@@ -521,6 +575,20 @@ export function createScanner({
       seenEpisodeIds.add(created.id);
       added += 1;
       changed = true;
+
+      const newArt = await syncEpisodeArt({
+        show,
+        dir,
+        filename,
+        path,
+        episode: created,
+        imagesByLower,
+        meta,
+        probeEmbedded: true,
+      });
+      for (const warning of newArt.warnings) warnings.push(warning);
+      if (Object.keys(newArt.fields).length) episodes.setSystemFields(created.id, newArt.fields);
+
       logger?.info({ slug: show.slug, filename }, 'new episode');
     }
 
@@ -572,6 +640,169 @@ export function createScanner({
     });
 
     return { filesFound, added, updated, missing: missingCount, removed: 0, errors, warnings };
+  }
+
+  /**
+   * Brings one episode's artwork into line with what is on disk.
+   *
+   * Sources, first match wins: a sidecar image beside the audio with the same stem;
+   * then the picture in the file's own tags; then nothing, which leaves the episode
+   * on the show cover exactly as before this feature existed. Sidecar first because
+   * it is the one an owner can change without re-tagging — dropping `ep-one.jpg`
+   * beside `ep-one.mp3` is the whole interface.
+   *
+   * **It returns only the columns that actually changed, and that is the point.**
+   * `episodes.setSystemFields` bumps `updated_at`; `updated_at` feeds `lastBuildDate`;
+   * `lastBuildDate` feeds the feed's ETag. Re-extracting byte-identical artwork and
+   * writing it back unconditionally would therefore re-date every episode in the
+   * library and hand every subscriber's app a feed it has to download in full — for a
+   * change that did not happen. So the freshly computed `art_etag` is compared against
+   * the stored one, and when they agree nothing is written at all.
+   *
+   * Nothing here throws: one unreadable image becomes a warning naming the file, and
+   * the scan carries on.
+   */
+  async function syncEpisodeArt({
+    show,
+    dir,
+    filename,
+    path,
+    episode,
+    imagesByLower,
+    meta = null,
+    probeEmbedded = false,
+  }) {
+    const warnings = [];
+    const none = { fields: {}, warnings };
+    if (!episodeArt || !episode) return none;
+    // A removed episode is not in the feed and is not served, so its artwork is left
+    // exactly as it was — restoring it should bring back everything, not a blank.
+    if (episode.status === EPISODE_STATUS.REMOVED) return none;
+
+    const next = {
+      art_source: null,
+      art_filename: null,
+      art_sidecar_name: null,
+      art_sidecar_mtime: null,
+      art_width: null,
+      art_height: null,
+      art_etag: null,
+    };
+
+    const sidecarName = findSidecar(filename, imagesByLower);
+
+    // Does the file this row points at still exist? Restoring `db.sqlite` without
+    // `/data/.art` leaves a whole library of rows naming images that are not there.
+    const cached = episode.art_filename
+      ? await fileExists(episodeArt.pathFor(show.id, episode.art_filename))
+      : false;
+
+    if (sidecarName) {
+      const sidecarPath = join(dir, sidecarName);
+      let sidecarMtime;
+      try {
+        sidecarMtime = (await stat(sidecarPath)).mtime.toISOString();
+      } catch (err) {
+        warnings.push(activity.formatFileError(sidecarName, err));
+        return none;
+      }
+
+      const unchanged =
+        episode.art_source === 'sidecar' &&
+        episode.art_sidecar_name === sidecarName &&
+        episode.art_sidecar_mtime === sidecarMtime &&
+        Boolean(episode.art_etag) &&
+        cached;
+      if (unchanged) return none;
+
+      try {
+        const stored = await episodeArt.store({
+          showId: show.id,
+          episodeId: episode.id,
+          buffer: await readFile(sidecarPath),
+          sourceFormat: imageMimeType(sidecarName),
+        });
+        next.art_source = 'sidecar';
+        next.art_filename = stored.filename;
+        next.art_sidecar_name = sidecarName;
+        next.art_sidecar_mtime = sidecarMtime;
+        next.art_width = stored.width;
+        next.art_height = stored.height;
+        next.art_etag = stored.etag;
+        if (stored.warning) warnings.push({ file: sidecarName, message: stored.warning.message });
+      } catch (err) {
+        warnings.push({
+          file: sidecarName,
+          message: `\`${sidecarName}\` could not be used as artwork for \`${filename}\`, so this episode keeps using the show's cover. ${
+            activity.formatFileError(sidecarName, err).message
+          }`,
+        });
+        return none;
+      }
+      return { fields: diffArtFields(episode, next), warnings };
+    }
+
+    // No sidecar, so the answer is the file's own tags or nothing. Reading tags is
+    // only worth it when something could actually have changed — otherwise a
+    // five-minute poll would open every file in the library for no reason.
+    const needsTags =
+      Boolean(meta) ||
+      probeEmbedded ||
+      // The cache was lost but the row says there was artwork: rebuild it.
+      (episode.art_source === 'embedded' && !cached) ||
+      // The sidecar that was the source has gone; fall back to whatever is left.
+      episode.art_source === 'sidecar';
+    if (!needsTags) return none;
+
+    const tags = meta ?? (await metadata.read(path));
+
+    // The file could not be read at all. That is already reported by the caller, and
+    // it says nothing about the artwork — so whatever is stored is left exactly as it
+    // is. Clearing it here would turn one unreadable moment on a network share into a
+    // re-dated episode with its artwork thrown away.
+    if (tags.error) return none;
+
+    if (tags.pictureTooLarge) {
+      warnings.push({
+        file: filename,
+        message: `The artwork embedded in \`${filename}\` is larger than ${Math.round(
+          EMBEDDED_ART_MAX_BYTES / (1024 * 1024),
+        )} MB, so SelfPod has left it alone and this episode uses the show's cover. Embed a smaller image, or put one called \`${sidecarSuggestion(
+          filename,
+        )}\` beside the file.`,
+      });
+      return { fields: diffArtFields(episode, next), warnings };
+    }
+
+    if (!tags.picture?.data?.byteLength) {
+      // Nothing to store. The columns are cleared rather than left stale, so an
+      // episode whose artwork was removed goes back to the show cover.
+      return { fields: diffArtFields(episode, next), warnings };
+    }
+
+    try {
+      const stored = await episodeArt.store({
+        showId: show.id,
+        episodeId: episode.id,
+        buffer: tags.picture.data,
+        sourceFormat: tags.picture.format,
+      });
+      next.art_source = 'embedded';
+      next.art_filename = stored.filename;
+      next.art_width = stored.width;
+      next.art_height = stored.height;
+      next.art_etag = stored.etag;
+      if (stored.warning) warnings.push({ file: filename, message: stored.warning.message });
+    } catch (err) {
+      warnings.push({
+        file: filename,
+        message: `The artwork embedded in \`${filename}\` could not be read, so this episode uses the show's cover. ${
+          activity.formatFileError(filename, err).message
+        }`,
+      });
+      return none;
+    }
+    return { fields: diffArtFields(episode, next), warnings };
   }
 
   async function syncCover(show, dir) {
@@ -630,6 +861,62 @@ export function createScanner({
   }
 
   return api;
+}
+
+/** The seven scanner-owned artwork columns, in the order the migration adds them. */
+const ART_COLUMNS = Object.freeze([
+  'art_source',
+  'art_filename',
+  'art_sidecar_name',
+  'art_sidecar_mtime',
+  'art_width',
+  'art_height',
+  'art_etag',
+]);
+
+/**
+ * Only the artwork columns whose value genuinely differs.
+ *
+ * The whole point of the `art_etag` column: identical bytes hash identically, so
+ * re-extracting artwork that has not changed produces an empty object here, no
+ * `setSystemFields` call, no new `updated_at`, no new feed ETag, and no subscriber
+ * re-downloading a library that did not change.
+ */
+function diffArtFields(episode, next) {
+  const fields = {};
+  for (const key of ART_COLUMNS) {
+    const before = episode[key] ?? null;
+    const after = next[key] ?? null;
+    if (before !== after) fields[key] = after;
+  }
+  return fields;
+}
+
+/** `ep-one.mp3` → the real-cased `ep-one.JPG` on disk, or null. First match wins. */
+function findSidecar(filename, imagesByLower) {
+  if (!imagesByLower?.size) return null;
+  const dot = filename.lastIndexOf('.');
+  const stem = (dot > 0 ? filename.slice(0, dot) : filename).toLowerCase();
+  for (const extension of EPISODE_ART_SIDECAR_EXTENSIONS) {
+    const actual = imagesByLower.get(stem + extension);
+    if (actual) return actual;
+  }
+  return null;
+}
+
+/** The filename to tell the owner to use, in their own file's terms. */
+function sidecarSuggestion(filename) {
+  const dot = filename.lastIndexOf('.');
+  return `${dot > 0 ? filename.slice(0, dot) : filename}.jpg`;
+}
+
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Shared by both scan paths, since either can be the one to notice the return. */

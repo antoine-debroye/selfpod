@@ -19,6 +19,14 @@
       may keep serving cached copies briefly. Rotating stops new access; it cannot un-share what is
       already out there.
     </p>
+    <%
+      /* Changing the public base URL forwards subscribers automatically, so the
+         difference has to be said here rather than left to be discovered. */
+    %>
+    <p class="help-note">
+      There is no forwarding note for a rotated token. Forwarding works by answering at the old address,
+      and the point of rotating is that the old address stops answering.
+    </p>
     <div class="modal__actions">
       <button class="btn btn-ghost btn-sm" type="button" data-modal-close>Cancel</button>
       <button class="btn btn-danger btn-sm" type="submit">Rotate token</button>

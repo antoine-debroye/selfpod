@@ -7,6 +7,165 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.5.0 — 2026-08-12
+
+### Fixed
+
+- **A podcast app checking your feed correctly was invisible.** When nothing had
+  changed, SelfPod answered "you already have it" and returned before recording the
+  request — so an app polling every fifteen minutes never appeared in the feed-check
+  count, and a show could report "last checked three days ago" while an app was doing
+  everything right. That figure exists to answer *why hasn't my app picked up the new
+  episode?*, and it was answering it wrongly. Artwork requests had the same fault.
+
+  **This changes your numbers.** Feed checks will jump by one to two orders of
+  magnitude, older rows are not backfilled, so any period spanning this upgrade mixes
+  two counting rules. No bandwidth figure moves — feed traffic has never counted as
+  audio served and still does not. The access log grows accordingly: one subscriber
+  polling one show every fifteen minutes is about 96 rows a day, kept for a year.
+
+- **Behind Cloudflare, no feed check ever succeeded.** SelfPod compared the caller's
+  validator to its own as an exact string, and Cloudflare — which the README
+  recommends — re-labels those validators in transit. The comparison therefore never
+  matched, and every poll downloaded the entire feed again. It now follows the HTTP
+  rules, which cover that case and several others.
+
+- **A publish date in the future published immediately.** The episode form has always
+  offered a date picker, so setting tomorrow looked exactly like scheduling. It also
+  made the feed's build date churn every sixty seconds for as long as any episode
+  carried a future date, which meant every subscriber re-downloaded the whole feed
+  each time. See **Scheduled episodes** below.
+
+- Removing, restoring or deleting an episode gave no confirmation when JavaScript was
+  on — the message was assembled and then discarded. The same actions without
+  JavaScript had always worked.
+
+- `npm run scan` pointed at a script that does not exist.
+
+### Added
+
+- **Scheduled episodes.** A publish date in the future now holds an episode out of the
+  feed until then, and it joins on its own at its time with nothing running and nobody
+  clicking — within a minute, and visible to subscribers whenever their app next
+  checks. The episode table, the show card and the episode page all say what is
+  waiting and when. Nothing is stored to make this work: a scheduled episode is an
+  ordinary one whose date has not arrived, so it needs no new state and cannot get
+  stuck.
+
+- **Directory readiness, on each show's page.** A checklist of everything that would
+  make Apple Podcasts or Spotify refuse the feed — no artwork at all, artwork in a
+  format they do not take, artwork outside 1400–3000px square, an empty description, no
+  owner email. You used to find that out at submission time, or never. Each row links
+  to the panel that fixes it, and the checks that already pass are kept, collapsed, so
+  you can see what was looked at. It is deliberately not a banner and not a badge:
+  most SelfPod feeds are private and will never be submitted anywhere.
+
+  One of those checks is worth naming: a `cover.webp` is a perfectly good cover here
+  and an outright rejection at Apple, and because artwork is served from a URL ending
+  `cover.jpg` whatever the file really is, nothing about the address gave it away.
+
+- **Per-episode artwork**, with nothing to fill in. SelfPod now reads the artwork
+  embedded in an audio file's own tags, or an image left beside it with the same name
+  (`my-episode.mp3` → `my-episode.jpg`). A sidecar wins over an embedded picture,
+  because it is the one you can change without re-tagging. Extracted images are cached
+  under `/data`, never written into your show folder.
+
+- **Trailers and bonus episodes**, via a new *Episode type* on each episode. SelfPod
+  never guesses this from a filename — `trailer-park ep 3.mp3` is not a trailer, and a
+  wrong guess is invisible until an app orders the show oddly.
+
+- **Serial shows**, for a podcast meant to be heard from the beginning rather than
+  newest-first.
+
+- **A switch to keep a show out of podcast directories.** A feed's URL is its own
+  password, and this asks Apple and the others to leave it out of their index should it
+  ever leak. It defaults to off, exactly as every feed has behaved until now, so
+  nothing that is listed today can be de-listed by updating. Turning it on also refuses
+  a deliberate submission — so readiness says so, rather than letting you wonder why
+  Apple keeps declining.
+
+- **Subscribers are forwarded after a public address change.** Changing the address
+  used to break every subscription silently; each feed now carries a note pointing at
+  the new one for sixty days, or until you say the move is done. There is no equivalent
+  for a rotated feed token, and the modal now says so plainly: forwarding works by
+  answering at the old address, and the point of rotating is that the old address stops
+  answering.
+
+- **Feeds are compressed**, which for a large one is roughly a twentieth of the bytes
+  over a home connection. Compression happens once when the feed changes rather than
+  once per poll, and audio is deliberately left alone — it is already compressed, and a
+  content-coding there would break seeking.
+
+- The category, subcategory and explicit flag applied to shows SelfPod discovers on its
+  own are now editable in Settings. They have always existed and never had a way in, so
+  every discovered show got "Technology".
+
+- `<itunes:episodeType>` on every item, `<itunes:type>`, `<itunes:block>` when blocking
+  is on, `<itunes:new-feed-url>` during a move, and the owner address on
+  `<podcast:locked>` that the Podcasting 2.0 spec asks for.
+
+## 1.4.0 — 2026-08-12
+
+### Added
+
+- **An episode timeline on Activity**, above the scan history. The scan log has always
+  said "3 added" without saying *which* three — the only place a new episode's name
+  appeared was the container log. The timeline names each episode, its show and the day
+  it arrived, along with anything that later happened to it: went missing, removed from
+  the feed, or dropped after the grace period. It needs no migration and no new
+  bookkeeping, because it reads dates the episodes table has always carried, so it
+  covers your whole library back to the first file you ever dropped in. The trade is
+  stated on the page: it describes the state each episode is in now rather than a
+  running log, so an episode that went missing and came back leaves no trace of having
+  gone.
+
+- **A period to measure Statistics over** — 7 days, 30 days, 90 days or all time —
+  driving every figure, chart, table and log row on the page at once. Each headline
+  number now carries how it compares with the period immediately before it. "412
+  downloads" all-time could not tell you whether this month beat last; "+46% vs the
+  previous 30 days" can. A rise from nothing is reported as a count rather than as
+  "+100%", which would be a percentage measured from no data.
+
+- **Two charts.** *Requests over time* stacks downloads and streams per day, and *Which
+  apps are fetching* replaces the comma-separated list of app names with proportional
+  bars — the list told you who was there but nothing about how much of your audience
+  each one was. Both are drawn with ordinary HTML and CSS, with no charting library and
+  no JavaScript, and both put their numbers in a table beside the picture so a screen
+  reader gets data rather than ninety empty boxes.
+
+- **Real filters on both logs.** The access log filters by period, show, request type
+  and app, on top of failures-only, and sorts by time, size sent or result. The scan log
+  filters by trigger and by outcome. Filter and sort state now lives in the address bar,
+  so a filtered view survives a reload, can be bookmarked, and the Back button works.
+
+- **A CSV export of the access log**, honouring whatever filters are active and holding
+  every matching row rather than the page on screen. Titles containing commas, quotes or
+  newlines survive the round trip, and a title beginning `=` is exported so a spreadsheet
+  shows it as text instead of running it.
+
+- **An "Added" column** on each show's episode table, and the same date on an episode's
+  own page. `created_at` has always been recorded and never shown.
+
+### Fixed
+
+- **"Show older" no longer throws away the rows you were reading.** Both logs replaced
+  the visible page with the next one, and the counter read "40 of 312" however deep you
+  had gone. New rows are now appended below the ones already on screen, and the count
+  says how many of the total you are actually looking at.
+
+- **The scan log's "Load more" no longer nested a copy of the whole list inside itself**
+  on every click, producing several elements sharing one id.
+
+### Changed
+
+- The Statistics per-show table drops its *Apps* column, which is now the app chart
+  above it — and, with nothing needing per-show app lists, the page went from four
+  database queries per show to two for all of them.
+
+- The access log's list and total used to build their filters separately, which is how a
+  filter reaches the rows but not the count. They now share one builder, so the "N of M"
+  line cannot drift from what is on screen.
+
 ## 1.3.3 — 2026-08-12
 
 ### Changed

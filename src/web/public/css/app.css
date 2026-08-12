@@ -299,6 +299,10 @@ hr.soft { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
 .badge-err { background: var(--err-soft); color: #8C2A20; }
 .badge-err .d { background: var(--err); }
 .badge-mute { background: var(--paper-2); color: var(--ink-soft); border: 1px solid var(--line); }
+/* ADDED · a state that is neither good nor bad, only not yet: a scheduled episode.
+   Same teal pair as .notice.info, so "waiting" reads the same wherever it appears. */
+.badge-info { background: var(--teal-soft); color: #1E547A; }
+.badge-info .d { background: var(--teal); }
 
 /* ---- inputs ---- */
 /* A grid or flex item's default minimum is its content's intrinsic width, so one long
@@ -695,6 +699,10 @@ hr.soft { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
    Specificity beats .ep-table tr:hover td, so the tint survives hover. */
 .ep-table tr.is-missing td { background: var(--warn-soft); }
 .ep-table tr.is-missing .ep-title small { color: #8A5E10; }
+/* ADDED · a scheduled episode is not a fault, so it is tinted rather than warned. */
+.ep-table tr.is-scheduled td { background: var(--teal-soft); }
+.ep-table tr.is-scheduled .ep-title small,
+.ep-table .ep-title__note { color: #1E547A; }
 
 
 /* ------------------------------------------------------------
@@ -1322,13 +1330,19 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   text-transform: uppercase; letter-spacing: .06em; margin-bottom: 7px;
 }
 .subscribe__apps { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+/* `.chip` (§16) is the same pill, generalised. `display` and `text-decoration` are
+   stated rather than left to the UA so the rule does not assume a <button>. */
+.chip,
 .subscribe__app {
   font-family: var(--sans); font-size: 12px; font-weight: 600;
   color: var(--ink-soft); background: var(--paper-2);
   border: 1px solid var(--line); border-radius: 999px;
   padding: 4px 10px; cursor: pointer; transition: .12s;
+  display: inline-block; text-decoration: none;
 }
+.chip:hover,
 .subscribe__app:hover { border-color: var(--line-2); color: var(--ink); }
+.chip.is-active,
 .subscribe__app.is-active {
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
@@ -1482,6 +1496,9 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 }
 .ep-table--pinned tr:hover td:last-child { background: var(--paper-2); }
 .ep-table--pinned tr.is-missing td:last-child { background: var(--warn-soft); }
+/* ADDED · the sticky last column paints its own background, so a tinted row needs it
+   restated here or the actions cell sits as a pale gap across the stripe. */
+.ep-table--pinned tr.is-scheduled td:last-child { background: var(--teal-soft); }
 
 /* Auto table layout starves the widest column first, which turned real episode
    titles into one word per line. The title gets a floor and the short numeric
@@ -1587,4 +1604,328 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 
   /* The episode-count footnotes read as walls of text on a narrow screen. */
   .episode-table__order { display: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   15  CHARTS
+   Every plot here is plain HTML elements carrying an inline `height:%` or
+   `width:%`. No SVG, no charting library. This is the same construction as the
+   .waveform strip in §08c and the upload progress bar in .cover-box__progress —
+   a box, a percentage, a colour — and it is the only geometry this app has ever
+   needed. It also survives a 360px viewport without anyone having to decide what
+   a viewBox should do: flex reflows, percentages stay percentages.
+
+   The plot itself is aria-hidden. The numbers live in an .sr-only <table> beside
+   it, so a screen reader reads the data rather than walking ninety empty divs.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.chart { margin: 0; }
+
+/* Two columns: the y-axis labels take what they need, the plot takes the rest. */
+.chart__frame {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+/* A grid item's default min-width is auto, which refuses to shrink below the
+   content. Ninety columns would then push the page sideways. */
+.chart__body { min-width: 0; }
+
+.chart__yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 132px;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.chart__plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 132px;
+  border-bottom: 1px solid var(--line-2);
+  /* The three gridlines at 25/50/75% are painted as background gradients rather
+     than elements. They are decoration; they should not be three more nodes in
+     a DOM a screen reader has to walk past to reach the caption. */
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(var(--line) 1px, transparent 1px);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 25%, 0 50%, 0 75%;
+}
+
+/* column-reverse so the segments read bottom-to-top in source order, matching
+   the legend and the order of the columns in the .sr-only table. */
+.chart__col {
+  flex: 1 1 0;
+  min-width: 2px;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  border-radius: 3px 3px 0 0;
+  overflow: hidden;
+}
+/* The `title` tooltip belongs to the column, not to a segment. The tint on hover
+   is what makes that readable. */
+.chart__col:hover { background: var(--paper-2); }
+
+.chart__seg { display: block; width: 100%; }
+.chart__seg--accent { background: var(--accent); }
+.chart__seg--teal   { background: var(--teal); }
+/* A day with a single request, against a peak of nine hundred, is 0.1% of the
+   plot height and draws nothing at all. "Quiet" and "no data" are different
+   facts about a feed and the chart must not merge them into one blank column. */
+.chart__seg.is-present { min-height: 2px; }
+
+.chart__ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+}
+.chart__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.chart__swatch {
+  width: 10px; height: 10px; flex: none;
+  border-radius: 3px;
+}
+.chart__swatch--accent { background: var(--accent); }
+.chart__swatch--teal   { background: var(--teal); }
+
+.chart__caption {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+/* ---- horizontal share bars (which app, which episode) ---- */
+
+.hbars { display: flex; flex-direction: column; gap: 9px; }
+.hbar {
+  display: grid;
+  grid-template-columns: minmax(84px, 20%) 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.hbar__label {
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hbar__track {
+  display: block;
+  height: 10px;
+  background: var(--paper-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.hbar__fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+/* "Unknown" and "Other" are the absence of a classification, not an app. They
+   are drawn in a border grey so they never read as a client with a following. */
+.hbar--muted .hbar__fill { background: var(--line-2); }
+.hbar__n {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* ---- the delta line under a headline number ---- */
+/* The tone is decided by the server, not by the direction of the arrow. More
+   failures is bad and more downloads is good; the stylesheet should not have to
+   know which card it has landed on to colour the number correctly. */
+.stat-card__d {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.stat-card__d--good { color: var(--ok); }
+.stat-card__d--bad  { color: var(--err); }
+.stat-card__d--flat { color: var(--ink-soft); font-weight: 400; }
+.stat-card__d--none { color: var(--ink-mute); font-weight: 400; }
+
+@media (max-width: 640px) {
+  .chart__plot,
+  .chart__yaxis { height: 104px; }
+  /* Ninety columns at 360px is about 2px of bar and 2px of gap. The gap is the
+     part that carries no information, so the gap goes first. */
+  .chart__plot { gap: 1px; }
+
+  /* The label and the number keep one line; the track gets its own full-width
+     row underneath, where it is long enough to compare against its neighbours. */
+  .hbar {
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+  }
+  .hbar__track { grid-column: 1 / -1; order: 3; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   16  FILTER BAR
+   One bar, used by the access log, the scan log and the episode timeline. Every
+   control in it is a real form control inside a real <form method="get">, so
+   with JavaScript off the bar still filters — the browser submits it and the
+   server answers a full page. htmx only changes what comes back, never what is
+   submitted.
+
+   There is no .chip block here on purpose: a chip is the same pill as
+   .subscribe__app, so §12 gained `.chip` in its selector lists rather than
+   growing a second, drifting copy of twelve declarations. The QR picker is
+   untouched and there is exactly one definition of a pill.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 0;
+}
+/* The app's micro-label treatment, as used by .subscribe__label. */
+.filter-bar__label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-soft);
+}
+.filter-bar__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+/* Pushes the export button to the far edge of the bar. */
+.filter-bar__spacer { margin-left: auto; }
+
+/* These selects sit in the bar, not inside a .field, so the `.field select` rule
+   in §05 does not reach them and they would render as raw platform widgets in
+   the middle of a crafted row. Same treatment, tightened for a toolbar. */
+.filter-bar select {
+  font-family: var(--sans); font-size: 13px; color: var(--text);
+  background: #fff; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  padding: 6px 10px; min-width: 130px; transition: .15s;
+}
+.filter-bar select:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+@media (max-width: 640px) {
+  .filter-bar { gap: 8px 10px; }
+  /* Two selects share a line instead of each claiming 130px and wrapping. */
+  .filter-bar select { flex: 1 1 140px; min-width: 0; }
+  /* Pinning the export button to the right edge of a 360px bar strands it beside
+     a select. Neutralised, it simply wraps onto a row of its own. */
+  .filter-bar__spacer { margin-left: 0; flex-basis: 100%; height: 0; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   17  SORTABLE COLUMNS & APPEND PAGING
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* A sort control is a link, not a button, because it has a real URL. It survives
+   a bookmark, it opens in a new tab, and with JavaScript off it still sorts —
+   without a form having to be wrapped around the table to carry it. */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: inherit;
+  text-decoration: none;
+}
+.th-sort:hover { color: var(--accent); }
+.th-sort__arrow {
+  font-size: 9px;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.th-sort:hover .th-sort__arrow { opacity: .45; }
+
+/* The active column's <th> carries aria-sort="ascending|descending". The glyph is
+   decoration; aria-sort is what is announced. Both are written from the same
+   server-side value, so they cannot disagree about which column is sorted. */
+.ep-table th[aria-sort] .th-sort { color: var(--ink); }
+.ep-table th[aria-sort] .th-sort__arrow { opacity: 1; color: var(--accent); }
+
+/* The pager is a row inside the <tbody>, not a control underneath the table.
+   That is what lets one response append rows above it and replace it in the same
+   swap — with a payload that is nothing but <tr> elements, because anything else
+   in a response bound for a tbody is dropped by the HTML parser before htmx ever
+   sees it. */
+.ep-table tr.log-more-row td {
+  border-bottom: none;
+  padding-top: 14px;
+}
+.ep-table tr.log-more-row:hover td { background: transparent; }
+
+@media (max-width: 640px) {
+  /* <thead> is hidden on a phone (§14), which leaves a bare "Added" date sitting
+     beside the "Published" date with nothing to tell them apart. Same device as
+     .ep-reach::before above. */
+  .ep-table--pinned .ep-added {
+    display: inline-block;
+    vertical-align: middle;
+    margin: 2px 14px 2px 0;
+  }
+  .ep-table--pinned .ep-added::before {
+    content: 'Added ';
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+}
+
+/* ADDED · feed readiness. A checklist of what a podcast directory would refuse, on
+   the page where every fix already lives. The severity is in the words "Blocking" /
+   "Advisory" / "OK" rather than in the colour, because the difference between them is
+   the whole point of the panel and has to survive being read by someone who cannot
+   tell the two tints apart. */
+.readiness { list-style: none; }
+/* Fixed width so the labels form a column down the left edge: a checklist is read
+   vertically, and the three words are different lengths. */
+.readiness__mark { flex: none; width: 82px; justify-content: center; }
+.readiness-row--ok .info .t { font-weight: 500; color: var(--ink-soft); }
+.readiness__passing > summary {
+  font-size: 13px; color: var(--ink-soft); cursor: pointer; padding-top: 14px;
 }

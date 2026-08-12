@@ -1,7 +1,7 @@
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { EPISODE_STATUS } from '../constants.js';
+import { EPISODE_STATUS, EPISODE_TYPES } from '../constants.js';
 import { fromLocalInputValue, nowIso, toIso } from '../lib/dates.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
@@ -14,7 +14,7 @@ import { EVENTS } from '../lib/events.js';
  *  - a `removed` episode stays removed even though its file is still on disk,
  *    so "remove from feed only" is not silently undone by the next rescan.
  */
-export function createEpisodes({ db, config, events, shows, logger }) {
+export function createEpisodes({ db, config, events, shows, logger, episodeArt }) {
   const selectById = db.prepare('SELECT * FROM episodes WHERE id = ?');
   const selectByIdentity = db.prepare(
     'SELECT * FROM episodes WHERE show_id = ? AND identity_key = ?',
@@ -22,9 +22,15 @@ export function createEpisodes({ db, config, events, shows, logger }) {
   const selectByShow = db.prepare(
     'SELECT * FROM episodes WHERE show_id = ? ORDER BY pub_date DESC, created_at DESC',
   );
+  // `pub_date <= @now` is what makes a publish date in the future mean "later" rather
+  // than "now". Without it the date picker on the episode form looked exactly like
+  // scheduling and published immediately — the worst kind of wrong, because the app
+  // did something reasonable and never said it had. ISO-8601 UTC strings compare
+  // lexicographically in the order they compare chronologically, which is what the
+  // missing-file sweep already relies on.
   const selectFeedItems = db.prepare(
     `SELECT * FROM episodes
-      WHERE show_id = ? AND status IN ('active','missing')
+      WHERE show_id = @showId AND status IN ('active','missing') AND pub_date <= @now
       ORDER BY pub_date DESC, created_at DESC`,
   );
   const countByShow = db.prepare(
@@ -33,8 +39,14 @@ export function createEpisodes({ db, config, events, shows, logger }) {
        SUM(CASE WHEN status = 'missing' THEN 1 ELSE 0 END) AS missing,
        SUM(CASE WHEN status = 'removed' THEN 1 ELSE 0 END) AS removed,
        SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired,
+       -- Both from the same predicate as selectFeedItems, so counts().inFeed is exactly
+       -- listForFeed().length and the two cannot drift apart.
+       SUM(CASE WHEN status IN ('active','missing') AND pub_date >  @now THEN 1 ELSE 0 END) AS scheduled,
+       SUM(CASE WHEN status IN ('active','missing') AND pub_date <= @now THEN 1 ELSE 0 END) AS inFeed,
+       SUM(CASE WHEN status IN ('active','missing') AND pub_date <= @now
+                 AND duration_seconds IS NULL THEN 1 ELSE 0 END) AS inFeedNoDuration,
        COUNT(*) AS total
-     FROM episodes WHERE show_id = ?`,
+     FROM episodes WHERE show_id = @showId`,
   );
   const insertEpisode = db.prepare(
     `INSERT INTO episodes (id, show_id, filename, identity_key, title, title_is_custom, tag_title,
@@ -94,18 +106,20 @@ export function createEpisodes({ db, config, events, shows, logger }) {
 
     /** Feed items: active plus missing-within-grace, newest first (spec §6.3, §8.3). */
     listForFeed(showId) {
-      return selectFeedItems.all(showId);
+      return selectFeedItems.all({ showId, now: nowIso() });
     },
 
     counts(showId) {
-      const row = countByShow.get(showId);
+      const row = countByShow.get({ showId, now: nowIso() });
       return {
         active: row?.active ?? 0,
         missing: row?.missing ?? 0,
         removed: row?.removed ?? 0,
         expired: row?.expired ?? 0,
+        scheduled: row?.scheduled ?? 0,
         total: row?.total ?? 0,
-        inFeed: (row?.active ?? 0) + (row?.missing ?? 0),
+        inFeed: row?.inFeed ?? 0,
+        inFeedNoDuration: row?.inFeedNoDuration ?? 0,
       };
     },
 
@@ -148,6 +162,17 @@ export function createEpisodes({ db, config, events, shows, logger }) {
         'pub_date',
         'season',
         'episode_number',
+        // Per-episode artwork, all scanner-owned. Every call that writes one of these
+        // bumps `updated_at`, which moves `lastBuildDate`, which changes the feed ETag
+        // — so the scanner passes only the columns that genuinely changed. See
+        // syncEpisodeArt in scanner.js.
+        'art_source',
+        'art_filename',
+        'art_sidecar_name',
+        'art_sidecar_mtime',
+        'art_width',
+        'art_height',
+        'art_etag',
       ];
       const entries = Object.entries(fields).filter(([key]) => allowed.includes(key));
       if (!entries.length) return api.get(id);
@@ -189,6 +214,11 @@ export function createEpisodes({ db, config, events, shows, logger }) {
         const parsed = parseOptionalInt(patch.episodeNumber);
         if (parsed === false) invalid.episodeNumber = 'Episode number must be a whole number.';
         else fields.episode_number = parsed;
+      }
+      if (patch.episodeType !== undefined) {
+        const value = String(patch.episodeType ?? '').trim().toLowerCase();
+        if (!EPISODE_TYPES.includes(value)) invalid.episodeType = 'Choose full, trailer or bonus.';
+        else fields.episode_type = value;
       }
       if (patch.explicit !== undefined) {
         const value = patch.explicit;
@@ -279,6 +309,7 @@ export function createEpisodes({ db, config, events, shows, logger }) {
       }
 
       deleteEpisode.run(id);
+      episodeArt?.forget(episode.show_id, id);
       logger?.warn({ id, path }, 'deleted episode and its audio file');
       events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
       return { filename: episode.filename, showId: episode.show_id };
@@ -288,6 +319,7 @@ export function createEpisodes({ db, config, events, shows, logger }) {
     purge(id) {
       const episode = api.getOrThrow(id);
       deleteEpisode.run(id);
+      episodeArt?.forget(episode.show_id, id);
       events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
       return episode;
     },
@@ -313,6 +345,10 @@ export function createEpisodes({ db, config, events, shows, logger }) {
         for (const row of rows) deleteEpisode.run(row.id);
       });
       run();
+      // The whole directory, not one file per row: the next scan re-imports these
+      // episodes under brand-new ids, so anything left here could never be reached
+      // again by any row — it would simply be an orphan for the life of the install.
+      episodeArt?.forgetShow(showId);
       events?.emit(EVENTS.SHOW_CHANGED, { showId });
       logger?.warn(
         { showId, forgotten: rows.length },
@@ -361,6 +397,24 @@ export function createEpisodes({ db, config, events, shows, logger }) {
     resolveExplicit(episode, show) {
       if (episode.explicit === null || episode.explicit === undefined) return show.explicit === 1;
       return episode.explicit === 1;
+    },
+
+    /**
+     * A scheduled episode is an ordinary one whose publish date has not arrived.
+     *
+     * Derived rather than stored: no migration, no fifth status to keep in step with the
+     * other four, and it heals itself the moment the time passes — the episode publishes
+     * with nothing running and nobody clicking. This predicate and the `pub_date > @now`
+     * in the two statements above are one rule written twice, and must stay identical:
+     * `counts().inFeed` is asserted against `listForFeed()`.
+     */
+    isScheduled(episode, now = Date.now()) {
+      if (!episode) return false;
+      if (episode.status !== EPISODE_STATUS.ACTIVE && episode.status !== EPISODE_STATUS.MISSING) {
+        return false;
+      }
+      const at = new Date(episode.pub_date).getTime();
+      return Number.isFinite(at) && at > now;
     },
   };
 

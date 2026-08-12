@@ -46,7 +46,8 @@
       <% if (errors.pubDate) { %>
         <div class="field-error"><%= errors.pubDate %></div>
       <% } else { %>
-        <div class="hint">Times are in <%= it.helpers.timeZone %>. Episodes are always ordered newest first.</div>
+        <div class="hint">Times are in <%= it.helpers.timeZone %>. Episodes are always ordered newest
+          first, and a date in the future holds this episode out of the feed until then.</div>
       <% } %>
     </div>
     <div class="field" style="margin:0">
@@ -62,6 +63,46 @@
         <option value="1"<%= episode.explicit === true ? ' selected' : '' %>>Yes</option>
         <option value="0"<%= episode.explicit === false ? ' selected' : '' %>>No</option>
       </select>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-top:14px">
+    <div class="field<%= err('episodeType') %>" style="margin:0">
+      <label for="e-type">Episode type</label>
+      <select id="e-type" name="episodeType">
+        <option value="full"<%= episode.episodeType === 'full' ? ' selected' : '' %>>Full episode</option>
+        <option value="trailer"<%= episode.episodeType === 'trailer' ? ' selected' : '' %>>Trailer</option>
+        <option value="bonus"<%= episode.episodeType === 'bonus' ? ' selected' : '' %>>Bonus</option>
+      </select>
+      <% if (errors.episodeType) { %>
+        <div class="field-error"><%= errors.episodeType %></div>
+      <% } else { %>
+        <div class="hint">Trailers and bonus episodes sit apart from the main run in some apps.
+          SelfPod never infers this from a filename.</div>
+      <% } %>
+    </div>
+    <div class="field" style="margin:0">
+      <%
+        /* Read-only: artwork comes from the files, never from this form. Editing it
+           here would put SelfPod in the business of writing into the show folder,
+           which it does not do. The copy therefore has to say where the artwork came
+           from, and — when there is none — exactly what to do about it. */
+        const art = episode.art;
+        const suggestion = episode.filename.replace(/\.[^.]+$/, '') + '.jpg';
+      %>
+      <label>Episode artwork</label>
+      <% if (art && art.source === 'sidecar') { %>
+        <div class="hint">From <code><%= art.sidecarName %></code> beside the audio
+          · <%= art.width %> × <%= art.height %></div>
+      <% } else if (art) { %>
+        <div class="hint">From the file's own tags · <%= art.width %> × <%= art.height %></div>
+      <% } else { %>
+        <div class="hint">Uses the show's cover. To give this episode its own, embed artwork
+          in the audio file, or put an image called <code><%= suggestion %></code> beside it.</div>
+      <% } %>
+      <% if (art && art.warning) { %>
+        <div class="field-error"><%= art.warning.message %></div>
+      <% } %>
     </div>
   </div>
 

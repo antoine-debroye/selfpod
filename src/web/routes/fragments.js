@@ -2,6 +2,7 @@ import { SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
+import { isValidCategory, isValidSubcategory } from '../lib/apple-categories.js';
 import { MIN_PASSWORD_LENGTH } from '../../routes/api/setup.js';
 import { subscribeQrCodes } from '../lib/qr.js';
 import { DEFAULT_SUBSCRIBE_TARGET } from '../lib/subscribe-links.js';
@@ -56,6 +57,14 @@ export default async function fragmentRoutes(fastify, services) {
       });
     });
 
+    scoped.get('/ui/shows/:slug/readiness', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      return reply.view('partials/feed-readiness.eta', {
+        show: presentShow(show, { includeReadiness: true }),
+        helpers: fastify.viewHelpers,
+      });
+    });
+
     scoped.get('/ui/dashboard/grid', async (request, reply) => {
       const all = shows.list().map((show) => presentShow(show));
       return reply.view('partials/show-grid.eta', {
@@ -101,6 +110,8 @@ export default async function fragmentRoutes(fastify, services) {
         // An unchecked checkbox is simply absent from a form post, so its absence
         // has to mean "false" rather than "leave unchanged".
         explicit: body.explicit === '1' || body.explicit === 'on' || body.explicit === true,
+        itunesType: body.itunesType,
+        directoryListing: body.directoryListing,
       };
 
       try {
@@ -285,6 +296,7 @@ export default async function fragmentRoutes(fastify, services) {
             episodeNumber: body.episodeNumber,
             pubDate: body.pubDate,
             explicit: body.explicit,
+            episodeType: body.episodeType,
           },
           { timeZone: config.timeZone },
         );
@@ -367,18 +379,27 @@ export default async function fragmentRoutes(fastify, services) {
      * Retargeting keeps a single response doing both: swap the table, and let the
      * out-of-band toast clear the modal.
      */
+    /**
+     * Re-render the episode table, and say what just happened.
+     *
+     * The toast used to be dropped on the floor here: the arguments were accepted and
+     * then voided, so removing an episode with JavaScript on gave no confirmation at
+     * all, while the same action without it flashed a message correctly. The toast
+     * partial swaps itself out of band into #toast-root, so appending it to a response
+     * aimed at #episode-table is all it takes.
+     */
     async function renderEpisodeTableWithToast(reply, show, message, level = 'ok') {
       reply.header('HX-Retarget', '#episode-table');
       reply.header('HX-Reswap', 'outerHTML');
       reply.header('HX-Trigger', 'selfpod:modal-close');
-      const rendered = await reply.view('partials/episode-table.eta', {
+      const table = await reply.view('partials/episode-table.eta', {
         show: presentShow(show),
         episodes: episodes.listByShow(show.id).map((e) => presentEpisode(e, show)),
         helpers: fastify.viewHelpers,
       });
-      void level;
-      void message;
-      return rendered;
+      if (!message) return table;
+      const toast = await reply.view('partials/toast.eta', { message, level, helpers: fastify.viewHelpers });
+      return `${table}${toast}`;
     }
 
     /* ---------------------------------------------------------------- scans */
@@ -420,41 +441,111 @@ export default async function fragmentRoutes(fastify, services) {
 
     /* ------------------------------------------------------------- activity */
 
-    scoped.get('/ui/activity', async (request, reply) => {
-      const showFilter = request.query?.showId ? String(request.query.showId) : null;
-      const filtered = showFilter ? shows.getBySlug(showFilter) ?? shows.get(showFilter) : null;
-      const offset = Number.parseInt(String(request.query?.offset ?? '0'), 10) || 0;
-      const limit = 25;
-      const entries = activity.list({ showId: filtered?.id ?? null, limit, offset });
-      const total = activity.count({ showId: filtered?.id ?? null });
-
-      return reply.view('partials/activity-list.eta', {
+    /**
+     * The scan log and the episode timeline.
+     *
+     * Each has two routes: one that rebuilds the card when a filter changes, and one
+     * that returns only the next page of items for the pager to append. The pager used
+     * to reuse the first — which returned the whole container — so every "Load more"
+     * nested another element with the same id inside the one before it.
+     */
+    function scanLogContext(request) {
+      const filter = services.activityFilter(request);
+      const entries = activity.list({
+        ...filter.scanQuery,
+        limit: services.activityPageSize,
+        offset: filter.offset,
+      });
+      const total = activity.count(filter.scanQuery);
+      return {
+        filter,
         entries,
         total,
-        showFilter: filtered?.slug ?? null,
-        hasMore: offset + entries.length < total,
-        nextOffset: offset + entries.length,
+        showFilter: filter.scanSlug,
+        loaded: filter.offset + entries.length,
+        hasMore: filter.offset + entries.length < total,
+        nextOffset: filter.offset + entries.length,
         helpers: fastify.viewHelpers,
+      };
+    }
+
+    function timelineContext(request) {
+      const filter = services.activityFilter(request);
+      const entries = services.timeline.list({
+        ...filter.timelineQuery,
+        limit: services.activityPageSize,
+        offset: filter.timelineOffset,
       });
+      const total = services.timeline.count(filter.timelineQuery);
+      return {
+        filter,
+        entries,
+        total,
+        loaded: filter.timelineOffset + entries.length,
+        hasMore: filter.timelineOffset + entries.length < total,
+        nextOffset: filter.timelineOffset + entries.length,
+        helpers: fastify.viewHelpers,
+      };
+    }
+
+    scoped.get('/ui/activity', async (request, reply) => {
+      const context = scanLogContext(request);
+      // Fetched from /ui/activity, but what someone should be able to reload, bookmark
+      // and go Back to is /activity with the same filters.
+      reply.header('HX-Push-Url', services.activityPageUrl(context.filter));
+      return reply.view('partials/activity-list.eta', context);
+    });
+
+    scoped.get('/ui/activity/items', async (request, reply) => {
+      // Paging is not a filter — see the note on offset in pages.js.
+      reply.header('HX-Push-Url', 'false');
+      return reply.view('partials/activity-items.eta', scanLogContext(request));
+    });
+
+    scoped.get('/ui/activity/timeline', async (request, reply) => {
+      const context = timelineContext(request);
+      reply.header('HX-Push-Url', services.activityPageUrl(context.filter));
+      return reply.view('partials/episode-timeline.eta', context);
+    });
+
+    scoped.get('/ui/activity/timeline/items', async (request, reply) => {
+      reply.header('HX-Push-Url', 'false');
+      return reply.view('partials/episode-timeline-items.eta', timelineContext(request));
     });
 
     /* ----------------------------------------------------------- statistics */
 
-    scoped.get('/ui/stats/log', async (request, reply) => {
+    function accessLogContext(request) {
       const filter = services.logFilter(request);
-      const limit = services.logPageSize;
-      const entries = services.stats.list({ ...filter.query, limit, offset: filter.offset });
+      const entries = services.stats.list({
+        ...filter.query,
+        limit: services.logPageSize,
+        offset: filter.offset,
+      });
       const total = services.stats.count(filter.query);
 
-      return reply.view('partials/access-log.eta', {
+      return {
+        log: filter,
         entries,
         total,
         showFilter: filter.slug,
-        failuresOnly: filter.query.failuresOnly,
+        failuresOnly: filter.failuresOnly,
+        loaded: filter.offset + entries.length,
         hasMore: filter.offset + entries.length < total,
         nextOffset: filter.offset + entries.length,
         helpers: fastify.viewHelpers,
-      });
+      };
+    }
+
+    scoped.get('/ui/stats/log', async (request, reply) => {
+      const context = accessLogContext(request);
+      reply.header('HX-Push-Url', services.statsPageUrl(context.log));
+      return reply.view('partials/access-log.eta', context);
+    });
+
+    scoped.get('/ui/stats/log/rows', async (request, reply) => {
+      reply.header('HX-Push-Url', 'false');
+      return reply.view('partials/access-log-rows.eta', accessLogContext(request));
     });
 
     /* ------------------------------------------------------------- settings */
@@ -531,7 +622,7 @@ export default async function fragmentRoutes(fastify, services) {
       defaultLanguage: {
         title: 'Default language',
         mono: true,
-        last: true,
+        options: () => fastify.viewHelpers.languages.map((l) => ({ value: l.code, label: l.label })),
         read: () => settings.defaults().language,
         display: () => settings.defaults().language,
         write(value) {
@@ -540,6 +631,63 @@ export default async function fragmentRoutes(fastify, services) {
             return { error: 'Use a language code like "en" or "en-gb".' };
           }
           return { patch: { [SETTING_KEYS.DEFAULT_LANGUAGE]: language } };
+        },
+      },
+      /*
+       * These three were seeded at first boot and readable through the API, but had no
+       * write path anywhere — so every show SelfPod discovered got "Technology" and
+       * there was no way to change that short of editing each show afterwards.
+       */
+      defaultCategory: {
+        title: 'Default category',
+        description: 'Applied to shows SelfPod discovers on its own. Existing shows keep what they have.',
+        options: () =>
+          Object.keys(fastify.viewHelpers.categories).map((name) => ({ value: name, label: name })),
+        read: () => settings.defaults().category,
+        display: () => settings.defaults().category,
+        write(value) {
+          const category = String(value ?? '').trim();
+          if (!isValidCategory(category)) return { error: "That isn't one of Apple's categories." };
+          const patch = { [SETTING_KEYS.DEFAULT_CATEGORY]: category };
+          // A subcategory belongs to exactly one category, so one that no longer fits
+          // has to go with it — otherwise the pair reaches a feed as a nested
+          // itunes:category that Apple rejects.
+          const subcategory = settings.defaults().subcategory;
+          if (subcategory && !isValidSubcategory(category, subcategory)) {
+            patch[SETTING_KEYS.DEFAULT_SUBCATEGORY] = '';
+          }
+          return { patch };
+        },
+      },
+      defaultSubcategory: {
+        title: 'Default subcategory',
+        options: () => [
+          { value: '', label: 'None' },
+          ...(fastify.viewHelpers.categories[settings.defaults().category] ?? []).map((name) => ({
+            value: name,
+            label: name,
+          })),
+        ],
+        read: () => settings.defaults().subcategory ?? '',
+        display: () => settings.defaults().subcategory || 'None',
+        write(value) {
+          const subcategory = String(value ?? '').trim();
+          if (subcategory && !isValidSubcategory(settings.defaults().category, subcategory)) {
+            return { error: `"${subcategory}" isn't a subcategory of ${settings.defaults().category}.` };
+          }
+          return { patch: { [SETTING_KEYS.DEFAULT_SUBCATEGORY]: subcategory } };
+        },
+      },
+      defaultExplicit: {
+        title: 'Default explicit flag',
+        options: () => [
+          { value: '0', label: 'No' },
+          { value: '1', label: 'Yes' },
+        ],
+        read: () => (settings.defaults().explicit ? '1' : '0'),
+        display: () => (settings.defaults().explicit ? 'Yes' : 'No'),
+        write(value) {
+          return { patch: { [SETTING_KEYS.DEFAULT_EXPLICIT]: value === '1' ? '1' : '0' } };
         },
       },
       sessionTtlHours: {
@@ -570,6 +718,7 @@ export default async function fragmentRoutes(fastify, services) {
         last: row.last,
         inputType: row.inputType,
         placeholder: row.placeholder,
+        options: row.options?.() ?? null,
         value: row.display(),
         rawValue: row.read(),
         editing,

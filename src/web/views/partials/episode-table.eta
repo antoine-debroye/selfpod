@@ -1,15 +1,28 @@
 <%
   const show = it.show;
   const episodes = it.episodes || [];
-  const inFeed = episodes.filter((e) => e.status !== 'removed');
+  const scheduled = episodes.filter((e) => e.scheduled);
+  const inFeed = episodes.filter((e) => e.status !== 'removed' && !e.scheduled);
   const removed = episodes.filter((e) => e.status === 'removed');
 %>
 <div class="form-card" id="episode-table">
   <div class="episode-table__head">
     <div class="ftitle" style="margin:0">Episodes</div>
     <span class="badge badge-mute"><%= inFeed.length %></span>
+    <% if (scheduled.length) { %>
+      <span class="badge badge-info badge--tight"><span class="d" aria-hidden="true"></span><%= scheduled.length %> scheduled</span>
+    <% } %>
     <span class="episode-table__order">ordered by publish date ↓</span>
   </div>
+
+  <% if (scheduled.length) { %>
+    <p class="help-note" style="margin:10px 0 0">
+      <strong><%= scheduled.length %> episode<%= scheduled.length === 1 ? ' is' : 's are' %> waiting on a publish date in the future</strong>,
+      so <%= scheduled.length === 1 ? 'it is' : 'they are' %> not in the feed and no podcast app can see
+      <%= scheduled.length === 1 ? 'it' : 'them' %> yet. Each one joins the feed by itself at its own
+      time — nothing needs to be running. To publish one now, set its publish date to a time in the past.
+    </p>
+  <% } %>
 
   <% if (!episodes.length) { %>
     <div class="empty">
@@ -28,6 +41,7 @@
           <tr>
             <th scope="col">Title</th>
             <th scope="col">Published</th>
+            <th scope="col" title="When SelfPod first saw this file on disk">Added</th>
             <th scope="col">Duration</th>
             <th scope="col">Size</th>
             <th scope="col" title="Whole-file downloads / partial streams">Fetches</th>

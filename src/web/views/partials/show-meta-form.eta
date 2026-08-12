@@ -90,6 +90,37 @@
         <span class="tl" data-toggle-label><%= show.explicit ? 'Yes' : 'No' %></span>
       </div>
     </div>
+    <div class="field<%= err('itunesType') %>" style="margin:0">
+      <label for="f-itunes-type">Episode order</label>
+      <select id="f-itunes-type" name="itunesType">
+        <option value="episodic"<%= show.itunesType === 'episodic' ? ' selected' : '' %>>Episodic — newest first</option>
+        <option value="serial"<%= show.itunesType === 'serial' ? ' selected' : '' %>>Serial — meant to be heard in order</option>
+      </select>
+      <% if (errors.itunesType) { %>
+        <div class="field-error"><%= errors.itunesType %></div>
+      <% } else { %>
+        <div class="hint">Serial tells a podcast app to open the show at the first episode rather than
+          the latest. It changes nothing about the order of the feed itself.</div>
+      <% } %>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-top:14px">
+    <div class="field<%= err('directoryListing') %>" style="margin:0">
+      <label for="f-listing">Podcast directories</label>
+      <select id="f-listing" name="directoryListing">
+        <option value="allowed"<%= show.directoryListing === 'allowed' ? ' selected' : '' %>>Allow directories to list it</option>
+        <option value="blocked"<%= show.directoryListing === 'blocked' ? ' selected' : '' %>>Keep this show out of directories</option>
+      </select>
+      <% if (errors.directoryListing) { %>
+        <div class="field-error"><%= errors.directoryListing %></div>
+      <% } else { %>
+        <div class="hint">This feed's URL is its own password, so blocking asks Apple and the others to
+          leave it out of their index if it ever leaks. Change it only if you mean to submit the show —
+          while it is blocked a submission is refused, and once a directory lists it the URL is no
+          longer private.</div>
+      <% } %>
+    </div>
     <div class="field" style="margin:0">
       <label>Folder on disk</label>
       <div class="static-value mono"><%= show.folder %></div>

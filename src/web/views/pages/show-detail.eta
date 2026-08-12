@@ -6,6 +6,7 @@
   <div>
     <div class="sub">
       <%= show.counts.inFeed %> episode<%= show.counts.inFeed === 1 ? '' : 's' %> in feed<%
+      %><% if (show.counts.scheduled) { %> · <%= show.counts.scheduled %> scheduled<% } %><%
       %><% if (show.lastScan) { %> · last scan <%= it.helpers.relativeTime(show.lastScan.finishedAt) %><% } %>
     </div>
     <h1><%= show.title %></h1>
@@ -48,6 +49,11 @@
 
   <div class="detail-right">
     <%~ include('../partials/show-meta-form', { show, helpers: it.helpers }) %>
+    <%
+      /* After the fields it reports on, and before Reach: readiness answers "can this
+         feed start working", Reach answers "who is fetching the one that already does". */
+    %>
+    <%~ include('../partials/feed-readiness', { show, helpers: it.helpers }) %>
     <%~ include('../partials/show-reach', { show, helpers: it.helpers }) %>
   </div>
 </div>

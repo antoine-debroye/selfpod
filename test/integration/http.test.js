@@ -389,3 +389,397 @@ describe('token redaction in logs', () => {
     assert.equal(redactUrl('/api/shows'), '/api/shows', 'ordinary URLs are untouched');
   });
 });
+
+/**
+ * Conditional and compressed feed delivery.
+ *
+ * A podcast app polls the same feed for ever and the feed rarely changes, so almost
+ * every request should be answered with "you already have it". Two things used to stop
+ * that happening, both silent: the ETag was compared as an exact string, so anything
+ * that rewrote the validator in transit — Cloudflare, which the README recommends,
+ * re-emits strong tags as weak — turned every poll into a full download; and the 304
+ * was returned before the request was recorded, so the app doing everything right was
+ * invisible on the show page.
+ *
+ * Neither failure produces an error anywhere. That is why they are worth pinning down.
+ */
+describe('conditional feed requests', () => {
+  const feedUrlFor = (show) => `/feeds/${show.slug}/${show.feed_token}.xml`;
+
+  async function fetchFeed(show, headers = {}) {
+    return server.app.inject({ method: 'GET', url: feedUrlFor(show), headers });
+  }
+
+  it('answers 304 to the exact ETag it just issued', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+    assert.equal(first.statusCode, 200, 'the first fetch returns the feed');
+
+    const second = await fetchFeed(show, { 'if-none-match': first.headers.etag });
+    assert.equal(second.statusCode, 304, 'the second is told nothing has changed');
+    assert.equal(second.body, '', 'and carries no body');
+  });
+
+  it('answers 304 to the weak form of its own ETag', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+    const weak = `W/${first.headers.etag}`;
+
+    const second = await fetchFeed(show, { 'if-none-match': weak });
+    assert.equal(
+      second.statusCode,
+      304,
+      'a proxy that rewrites the tag as weak must not defeat revalidation entirely',
+    );
+  });
+
+  it('answers 304 to a list containing its ETag among others', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+
+    const second = await fetchFeed(show, {
+      'if-none-match': `"something-else", ${first.headers.etag}, W/"another"`,
+    });
+    assert.equal(second.statusCode, 304, 'If-None-Match is a list, not a single value');
+  });
+
+  it('echoes both validators on the 304, not only on the 200', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+    const second = await fetchFeed(show, { 'if-none-match': first.headers.etag });
+
+    assert.equal(second.headers.etag, first.headers.etag, 'the ETag comes back');
+    assert.ok(second.headers['last-modified'], 'and so does the date');
+    assert.equal(
+      second.headers['last-modified'],
+      first.headers['last-modified'],
+      'unchanged, because the feed is unchanged',
+    );
+  });
+
+  it('sends a Last-Modified with whole-second precision', async () => {
+    const show = await seedShow();
+    const response = await fetchFeed(show);
+    const header = response.headers['last-modified'];
+    assert.ok(header, 'the header is present');
+    assert.equal(
+      new Date(header).getTime() % 1000,
+      0,
+      'an HTTP-date carries no milliseconds, so one that does can never be echoed back exactly',
+    );
+  });
+
+  it('answers 304 to If-Modified-Since when no ETag is offered', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+
+    const second = await fetchFeed(show, { 'if-modified-since': first.headers['last-modified'] });
+    assert.equal(second.statusCode, 304, 'some apps validate by date alone');
+  });
+
+  it('ignores If-Modified-Since when an If-None-Match is present and does not match', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+
+    const second = await fetchFeed(show, {
+      'if-none-match': '"not-the-current-one"',
+      'if-modified-since': first.headers['last-modified'],
+    });
+    assert.equal(
+      second.statusCode,
+      200,
+      'the ETag is a statement about the bytes and outranks a guess about them',
+    );
+  });
+
+  it('sends Vary: accept-encoding on both the 200 and the 304', async () => {
+    const show = await seedShow();
+    const first = await fetchFeed(show);
+    assert.match(first.headers.vary ?? '', /accept-encoding/i, 'on the full response');
+
+    const second = await fetchFeed(show, { 'if-none-match': first.headers.etag });
+    assert.match(second.headers.vary ?? '', /accept-encoding/i, 'and on the revalidation');
+  });
+
+  it('compresses the feed when asked, and the body is still the feed', async () => {
+    const { gunzipSync } = await import('node:zlib');
+    const show = await seedShow();
+
+    const plain = await fetchFeed(show);
+    assert.equal(plain.headers['content-encoding'], undefined, 'nothing is forced on a client');
+
+    const zipped = await fetchFeed(show, { 'accept-encoding': 'gzip' });
+    assert.equal(zipped.headers['content-encoding'], 'gzip', 'gzip is used when offered');
+    assert.equal(
+      gunzipSync(zipped.rawPayload).toString('utf8'),
+      plain.body,
+      'and decompresses to exactly the feed that would have been sent',
+    );
+    assert.ok(zipped.rawPayload.length < Buffer.byteLength(plain.body), 'it is actually smaller');
+  });
+
+  it('leaves episode audio uncompressed and its ranges intact', async () => {
+    const show = await seedShow();
+    const episode = server.episodes.listByShow(show.id)[0];
+    const url = `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}`;
+
+    const response = await server.app.inject({
+      method: 'GET',
+      url,
+      headers: { 'accept-encoding': 'gzip, br', range: 'bytes=0-1023' },
+    });
+    assert.equal(response.statusCode, 206, 'a range request is still answered with a range');
+    assert.equal(
+      response.headers['content-encoding'],
+      undefined,
+      'compressing already-compressed audio would spend CPU to break seeking',
+    );
+    assert.ok(response.headers['content-range'], 'and the range is described');
+  });
+});
+
+/**
+ * Cover art gets the same two fixes, because two routes answering the same question
+ * differently is where the next bug hides.
+ */
+describe('conditional cover requests', () => {
+  it('answers 304 to the weak form of the cover ETag', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const sharp = (await import('sharp')).default;
+
+    await server.addAudio('arty', 'sample.m4a');
+    await writeFile(
+      join(server.config.showsDir, 'arty', 'cover.jpg'),
+      await sharp({ create: { width: 1500, height: 1500, channels: 3, background: '#3E2D4A' } })
+        .jpeg()
+        .toBuffer(),
+    );
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('arty');
+
+    const url = `/media/${show.slug}/${show.feed_token}/cover.jpg`;
+    const first = await server.app.inject({ method: 'GET', url });
+    assert.equal(first.statusCode, 200, 'the cover is served, so there is something to revalidate');
+    assert.ok(first.headers.etag, 'and it carries an ETag');
+
+    const second = await server.app.inject({
+      method: 'GET',
+      url,
+      headers: { 'if-none-match': `W/${first.headers.etag}` },
+    });
+    assert.equal(second.statusCode, 304, 'a rewritten validator still revalidates');
+    assert.equal(second.headers.etag, first.headers.etag, 'and the tag comes back');
+  });
+});
+
+/**
+ * The category defaults were readable and seeded, but had no write path at all: every
+ * new show got Technology and there was nothing anywhere that could change it.
+ */
+describe('instance category defaults (PATCH /api/settings)', () => {
+  beforeEach(async () => {
+    await server.login();
+  });
+
+  async function patch(payload) {
+    return server.request({ method: 'PATCH', url: '/api/settings', payload });
+  }
+
+  it('writes a category and subcategory that Apple recognises', async () => {
+    const response = await patch({ defaultCategory: 'Arts', defaultSubcategory: 'Books' });
+    assert.equal(response.statusCode, 200);
+
+    const defaults = server.settings.defaults();
+    assert.equal(defaults.category, 'Arts');
+    assert.equal(defaults.subcategory, 'Books');
+
+    const read = (await server.get('/api/settings')).json().settings;
+    assert.equal(read.defaultCategory, 'Arts');
+    assert.equal(read.defaultSubcategory, 'Books');
+  });
+
+  it('refuses a category or subcategory a directory would reject', async () => {
+    const bogus = await patch({ defaultCategory: 'Woodwork' });
+    assert.equal(bogus.statusCode, 422);
+    assert.ok(bogus.json().error.fields.defaultCategory);
+
+    const mismatched = await patch({ defaultCategory: 'Arts', defaultSubcategory: 'Rugby' });
+    assert.equal(mismatched.statusCode, 422);
+    assert.ok(mismatched.json().error.fields.defaultSubcategory);
+
+    assert.equal(server.settings.defaults().category, 'Technology', 'nothing was written');
+  });
+
+  it('drops a subcategory the new category has no place for', async () => {
+    await patch({ defaultCategory: 'Arts', defaultSubcategory: 'Books' });
+    await patch({ defaultCategory: 'Sports' });
+
+    assert.equal(
+      server.settings.defaults().subcategory,
+      null,
+      'Books under Sports would be rejected in the very next feed it reached',
+    );
+  });
+
+  it('writes the explicit default too, and a new show is created with all three', async () => {
+    await patch({ defaultCategory: 'Arts', defaultSubcategory: 'Books', defaultExplicit: true });
+    assert.equal(server.settings.defaults().explicit, true);
+
+    await server.makeShowFolder('inherits-defaults');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    const show = server.shows.getBySlug('inherits-defaults');
+    assert.equal(show.itunes_category, 'Arts');
+    assert.equal(show.itunes_subcategory, 'Books');
+    assert.equal(show.explicit, 1);
+  });
+});
+
+/**
+ * Per-episode artwork, served one segment deeper than the show cover and from a
+ * cache SelfPod owns rather than from the user's file share.
+ */
+describe('per-episode artwork (GET /media/:slug/:token/:episodeId/cover.jpg)', () => {
+  async function seedArtwork(slug = 'arty-eps') {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const sharp = (await import('sharp')).default;
+    const { mp3WithEmbeddedArtwork } = await import('../helpers/harness.js');
+
+    await server.makeShowFolder(slug);
+    await writeFile(
+      join(server.config.showsDir, slug, 'ep-one.mp3'),
+      await mp3WithEmbeddedArtwork(
+        await sharp({ create: { width: 1500, height: 1500, channels: 3, background: '#204020' } })
+          .jpeg()
+          .toBuffer(),
+      ),
+    );
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    const show = server.shows.getBySlug(slug);
+    const [episode] = server.episodes.listByShow(show.id);
+    return {
+      show,
+      episode,
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/cover.jpg`,
+    };
+  }
+
+  it('serves the image with a content ETag taken straight from the art_etag column', async () => {
+    const { episode, url } = await seedArtwork();
+
+    const response = await server.app.inject({ method: 'GET', url });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['content-type'], 'image/jpeg');
+    assert.equal(response.headers['cache-control'], 'public, max-age=3600');
+    assert.equal(response.headers.etag, `"${episode.art_etag}"`, 'no per-request hashing');
+    assert.ok(response.rawPayload.length > 0);
+  });
+
+  it('answers 304 to both the strong and the weak form of that ETag', async () => {
+    const { url } = await seedArtwork();
+    const first = await server.app.inject({ method: 'GET', url });
+
+    const strong = await server.app.inject({
+      method: 'GET',
+      url,
+      headers: { 'if-none-match': first.headers.etag },
+    });
+    assert.equal(strong.statusCode, 304);
+    assert.equal(strong.headers.etag, first.headers.etag, 'a 304 still carries its validator');
+
+    // Cloudflare re-emits strong ETags as weak ones, so without the weak comparison
+    // every poll from behind the recommended tunnel would refetch the image.
+    const weak = await server.app.inject({
+      method: 'GET',
+      url,
+      headers: { 'if-none-match': `W/${first.headers.etag}` },
+    });
+    assert.equal(weak.statusCode, 304);
+  });
+
+  it('wins over the audio route for the literal cover.jpg segment', async () => {
+    const { show, episode } = await seedArtwork();
+
+    // Both routes match this shape — `cover.jpg` sits exactly where the audio
+    // route's `:filename` is — and a static segment must beat a parametric one.
+    // Asserted rather than assumed: if precedence ever flipped, this URL would
+    // quietly start serving the mp3 under an image content type.
+    const artwork = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/cover.jpg`,
+    });
+    assert.equal(artwork.statusCode, 200);
+    assert.equal(artwork.headers['content-type'], 'image/jpeg');
+
+    const audio = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${episode.filename}`,
+    });
+    assert.equal(audio.statusCode, 200);
+    assert.equal(audio.headers['content-type'], 'audio/mpeg', 'the audio route still answers');
+  });
+
+  it('404s on a wrong token, exactly as every other media route does', async () => {
+    const { show, episode } = await seedArtwork();
+    const response = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/not-the-token/${episode.id}/cover.jpg`,
+    });
+    assert.equal(response.statusCode, 404);
+  });
+
+  it('404s for an episode belonging to another show', async () => {
+    const { episode } = await seedArtwork('arty-eps');
+    const other = await seedArtwork('arty-other');
+    const response = await server.app.inject({
+      method: 'GET',
+      url: `/media/${other.show.slug}/${other.show.feed_token}/${episode.id}/cover.jpg`,
+    });
+    assert.equal(response.statusCode, 404, 'the episode must belong to the show in the URL');
+  });
+
+  it('404s for an episode that has no artwork of its own', async () => {
+    await server.addAudio('plain', 'sample.m4a');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('plain');
+    const [episode] = server.episodes.listByShow(show.id);
+
+    assert.equal(episode.art_filename, null);
+    const response = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/cover.jpg`,
+    });
+    assert.equal(response.statusCode, 404);
+  });
+
+  it('404s rather than traversing when art_filename has been tampered with', async () => {
+    const { show, episode, url } = await seedArtwork();
+    assert.equal((await server.app.inject({ method: 'GET', url })).statusCode, 200);
+
+    // A restored or hand-edited database is exactly the input the containment check
+    // exists for: this column is never validated on the way in.
+    for (const tampered of ['../../db.sqlite', '/etc/passwd', '..%2F..%2Fdb.sqlite']) {
+      server.db
+        .prepare('UPDATE episodes SET art_filename = ? WHERE id = ?')
+        .run(tampered, episode.id);
+      const response = await server.app.inject({
+        method: 'GET',
+        url: `/media/${show.slug}/${show.feed_token}/${episode.id}/cover.jpg`,
+      });
+      assert.equal(response.statusCode, 404, `\`${tampered}\` must not resolve to anything`);
+    }
+  });
+
+  it('404s when the cached file has been deleted from under the row', async () => {
+    const { rm } = await import('node:fs/promises');
+    const { url } = await seedArtwork();
+    assert.equal((await server.app.inject({ method: 'GET', url })).statusCode, 200);
+
+    await rm(server.config.episodeArtDir, { recursive: true, force: true });
+    const response = await server.app.inject({ method: 'GET', url });
+    assert.equal(response.statusCode, 404, 'a row pointing at nothing is a 404, not a 500');
+  });
+});

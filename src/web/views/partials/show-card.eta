@@ -33,6 +33,10 @@
           <span class="meta--warn"><%= show.warnings[0].message.length > 46 ? show.warnings[0].message.slice(0, 44) + '…' : show.warnings[0].message %></span>
         <% } else { %>
           <span><%= show.counts.inFeed %> in feed</span>
+          <% if (show.counts.scheduled) { %>
+            <span class="sep" aria-hidden="true"></span>
+            <span><%= show.counts.scheduled %> scheduled</span>
+          <% } %>
           <span class="sep" aria-hidden="true"></span>
           <span><%= show.lastScan ? 'scanned ' + it.helpers.relativeTime(show.lastScan.finishedAt) : 'not scanned yet' %></span>
         <% } %>

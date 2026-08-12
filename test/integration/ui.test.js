@@ -358,7 +358,7 @@ describe('htmx fragments', () => {
     await server.login();
     const response = await server.get('/ui/activity?offset=0', { 'hx-request': 'true' });
     assert.equal(response.statusCode, 200);
-    assert.ok(response.body.includes('Load more'));
+    assert.ok(response.body.includes('Show older'));
   });
 });
 
@@ -500,5 +500,508 @@ describe('static assets', () => {
     assert.ok(css.includes('/assets/fonts/fraunces-variable.woff2'));
     assert.ok(!css.includes('fonts.googleapis.com'), 'no CDN font requests — this must work offline');
     assert.ok(!css.includes('http://') && !css.includes('https://'), 'no external URLs at all');
+  });
+});
+
+/**
+ * `created_at` answers "did the file I just dropped get picked up?", which is a
+ * different question from the editorial pub date and the one people actually ask.
+ */
+describe('the Added column tells you when SelfPod first saw a file', () => {
+  /**
+   * Just the episode table. The show page also renders the reach and access-log
+   * tables, and `ep-table--pinned` is the class only the episode table carries.
+   */
+  function episodeTable(body) {
+    const start = body.indexOf('<table class="ep-table ep-table--pinned">');
+    assert.notEqual(start, -1, 'the show page should contain the episode table');
+    const end = body.indexOf('</table>', start);
+    assert.notEqual(end, -1, 'the episode table should be closed');
+    return body.slice(start, end);
+  }
+
+  it('gives the episode table an Added column header', async () => {
+    const show = await seed('added-column', ['sample.m4a']);
+    await server.login();
+    const response = await server.get(`/shows/${show.slug}`, { accept: 'text/html' });
+    const body = assertRendersCleanly(response, { name: 'show detail with Added column' });
+
+    const table = episodeTable(body);
+    assert.ok(table.includes('>Added</th>'), 'the episode table should have an Added header');
+    assert.ok(
+      table.includes('When SelfPod first saw this file on disk'),
+      'the header should explain how Added differs from Published',
+    );
+  });
+
+  it('fills the Added cell for a real scanned episode', async () => {
+    const show = await seed('added-cell', ['sample.m4a']);
+    await server.login();
+    const response = await server.get(`/shows/${show.slug}`, { accept: 'text/html' });
+    const table = episodeTable(assertRendersCleanly(response, { name: 'show detail Added cell' }));
+
+    const cell = table.match(/<td class="ep-date ep-added mono" title="([^"]*)">([^<]*)<\/td>/);
+    assert.ok(cell, 'the row should carry an Added cell');
+    const tooltip = cell[1];
+    const text = cell[2].trim();
+
+    // formatDateTime and relativeTime both degrade quietly on a missing value —
+    // to '—' and to '' — so these are the assertions that prove createdAt
+    // actually reached the template rather than the helpers papering over a gap.
+    assert.notEqual(tooltip, '—', 'the tooltip fell back to an em dash, so createdAt never arrived');
+    assert.notEqual(text, '—', 'the Added cell shows an em dash instead of a date');
+    assert.notEqual(text, 'undefined', 'the Added cell rendered the literal string "undefined"');
+    assert.match(text, /just now|ago$/, `the Added cell should read as a relative time, got "${text}"`);
+  });
+
+  it('keeps the header count and the cell count in step', async () => {
+    const show = await seed('added-columns-match', ['sample.m4a']);
+    await server.login();
+    const response = await server.get(`/shows/${show.slug}`, { accept: 'text/html' });
+    const table = episodeTable(assertRendersCleanly(response, { name: 'show detail column counts' }));
+
+    const thead = table.slice(table.indexOf('<thead>'), table.indexOf('</thead>'));
+    const tbody = table.slice(table.indexOf('<tbody>'));
+    const firstRow = tbody.slice(tbody.indexOf('<tr'), tbody.indexOf('</tr>'));
+
+    // No row in this table spans columns — the only colspan in the views belongs
+    // to access-log-rows, a different table — so a plain count is exact.
+    assert.ok(!firstRow.includes('colspan'), 'an episode row grew a colspan; this count is no longer exact');
+
+    const headers = (thead.match(/<th\b/g) ?? []).length;
+    const cells = (firstRow.match(/<td\b/g) ?? []).length;
+    assert.ok(headers > 0, 'the episode table should have headers at all');
+    assert.equal(
+      cells,
+      headers,
+      `a column was added to the header or the row but not both (${headers} headers, ${cells} cells)`,
+    );
+  });
+
+  it('names when the episode was added on the episode page', async () => {
+    const show = await seed('added-episode-page', ['sample.m4a']);
+    const episode = server.episodes.listByShow(show.id)[0];
+    await server.login();
+    const response = await server.get(`/shows/${show.slug}/episodes/${episode.id}`, { accept: 'text/html' });
+    const body = assertRendersCleanly(response, { name: 'episode edit with added date' });
+
+    assert.match(
+      body,
+      /added (just now|in |\d+ (second|minute|hour|day|month|year)s? ago)/,
+      'the episode page should say when the file was first seen',
+    );
+    assert.ok(
+      body.includes('SelfPod first saw this file on'),
+      'the exact timestamp should be available as a tooltip',
+    );
+    assert.ok(
+      !body.includes('SelfPod first saw this file on —'),
+      'the tooltip fell back to an em dash, so createdAt never reached the page',
+    );
+  });
+});
+
+describe('the activity page', () => {
+  /** A show with two episodes, and the scan that found them, in both logs. */
+  async function seedActivity() {
+    const show = await seed('late-night', ['sample.m4a', 'sample.mp3']);
+    return { show, episodes: server.episodes.listByShow(show.id) };
+  }
+
+  it('renders both logs on one page', async () => {
+    await seedActivity();
+    await server.login();
+    const body = assertRendersCleanly(await server.get('/activity', { accept: 'text/html' }), { name: '/activity' });
+
+    assert.ok(body.includes('<h1>Activity</h1>'), 'the page now holds two logs, so it is no longer titled after one');
+    assert.ok(body.includes('Episode timeline'), 'the new card');
+    assert.ok(body.includes('Scan history'), 'the old one, demoted to a card title');
+    assert.ok(body.includes('id="episode-timeline"') && body.includes('id="activity-list"'), 'both swap targets exist');
+    assert.ok(body.includes('never need to read container logs'), 'the page still explains why it exists');
+  });
+
+  it('states the limit of a derived timeline rather than implying it is a log', async () => {
+    await seedActivity();
+    await server.login();
+    const body = (await server.get('/activity', { accept: 'text/html' })).body;
+    assert.ok(body.includes('rather than from a running log'), 'says what it is built from');
+    assert.ok(body.includes('leaves no trace of ever having gone'), 'names the case it cannot show');
+  });
+
+  it('names an actual episode in the timeline, which no scan row ever could', async () => {
+    const { show, episodes } = await seedActivity();
+    await server.login();
+    const body = (await server.get('/activity', { accept: 'text/html' })).body;
+
+    for (const episode of episodes) {
+      assert.ok(
+        body.includes(`/shows/${show.slug}/episodes/${episode.id}`),
+        `the timeline links to ${episode.id}`,
+      );
+      assert.ok(body.includes(episode.title), `the timeline names "${episode.title}"`);
+    }
+    assert.ok(body.includes('Picked up from disk and added to the feed.'), 'each event says what it means');
+  });
+
+  it('renders cleanly under every filter the bars can set', async () => {
+    const { show } = await seedActivity();
+    await server.login();
+    for (const query of [
+      'event=added',
+      'event=missing',
+      `timelineShow=${show.slug}`,
+      'outcome=clean',
+      'outcome=problems',
+      'trigger=manual',
+      `event=added&timelineShow=${show.slug}&showId=${show.slug}&trigger=manual&outcome=clean`,
+    ]) {
+      assertRendersCleanly(await server.get(`/activity?${query}`, { accept: 'text/html' }), {
+        name: `/activity?${query}`,
+      });
+    }
+  });
+
+  it('marks the active chip as the current alternative, not as a pressed toggle', async () => {
+    await seedActivity();
+    await server.login();
+    const body = (await server.get('/activity?event=added', { accept: 'text/html' })).body;
+    assert.ok(body.includes('name="event" value="added"'), 'a chip is a real submit button with a value');
+    assert.ok(body.includes('aria-current="true"'), 'the active chip is announced');
+    assert.ok(!body.includes('aria-pressed'), 'these are alternatives, so a toggle role would misdescribe them');
+  });
+
+  it('explains an empty timeline differently when a filter caused it', async () => {
+    await seedActivity();
+    await server.login();
+    const unfiltered = (await server.get('/ui/activity/timeline', { 'hx-request': 'true' })).body;
+    assert.ok(!unfiltered.includes('No episodes match'), 'there are episodes to show');
+
+    const filtered = (await server.get('/ui/activity/timeline?event=removed', { 'hx-request': 'true' })).body;
+    assert.ok(filtered.includes('No episodes match'), 'nothing has been removed');
+    assert.ok(filtered.includes('Try “All”'), 'and it says how to get back');
+  });
+
+  it('explains an empty scan log filtered to problems as the good outcome', async () => {
+    await seedActivity();
+    await server.login();
+    const body = (await server.get('/ui/activity?outcome=problems', { 'hx-request': 'true' })).body;
+    assert.ok(body.includes('No scans had problems'));
+    assert.ok(body.includes('This is the good outcome.'));
+  });
+
+  it('returns every activity fragment bare, with no layout around it', async () => {
+    await seedActivity();
+    await server.login();
+    for (const url of [
+      '/ui/activity',
+      '/ui/activity/items',
+      '/ui/activity/timeline',
+      '/ui/activity/timeline/items',
+    ]) {
+      const response = await server.get(url, { 'hx-request': 'true' });
+      assert.equal(response.statusCode, 200, `${url} should answer`);
+      assert.ok(!response.body.includes('<html'), `${url} must not be wrapped in a layout`);
+    }
+  });
+
+  it('returns items without their container, so paging appends instead of nesting', async () => {
+    await seedActivity();
+    await server.login();
+
+    const scanContainer = (await server.get('/ui/activity', { 'hx-request': 'true' })).body;
+    const scanItems = (await server.get('/ui/activity/items', { 'hx-request': 'true' })).body;
+    assert.ok(scanContainer.includes('id="activity-list"'), 'the filter route still returns the container');
+    assert.ok(!scanItems.includes('id="activity-list"'), 'the pager route must not repeat the container id');
+
+    const timelineContainer = (await server.get('/ui/activity/timeline', { 'hx-request': 'true' })).body;
+    const timelineItems = (await server.get('/ui/activity/timeline/items', { 'hx-request': 'true' })).body;
+    assert.ok(timelineContainer.includes('id="episode-timeline"'), 'same for the timeline');
+    assert.ok(!timelineItems.includes('id="episode-timeline"'), 'and its pager route is items only');
+  });
+
+  it('points the scan pager at itself and carries the filter into the next page', async () => {
+    await seedActivity();
+    for (let i = 0; i < 30; i += 1) await server.scanner.scanAllNow(SCAN_TRIGGER.SCHEDULED);
+    await server.login();
+
+    const body = (await server.get('/ui/activity/items?trigger=scheduled', { 'hx-request': 'true' })).body;
+    assert.ok(body.includes('id="activity-more"'), 'the pager is the swap target');
+    assert.ok(body.includes('hx-target="#activity-more"'), 'and it targets itself, not the container');
+    assert.ok(body.includes('/ui/activity/items?trigger=scheduled'), 'the next page keeps the filter');
+    assert.ok(body.includes('offset=25'), 'and moves the offset on');
+    assert.ok(body.includes('of'), 'the count tells you how far in you are');
+  });
+
+  it('keeps one card’s filters when the other card is filtered', async () => {
+    const { show } = await seedActivity();
+    await server.login();
+    const body = (await server.get(
+      `/activity?event=added&trigger=manual&outcome=clean&showId=${show.slug}`,
+      { accept: 'text/html' },
+    )).body;
+
+    // The timeline bar owns event and timelineShow, so it must carry the scan log's keys.
+    assert.ok(body.includes('<input type="hidden" name="trigger" value="manual">'), 'trigger survives a chip click');
+    assert.ok(body.includes('<input type="hidden" name="outcome" value="clean">'), 'so does outcome');
+    assert.ok(body.includes(`<input type="hidden" name="showId" value="${show.slug}">`), 'and the scan log’s show');
+    // And the scan bar carries the timeline's.
+    assert.ok(body.includes('<input type="hidden" name="event" value="added">'), 'the timeline event survives too');
+  });
+
+  it('filters with JavaScript switched off, because every bar is a real GET form', async () => {
+    await seedActivity();
+    await server.login();
+    const response = await server.get('/activity?event=added', { accept: 'text/html' });
+    assert.equal(response.statusCode, 200);
+    assert.ok(response.body.includes('<html'), 'a plain browser gets the whole page back');
+    assert.ok(response.body.includes('method="get" action="/activity"'), 'the bar submits on its own');
+    assert.ok(response.body.includes('<noscript>'), 'and offers a submit button when htmx cannot run');
+  });
+});
+
+/**
+ * Directory readiness.
+ *
+ * A feed can be perfectly healthy here and still be turned down by Apple Podcasts or
+ * Spotify — no artwork at all, artwork in a format they refuse, an empty description,
+ * no owner email. None of that produced a single word anywhere in SelfPod: you found
+ * out at submission time, or never. That is the same shape as every failure in the
+ * spec's §13, which is why the panel exists.
+ */
+describe('the directory readiness panel', () => {
+  // The outer hook builds the server; this signs in, which every page here needs.
+  beforeEach(async () => {
+    await server.login();
+  });
+
+  it('lists what would stop a directory accepting the feed', async () => {
+    // Audio but no artwork, no description, no owner email: three blocking checks.
+    await server.addAudio('bare-show', 'sample.m4a');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('bare-show');
+
+    const response = await server.get(`/shows/${show.slug}`);
+    const body = assertRendersCleanly(response, { name: 'show page' });
+
+    assert.match(body, /Directory readiness/, 'the panel is on the page');
+    assert.match(body, /blocking/, 'and says how many things block a submission');
+    assert.match(body, /itunes:image|no cover art|artwork/i, 'artwork is one of them');
+  });
+
+  it('labels severity in words, not by colour alone', async () => {
+    await server.addAudio('wordy', 'sample.m4a');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('wordy');
+
+    const body = (await server.get(`/shows/${show.slug}`)).body;
+    assert.match(body, /Blocking/, 'a blocking check says so');
+    assert.match(
+      body,
+      /Advisory/,
+      'and an advisory one is distinguished by a word, so the panel works without colour',
+    );
+  });
+
+  it('collapses the checks that already pass rather than hiding them', async () => {
+    const show = await seed('passing-show');
+    const body = (await server.get(`/shows/${show.slug}`)).body;
+    assert.match(body, /check(s)? already pass/, 'the passing checks are counted');
+    assert.match(body, /<details/, 'and kept out of the way rather than dropped');
+  });
+
+  it('tells a ready show it is ready without claiming anything was submitted', async () => {
+    const show = await seed('ready-show');
+    server.shows.update(show.id, {
+      description: 'A show about things.',
+      authorName: 'A Person',
+      authorEmail: 'person@example.com',
+    });
+
+    const body = (await server.get(`/shows/${show.slug}`)).body;
+    assert.match(body, /Ready to submit/, 'it says the feed would be accepted');
+    assert.match(
+      body,
+      /cannot submit a show for you/,
+      'and is honest that SelfPod does not do the submitting',
+    );
+  });
+
+  it('reports blocked artwork for a format Apple refuses, even behind a .jpg URL', async () => {
+    await server.addAudio('webp-show', 'sample.m4a');
+    await writeFile(
+      join(server.config.showsDir, 'webp-show', 'cover.webp'),
+      await sharp({ create: { width: 1500, height: 1500, channels: 3, background: '#3E2D4A' } })
+        .webp()
+        .toBuffer(),
+    );
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+    const show = server.shows.getBySlug('webp-show');
+    assert.equal(show.cover_format, 'webp', 'the fixture really is a WebP');
+
+    const body = (await server.get(`/shows/${show.slug}`)).body;
+    assert.match(body, /WebP|webp/, 'the panel names the real format');
+    assert.match(
+      body,
+      /cover\.jpg/,
+      'and explains that the address ends in .jpg whatever the file is',
+    );
+  });
+
+  it('says so when a show has been kept out of directories on purpose', async () => {
+    const show = await seed('blocked-show');
+    server.shows.update(show.id, { directoryListing: 'blocked' });
+
+    const body = (await server.get(`/shows/${show.slug}`)).body;
+    assert.match(body, /out of their index|out of directories/i, 'the panel raises it');
+    assert.ok(
+      !/wrong|mistake|should not/i.test(body.split('Directory readiness')[1]?.slice(0, 2000) ?? ''),
+      'without scolding — it is a deliberate setting, not a fault',
+    );
+  });
+
+  it('serves the readiness panel as a bare fragment', async () => {
+    const show = await seed('frag-show');
+    const response = await server.get(`/ui/shows/${show.slug}/readiness`, { 'hx-request': 'true' });
+    assert.equal(response.statusCode, 200, 'the fragment renders');
+    assert.ok(!response.body.includes('<html'), 'a fragment must not be wrapped in a layout');
+    assert.match(response.body, /id="feed-readiness"/, 'and is the element it replaces');
+  });
+
+  it('keeps readiness out of the fault banner entirely', async () => {
+    await server.addAudio('quiet-show', 'sample.m4a');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    const dashboard = (await server.get('/')).body;
+    assert.ok(
+      !dashboard.includes('Directory readiness'),
+      'a banner that is always there is a banner nobody reads when something is really wrong',
+    );
+  });
+});
+
+/**
+ * The episode form's artwork cell. Read-only on purpose: artwork comes from the
+ * files, and SelfPod does not write into a show folder.
+ */
+describe('episode artwork on the episode page', () => {
+  async function artworkCell(slug, { embed = false, sidecar = false } = {}) {
+    const { mp3WithEmbeddedArtwork } = await import('../helpers/harness.js');
+    const picture = await sharp({
+      create: { width: 1400, height: 1400, channels: 3, background: '#204020' },
+    })
+      .jpeg()
+      .toBuffer();
+
+    await server.makeShowFolder(slug);
+    if (embed) {
+      await writeFile(join(server.config.showsDir, slug, 'ep-one.mp3'), await mp3WithEmbeddedArtwork(picture));
+    } else {
+      await server.addAudio(slug, 'sample.mp3', 'ep-one.mp3');
+    }
+    if (sidecar) await writeFile(join(server.config.showsDir, slug, 'ep-one.jpg'), picture);
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    const show = server.shows.getBySlug(slug);
+    const episode = server.episodes.listByShow(show.id)[0];
+    await server.login();
+    const response = await server.get(`/shows/${show.slug}/episodes/${episode.id}`, {
+      accept: 'text/html',
+    });
+    const body = assertRendersCleanly(response, { name: 'episode edit with artwork' });
+    // Collapsed, so an assertion about the wording is not also an assertion about
+    // where the template happens to wrap its lines.
+    return body.replace(/\s+/g, ' ');
+  }
+
+  it('says the artwork came from the file’s own tags, and how big it is', async () => {
+    const text = await artworkCell('art-embedded', { embed: true });
+    assert.ok(text.includes('Episode artwork'), 'the cell is labelled');
+    assert.ok(text.includes("From the file's own tags"), 'and names where it came from');
+    assert.ok(text.includes('1400 × 1400'), 'the real dimensions are stated');
+  });
+
+  it('names the sidecar file when that is where the artwork came from', async () => {
+    const text = await artworkCell('art-sidecar', { embed: true, sidecar: true });
+    assert.ok(text.includes('ep-one.jpg'), 'the sidecar is named, since it is the file to replace');
+    assert.ok(text.includes('beside the audio'));
+  });
+
+  it('explains both ways to add artwork when the episode has none', async () => {
+    const text = await artworkCell('art-none');
+    assert.ok(text.includes("Uses the show's cover"), 'it says what happens today');
+    assert.ok(text.includes('embed artwork in the audio file'), 'and the first way to change it');
+    assert.ok(text.includes('ep-one.jpg'), 'and the exact filename to use for the second');
+  });
+});
+
+/**
+ * The defaults applied to shows SelfPod discovers on its own.
+ *
+ * These three settings were seeded at first boot and readable through the API, but had
+ * no write path anywhere — so every discovered show got "Technology" and there was no
+ * way to change it short of editing each show afterwards.
+ */
+describe('defaults for new shows', () => {
+  beforeEach(async () => {
+    await server.login();
+  });
+
+  it('offers category, subcategory and explicit as editable rows', async () => {
+    const body = assertRendersCleanly(await server.get('/settings'), { name: 'settings' });
+    assert.match(body, /Default category/, 'category is on the page');
+    assert.match(body, /Default subcategory/, 'and subcategory');
+    assert.match(body, /Default explicit flag/, 'and the explicit flag');
+  });
+
+  it('edits the category with a picker from Apple’s list, not a text box', async () => {
+    const response = await server.get('/ui/settings/defaultCategory?edit=1', { 'hx-request': 'true' });
+    assert.equal(response.statusCode, 200, 'the editor renders');
+    assert.match(response.body, /<select/, 'a free-text category would reach the feed and be rejected');
+    assert.match(response.body, /Technology/, 'and it is populated from the real taxonomy');
+  });
+
+  it('saves a new default category', async () => {
+    const response = await server.post(
+      '/ui/settings/defaultCategory',
+      { value: 'Arts' },
+      { 'hx-request': 'true' },
+    );
+    assert.equal(response.statusCode, 200, 'the save succeeds');
+    assert.equal(server.settings.defaults().category, 'Arts', 'and it is what new shows will get');
+  });
+
+  it('refuses a category Apple does not have', async () => {
+    const before = server.settings.defaults().category;
+    const response = await server.post(
+      '/ui/settings/defaultCategory',
+      { value: 'Underwater Basket Weaving' },
+      { 'hx-request': 'true' },
+    );
+    assert.equal(response.statusCode, 422, 'it is rejected rather than stored');
+    assert.equal(server.settings.defaults().category, before, 'and nothing changed');
+  });
+
+  it('drops a subcategory that the new category has no place for', async () => {
+    await server.post('/ui/settings/defaultCategory', { value: 'Arts' }, { 'hx-request': 'true' });
+    await server.post('/ui/settings/defaultSubcategory', { value: 'Books' }, { 'hx-request': 'true' });
+    assert.equal(server.settings.defaults().subcategory, 'Books', 'the pair is valid to begin with');
+
+    await server.post('/ui/settings/defaultCategory', { value: 'Technology' }, { 'hx-request': 'true' });
+    assert.ok(
+      !server.settings.defaults().subcategory,
+      'a mismatched pair would reach a feed as a nested category Apple rejects',
+    );
+  });
+
+  it('applies the default to a show it discovers next', async () => {
+    await server.post('/ui/settings/defaultCategory', { value: 'Arts' }, { 'hx-request': 'true' });
+    await server.addAudio('inherits-default', 'sample.m4a');
+    await server.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+
+    assert.equal(
+      server.shows.getBySlug('inherits-default').itunes_category,
+      'Arts',
+      'which is the whole point of a default',
+    );
   });
 });

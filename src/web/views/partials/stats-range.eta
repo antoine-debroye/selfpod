@@ -1,0 +1,33 @@
+<%
+  /* The period every number on this page is measured over.
+
+     A plain form GET rather than an htmx swap: changing the range changes every figure,
+     chart and row below, so a "fragment" would be a page-sized fragment. A real
+     navigation is also honest about what changed, keeps the address bar right for free,
+     and lets the browser restore the scroll position on Back.
+
+     Each chip is a submit button whose name and value are submitted along with the rest
+     of the form, so one click carries every other active filter with it — with or
+     without JavaScript. */
+  const carry = ['showId', 'kind', 'client', 'failuresOnly', 'sort', 'dir'];
+%>
+<form class="filter-bar" method="get" action="/stats" style="margin-bottom:16px">
+  <% for (const key of carry) { %>
+    <% if (it.log.params[key]) { %>
+      <input type="hidden" name="<%= key %>" value="<%= it.log.params[key] %>">
+    <% } %>
+  <% } %>
+
+  <span class="filter-bar__label" id="range-label">Range</span>
+  <div class="chips" role="group" aria-labelledby="range-label">
+    <% for (const option of it.rangeOptions) { %>
+      <button class="chip<%= it.range.key === option.key ? ' is-active' : '' %>"
+              type="submit" name="range" value="<%= option.key %>"
+              title="<%= option.label %>"
+              <%~ it.range.key === option.key ? 'aria-current="true"' : '' %>><%= option.chip %></button>
+    <% } %>
+  </div>
+
+  <span class="filter-bar__spacer"></span>
+  <span class="dim">SelfPod keeps a year of request history and trims what is older.</span>
+</form>

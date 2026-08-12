@@ -1,0 +1,87 @@
+<%
+  /* Requests over time.
+
+     The plot itself is hidden from screen readers — ninety empty divs are noise — and
+     the same numbers sit beside it in a table, so nobody has to take the picture's word
+     for it. The caption states the headline fact in words, which is the thing most
+     people came for. */
+  const chart = it.helpers.dailySeries(it.daily, {
+    series: [
+      { key: 'downloads', label: 'Downloads', tone: 'accent' },
+      { key: 'streams', label: 'Streams', tone: 'teal' },
+    ],
+  });
+%>
+<div class="form-card" style="margin-bottom:18px">
+  <div class="ftitle">Requests over time</div>
+  <div class="fdesc">
+    Downloads and streams stacked, <%= it.range.lede %>. Still requests, not listens.
+  </div>
+
+  <% if (chart.empty) { %>
+    <div class="empty">
+      <div class="empty__title">Nothing in this window</div>
+      <p class="empty__hint">
+        No podcast app fetched an episode in this period. Try a longer range — and if every
+        range is empty, check that a feed has been picked up at all.
+      </p>
+    </div>
+  <% } else { %>
+    <figure class="chart">
+      <div class="chart__frame">
+        <div class="chart__yaxis" aria-hidden="true">
+          <span><%= chart.max.toLocaleString('en') %></span>
+          <span><%= chart.mid.toLocaleString('en') %></span>
+          <span>0</span>
+        </div>
+        <div class="chart__body">
+          <div class="chart__plot" aria-hidden="true">
+            <% for (const col of chart.columns) { %>
+              <div class="chart__col" title="<%= col.title %>">
+                <% for (const seg of col.segments) { %>
+                  <span class="chart__seg chart__seg--<%= seg.tone %><%= seg.value ? ' is-present' : '' %>"
+                        style="height:<%= seg.pct %>%"></span>
+                <% } %>
+              </div>
+            <% } %>
+          </div>
+          <div class="chart__ticks" aria-hidden="true">
+            <% for (const tick of chart.ticks) { %><span><%= tick.label %></span><% } %>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart__legend" aria-hidden="true">
+        <% for (const series of chart.series) { %>
+          <span class="chart__key">
+            <span class="chart__swatch chart__swatch--<%= series.tone %>"></span><%= series.label %>
+          </span>
+        <% } %>
+      </div>
+
+      <table class="sr-only">
+        <caption>Requests per period, <%= it.range.lede %></caption>
+        <thead>
+          <tr>
+            <th scope="col">Period</th>
+            <% for (const series of chart.series) { %><th scope="col"><%= series.label %></th><% } %>
+          </tr>
+        </thead>
+        <tbody>
+          <% for (const col of chart.columns) { %>
+            <tr>
+              <th scope="row"><%= col.label %></th>
+              <% for (const seg of col.segments) { %><td><%= seg.value %></td><% } %>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+
+      <figcaption class="chart__caption">
+        Busiest was <%= chart.peak.label %>, with
+        <%= chart.peak.total.toLocaleString('en') %> request<%= chart.peak.total === 1 ? '' : 's' %>.
+        Hover a column for that period's figures; the same numbers are in a table for screen readers.
+      </figcaption>
+    </figure>
+  <% } %>
+</div>

@@ -1,0 +1,23 @@
+<%
+  /* The card's swap target: changing a filter re-renders this whole div, while the
+     pager inside it appends. Both routes build the same context, so the empty state
+     and the rows can never describe two different queries. */
+  const filtered = Boolean(it.filter.event || it.filter.timelineSlug);
+%>
+<div class="log-list" id="episode-timeline">
+  <% if (!it.entries.length) { %>
+    <div class="empty">
+      <div class="empty__title"><%= filtered ? 'No episodes match' : 'Nothing yet' %></div>
+      <p class="empty__hint">
+        <% if (filtered) { %>
+          No episode has been through that in this library. Try “All”.
+        <% } else { %>
+          Drop a file into a show folder and its arrival is recorded here, along with anything
+          that later happens to it.
+        <% } %>
+      </p>
+    </div>
+  <% } else { %>
+    <%~ include('../partials/episode-timeline-items', it) %>
+  <% } %>
+</div>

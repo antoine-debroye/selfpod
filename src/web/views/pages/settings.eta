@@ -23,6 +23,31 @@
       helpers: it.helpers,
     }) %>
   </div>
+
+  <%
+    /* Changing the address rewrites every feed and media URL a subscriber holds, and
+       nothing else in SelfPod tells them where the show went. This is the only place
+       that says the forwarding is running, and — more importantly — the one thing it
+       cannot do anything about. */
+  %>
+  <% if (s.previousPublicBaseUrl) { %>
+    <div class="notice info" style="margin-top:16px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <div>
+        <div>Subscribers are being forwarded from <span class="mono"><%= s.previousPublicBaseUrl %></span>.
+          Every feed now carries an <span class="mono">itunes:new-feed-url</span> naming its address here, which
+          is how a podcast app moves a subscription across on its own. SelfPod sends it for
+          <%= it.previousBaseUrlWindowDays %> days after the change, so apps that only poll occasionally still
+          get it.</div>
+        <div style="margin-top:8px">This only works while the old address still reaches SelfPod. If it stopped
+          resolving the moment you changed it, subscribers on it saw the feed disappear and there is nothing
+          left to forward them with.</div>
+        <form method="post" action="/settings/forget-previous-base-url" class="notice__action">
+          <button class="btn btn-ghost btn-sm" type="submit">The move is done — stop sending it</button>
+        </form>
+      </div>
+    </div>
+  <% } %>
 </section>
 
 <section class="form-card">
@@ -121,7 +146,26 @@
   <div id="setting-defaultLanguage">
     <%~ include('../partials/settings-row', {
       key: 'defaultLanguage', title: 'Default language',
-      value: s.defaultLanguage, mono: true, last: true, helpers: it.helpers,
+      value: s.defaultLanguage, mono: true, helpers: it.helpers,
+    }) %>
+  </div>
+  <div id="setting-defaultCategory">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultCategory', title: 'Default category',
+      description: 'Applied to shows SelfPod discovers on its own. Existing shows keep what they have.',
+      value: s.defaultCategory, helpers: it.helpers,
+    }) %>
+  </div>
+  <div id="setting-defaultSubcategory">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultSubcategory', title: 'Default subcategory',
+      value: s.defaultSubcategory || 'None', helpers: it.helpers,
+    }) %>
+  </div>
+  <div id="setting-defaultExplicit">
+    <%~ include('../partials/settings-row', {
+      key: 'defaultExplicit', title: 'Default explicit flag',
+      value: s.defaultExplicit ? 'Yes' : 'No', last: true, helpers: it.helpers,
     }) %>
   </div>
 </section>

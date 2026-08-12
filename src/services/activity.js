@@ -1,3 +1,4 @@
+import { SCAN_TRIGGER } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
 import { describeFsError } from '../lib/errors.js';
 
@@ -18,6 +19,8 @@ import { describeFsError } from '../lib/errors.js';
  */
 const MAX_ENTRIES_PER_SCAN = 50;
 
+const TRIGGERS = new Set(Object.values(SCAN_TRIGGER));
+
 function capEntries(entries) {
   if (entries.length <= MAX_ENTRIES_PER_SCAN) return entries;
   const kept = entries.slice(0, MAX_ENTRIES_PER_SCAN);
@@ -27,6 +30,73 @@ function capEntries(entries) {
     message: `…and ${hidden} more of the same kind. Fixing the ones above usually clears the rest.`,
   });
   return kept;
+}
+
+/**
+ * What "how did it go?" can mean, as SQL.
+ *
+ * Each value maps to a fragment with no parameters of its own, so nothing a query
+ * string supplied ever reaches the statement — the key is looked up, or the filter is
+ * dropped. The COALESCE in `changes` matters: a scan still running has null counters,
+ * and `NULL > 0` is null, which would quietly classify every in-flight scan as boring.
+ */
+const OUTCOME_CLAUSES = Object.freeze({
+  problems: '(s.errors_json IS NOT NULL OR s.warnings_json IS NOT NULL)',
+  errors: 's.errors_json IS NOT NULL',
+  clean: '(s.finished_at IS NOT NULL AND s.errors_json IS NULL AND s.warnings_json IS NULL)',
+  changes:
+    '(COALESCE(s.added,0) + COALESCE(s.updated,0) + COALESCE(s.missing,0) + COALESCE(s.removed,0)) > 0',
+  running: 's.finished_at IS NULL',
+});
+
+/** The outcome keys a caller may ask for, for whoever validates a query string. */
+export const SCAN_OUTCOMES = Object.freeze(Object.keys(OUTCOME_CLAUSES));
+
+/**
+ * The one place a scan_log filter becomes SQL.
+ *
+ * `list` and `count` used to build this separately — one aliased `s.`, one not — which
+ * is how a filter ends up applied to the rows but not the total.
+ */
+function scanWhere({
+  showId = null,
+  includeGlobal = true,
+  triggers = null,
+  outcome = null,
+  from = null,
+  to = null,
+} = {}) {
+  const clauses = [];
+  const params = {};
+
+  if (showId) {
+    // A global scan covers every show, so it is part of one show's history too.
+    clauses.push(includeGlobal ? '(s.show_id = @showId OR s.show_id IS NULL)' : 's.show_id = @showId');
+    params.showId = showId;
+  }
+
+  const wanted = (Array.isArray(triggers) ? triggers : [])
+    .map(String)
+    .filter((trigger) => TRIGGERS.has(trigger));
+  if (wanted.length && wanted.length < TRIGGERS.size) {
+    clauses.push(`s.trigger IN (${wanted.map((_, i) => `@trigger${i}`).join(', ')})`);
+    wanted.forEach((trigger, i) => {
+      params[`trigger${i}`] = trigger;
+    });
+  }
+
+  if (outcome && Object.hasOwn(OUTCOME_CLAUSES, outcome)) clauses.push(OUTCOME_CLAUSES[outcome]);
+
+  if (from) {
+    clauses.push('s.started_at >= @from');
+    params.from = from;
+  }
+  if (to) {
+    clauses.push('s.started_at < @to');
+    params.to = to;
+  }
+
+  return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
 }
 
 export function createActivity({ db, config, logger }) {
@@ -102,26 +172,40 @@ export function createActivity({ db, config, logger }) {
     },
 
     /** Reverse-chronological, optionally filtered by show (spec §11.5, §14). */
-    list({ showId = null, limit = 25, offset = 0, includeGlobal = true } = {}) {
-      const cappedLimit = Math.min(Math.max(1, limit), 200);
-      let sql = `SELECT s.*, sh.title AS show_title, sh.slug AS show_slug
-                   FROM scan_log s
-                   LEFT JOIN shows sh ON sh.id = s.show_id`;
-      const params = { limit: cappedLimit, offset: Math.max(0, offset) };
-      if (showId) {
-        sql += includeGlobal ? ' WHERE (s.show_id = @showId OR s.show_id IS NULL)' : ' WHERE s.show_id = @showId';
-        params.showId = showId;
-      }
-      sql += ' ORDER BY s.started_at DESC, s.id DESC LIMIT @limit OFFSET @offset';
-      return db.prepare(sql).all(params).map(hydrate);
+    list({
+      showId = null,
+      limit = 25,
+      offset = 0,
+      includeGlobal = true,
+      triggers = null,
+      outcome = null,
+      from = null,
+      to = null,
+    } = {}) {
+      const { where, params } = scanWhere({ showId, includeGlobal, triggers, outcome, from, to });
+      return db
+        .prepare(
+          `SELECT s.*, sh.title AS show_title, sh.slug AS show_slug
+             FROM scan_log s
+             LEFT JOIN shows sh ON sh.id = s.show_id
+             ${where}
+             ORDER BY s.started_at DESC, s.id DESC
+             LIMIT @limit OFFSET @offset`,
+        )
+        .all({ ...params, limit: Math.min(Math.max(1, limit), 200), offset: Math.max(0, offset) })
+        .map(hydrate);
     },
 
-    count({ showId = null, includeGlobal = true } = {}) {
-      if (!showId) return db.prepare('SELECT COUNT(*) AS n FROM scan_log').get().n;
-      const sql = includeGlobal
-        ? 'SELECT COUNT(*) AS n FROM scan_log WHERE show_id = ? OR show_id IS NULL'
-        : 'SELECT COUNT(*) AS n FROM scan_log WHERE show_id = ?';
-      return db.prepare(sql).get(showId).n;
+    count({
+      showId = null,
+      includeGlobal = true,
+      triggers = null,
+      outcome = null,
+      from = null,
+      to = null,
+    } = {}) {
+      const { where, params } = scanWhere({ showId, includeGlobal, triggers, outcome, from, to });
+      return db.prepare(`SELECT COUNT(*) AS n FROM scan_log s ${where}`).get(params).n;
     },
 
     latestForShow(showId) {

@@ -3,9 +3,11 @@ import { dirname } from 'node:path';
 
 import {
   DEFAULT_MISSING_GRACE_SECONDS,
+  PREVIOUS_BASE_URL_WINDOW_DAYS,
   RESCAN_INTERVAL_MAX_SECONDS,
   RESCAN_INTERVAL_MIN_SECONDS,
 } from '../constants.js';
+import { nowIso } from '../lib/dates.js';
 import { EVENTS } from '../lib/events.js';
 import { normaliseBaseUrl } from '../lib/urls.js';
 
@@ -20,6 +22,12 @@ import { normaliseBaseUrl } from '../lib/urls.js';
 
 export const SETTING_KEYS = Object.freeze({
   PUBLIC_BASE_URL: 'public_base_url',
+  /**
+   * The address the feeds were served on before the last change, and when that
+   * change happened. Written by `update()` rather than by any route — see there.
+   */
+  PREVIOUS_PUBLIC_BASE_URL: 'previous_public_base_url',
+  PREVIOUS_PUBLIC_BASE_URL_SET_AT: 'previous_public_base_url_set_at',
   DEFAULT_AUTHOR_NAME: 'default_author_name',
   DEFAULT_AUTHOR_EMAIL: 'default_author_email',
   DEFAULT_LANGUAGE: 'default_language',
@@ -42,7 +50,13 @@ export const SETTING_KEYS = Object.freeze({
 /** Keys that must never leave the server (credentials and hashes). */
 const SECRET_KEYS = new Set([SETTING_KEYS.SESSION_SECRET, SETTING_KEYS.ADMIN_PASSWORD_HASH]);
 
-/** The subset exported to config.json — settings a user might want to keep in git. */
+/**
+ * The subset exported to config.json — settings a user might want to keep in git.
+ *
+ * The previous-base-URL pair is deliberately absent: it is transient state about a
+ * move that is currently in progress, not configuration. Restoring it from a file
+ * months later would start forwarding subscribers all over again.
+ */
 const EXPORTED_KEYS = [
   SETTING_KEYS.PUBLIC_BASE_URL,
   SETTING_KEYS.DEFAULT_AUTHOR_NAME,
@@ -99,6 +113,26 @@ export function createSettings({ db, config, events, logger }) {
     return Math.min(max, Math.max(min, value));
   }
 
+  /**
+   * The pair of keys that record a base-URL change, or nothing when this patch is
+   * not one.
+   *
+   * Only a change away from an existing, different address counts. The first time an
+   * address is set there is nobody on an old one to forward, and re-saving the same
+   * value is not a move. Both sides are compared normalised, so a trailing slash is
+   * not mistaken for a change of address.
+   */
+  function baseUrlMove(patch) {
+    if (!Object.hasOwn(patch, SETTING_KEYS.PUBLIC_BASE_URL)) return null;
+    const before = normaliseBaseUrl(getRaw(SETTING_KEYS.PUBLIC_BASE_URL) ?? '');
+    const after = normaliseBaseUrl(String(patch[SETTING_KEYS.PUBLIC_BASE_URL] ?? ''));
+    if (!before || !after || before === after) return null;
+    return {
+      [SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL]: before,
+      [SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT]: nowIso(),
+    };
+  }
+
   const api = {
     getRaw,
     setRaw,
@@ -128,6 +162,37 @@ export function createSettings({ db, config, events, logger }) {
 
     hasPublicBaseUrl() {
       return api.publicBaseUrl() !== null;
+    },
+
+    /**
+     * The address SelfPod was reachable on before the last base-URL change, or null.
+     *
+     * Null once the forwarding window has passed, so the feed and the settings page
+     * cannot disagree about whether a move is still being announced: both ask this
+     * one question rather than each reading the raw key and doing their own sums.
+     *
+     * A missing or unreadable timestamp also reads as null. The window is the whole
+     * point of the pair, and a value with no way to tell whether it has expired would
+     * otherwise forward subscribers for ever.
+     */
+    previousPublicBaseUrl() {
+      const previous = normaliseBaseUrl(getString(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL, '') ?? '');
+      if (!previous) return null;
+
+      const setAt = Date.parse(getString(SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT, '') ?? '');
+      if (!Number.isFinite(setAt)) return null;
+      const age = Date.now() - setAt;
+      if (age > PREVIOUS_BASE_URL_WINDOW_DAYS * 24 * 60 * 60 * 1000) return null;
+
+      return previous;
+    },
+
+    /** "The move is done" — stops the feeds announcing it before the window ends. */
+    forgetPreviousBaseUrl() {
+      return api.update({
+        [SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL]: null,
+        [SETTING_KEYS.PREVIOUS_PUBLIC_BASE_URL_SET_AT]: null,
+      });
     },
 
     rescanIntervalSeconds() {
@@ -191,12 +256,19 @@ export function createSettings({ db, config, events, logger }) {
      * moved so listeners (feed cache, scheduler) can react precisely.
      */
     update(patch, { skipExport = false } = {}) {
-      const keys = Object.keys(patch);
-      if (keys.length === 0) return [];
+      if (Object.keys(patch).length === 0) return [];
+      const keys = [];
       const write = db.transaction(() => {
-        for (const [key, value] of Object.entries(patch)) {
+        // A base-URL move is recorded here, in the one function every caller goes
+        // through, rather than in a route: the setup wizard and the settings page
+        // both change the public address, so recording it in either one leaves the
+        // other silently failing to forward anybody. The old value also has to be
+        // read before the patch overwrites it, which is why this sits inside the
+        // transaction that writes both.
+        for (const [key, value] of Object.entries({ ...baseUrlMove(patch), ...patch })) {
           if (typeof value === 'boolean') setRaw(key, value ? '1' : '0');
           else setRaw(key, value);
+          keys.push(key);
         }
       });
       write();

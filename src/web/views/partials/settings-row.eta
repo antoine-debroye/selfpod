@@ -17,10 +17,15 @@
           hx-post="/ui/settings/<%= it.key %>"
           hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">
       <label class="sr-only" for="set-<%= it.key %>"><%= it.title %></label>
-      <% if (it.key === 'defaultLanguage') { %>
+      <%
+        /* A row supplies `options` when its value is one of a fixed set. That used to
+           be a hardcoded check for the language row; naming the options in the row
+           definition means the next such setting needs no edit here. */
+      %>
+      <% if (it.options) { %>
         <select id="set-<%= it.key %>" name="value">
-          <% for (const lang of it.helpers.languages) { %>
-            <option value="<%= lang.code %>"<%= it.rawValue === lang.code ? ' selected' : '' %>><%= lang.label %></option>
+          <% for (const option of it.options) { %>
+            <option value="<%= option.value %>"<%= String(it.rawValue ?? '') === String(option.value) ? ' selected' : '' %>><%= option.label %></option>
           <% } %>
         </select>
       <% } else { %>

@@ -1,14 +1,22 @@
 <%
   const episode = it.episode;
   const show = it.show;
-  const badge = it.helpers.episodeBadge(episode.status);
-  const rowClass = episode.status === 'missing' ? ' class="is-missing"' : episode.status === 'removed' ? ' class="is-removed"' : '';
+  const badge = it.helpers.episodeBadge(episode);
+  const rowClass = episode.scheduled
+    ? ' class="is-scheduled"'
+    : episode.status === 'missing'
+      ? ' class="is-missing"'
+      : episode.status === 'removed'
+        ? ' class="is-removed"'
+        : '';
 %>
 <tr<%~ rowClass %> id="episode-row-<%= episode.id %>">
   <td>
     <div class="ep-title">
       <a href="/shows/<%= encodeURIComponent(show.slug) %>/episodes/<%= encodeURIComponent(episode.id) %>"><%= episode.title %></a>
-      <% if (episode.status === 'missing') { %>
+      <% if (episode.scheduled) { %>
+        <small class="ep-title__note">not in the feed yet — joins it on <%= it.helpers.formatDateTime(episode.pubDate) %></small>
+      <% } else if (episode.status === 'missing') { %>
         <small class="ep-title__warn">file missing on disk — still in the feed for now</small>
       <% } else { %>
         <small><%= episode.filename %></small>
@@ -16,6 +24,11 @@
     </div>
   </td>
   <td class="ep-date mono"><%= it.helpers.formatDate(episode.pubDate) %></td>
+  <%
+    /* Relative in the cell, absolute in the tooltip: "did my drop get picked up?" is a
+       question about recency, and the exact timestamp is only ever wanted second. */
+  %>
+  <td class="ep-date ep-added mono" title="<%= it.helpers.formatDateTime(episode.createdAt) %>"><%= it.helpers.relativeTime(episode.createdAt) %></td>
   <td class="dur"><%= it.helpers.formatDuration(episode.durationSeconds) %></td>
   <td class="size"><%= it.helpers.formatBytes(episode.fileSizeBytes) %></td>
   <%

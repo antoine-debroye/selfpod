@@ -11,6 +11,7 @@ import { createEventBus } from './lib/events.js';
 import { createActivity } from './services/activity.js';
 import { bootstrap } from './services/bootstrap.js';
 import { createCovers } from './services/covers.js';
+import { createEpisodeArt } from './services/episode-art.js';
 import { createEpisodes } from './services/episodes.js';
 import { createFeeds } from './services/feed.js';
 import { createHealth } from './services/health.js';
@@ -19,8 +20,11 @@ import { createPresenters } from './services/presenters.js';
 import { createScanner } from './services/scanner.js';
 import { createScheduler } from './services/scheduler.js';
 import { createSettings } from './services/settings.js';
+import { createReadiness } from './services/readiness.js';
 import { createStats } from './services/stats.js';
+
 import { createShows } from './services/shows.js';
+import { createTimeline } from './services/timeline.js';
 import { createWatcher } from './services/watcher.js';
 import { SCAN_TRIGGER } from './constants.js';
 import { VERSION } from './version.js';
@@ -62,6 +66,7 @@ async function main() {
   try {
     await mkdir(config.showsDir, { recursive: true });
     await mkdir(config.tempDir, { recursive: true });
+    await mkdir(config.episodeArtDir, { recursive: true });
   } catch (err) {
     logger.error({ err }, 'could not prepare the data directory');
   }
@@ -95,25 +100,28 @@ async function main() {
 
   const activity = createActivity({ db, config, logger });
   const covers = createCovers({ config, logger });
+  const episodeArt = createEpisodeArt({ config, covers, logger });
   const metadata = createMetadata({ logger });
-  const shows = createShows({ db, config, events, logger, settings });
-  const episodes = createEpisodes({ db, config, events, shows, logger });
+  const shows = createShows({ db, config, events, logger, settings, episodeArt });
+  const episodes = createEpisodes({ db, config, events, shows, logger, episodeArt });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger });
   const scanner = createScanner({
     db, config, settings, events, logger,
-    shows, episodes, covers, metadata, activity, health,
+    shows, episodes, covers, episodeArt, metadata, activity, health,
   });
   const stats = createStats({ db, logger });
+  const readiness = createReadiness({ covers });
+  const timeline = createTimeline({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
   const scheduler = createScheduler({
     settings, events, logger, scanner, episodes, watcher, activity, stats,
   });
 
-  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats });
+  const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats, readiness });
 
   const services = {
-    config, logger, db, events, settings, health, activity, covers, metadata,
-    shows, episodes, feeds, scanner, watcher, scheduler, stats,
+    config, logger, db, events, settings, health, activity, covers, episodeArt, metadata,
+    shows, episodes, feeds, scanner, watcher, scheduler, stats, timeline, readiness,
     ...presenters,
   };
 

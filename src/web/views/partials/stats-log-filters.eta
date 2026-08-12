@@ -1,0 +1,58 @@
+<%
+  /* The access log's own filters.
+
+     Unlike the range control above, these swap only the log, so they stay on htmx. The
+     enclosing <form method="get" action="/stats"> is what makes them work without it:
+     the same values, submitted the ordinary way, produce the same page. */
+  const log = it.log;
+%>
+<form class="filter-bar" method="get" action="/stats" style="margin-bottom:14px">
+  <% if (log.params.range) { %><input type="hidden" name="range" value="<%= log.params.range %>"><% } %>
+  <%
+    /* Sort travels as hidden fields so changing a filter keeps the column order that was
+       chosen; the sortable column headers carry the filters the other way. */
+  %>
+  <% if (log.params.sort) { %><input type="hidden" name="sort" value="<%= log.params.sort %>"><% } %>
+  <% if (log.params.dir) { %><input type="hidden" name="dir" value="<%= log.params.dir %>"><% } %>
+
+  <label class="sr-only" for="log-show">Filter by show</label>
+  <select id="log-show" name="showId"
+          hx-get="/ui/stats/log" hx-include="closest form"
+          hx-target="#access-log" hx-swap="outerHTML">
+    <option value="">All shows</option>
+    <% for (const show of it.shows) { %>
+      <option value="<%= show.slug %>"<%= log.slug === show.slug ? ' selected' : '' %>><%= show.title %></option>
+    <% } %>
+  </select>
+
+  <label class="sr-only" for="log-kind">Filter by request type</label>
+  <select id="log-kind" name="kind"
+          hx-get="/ui/stats/log" hx-include="closest form"
+          hx-target="#access-log" hx-swap="outerHTML">
+    <option value="">Any request</option>
+    <% for (const kind of it.kindOptions) { %>
+      <option value="<%= kind.value %>"<%= log.kind === kind.value ? ' selected' : '' %>><%= kind.label %></option>
+    <% } %>
+  </select>
+
+  <label class="sr-only" for="log-client">Filter by app</label>
+  <select id="log-client" name="client"
+          hx-get="/ui/stats/log" hx-include="closest form"
+          hx-target="#access-log" hx-swap="outerHTML">
+    <option value="">Any app</option>
+    <% for (const client of it.clientOptions) { %>
+      <option value="<%= client %>"<%= log.client === client ? ' selected' : '' %>><%= client %></option>
+    <% } %>
+  </select>
+
+  <label class="check-inline">
+    <input type="checkbox" name="failuresOnly" value="1"<%= log.failuresOnly ? ' checked' : '' %>
+           hx-get="/ui/stats/log" hx-include="closest form"
+           hx-target="#access-log" hx-swap="outerHTML">
+    Failures only
+  </label>
+
+  <span class="filter-bar__spacer"></span>
+  <a class="btn btn-ghost btn-sm" href="<%= it.csvHref %>" download>Download CSV</a>
+  <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+</form>

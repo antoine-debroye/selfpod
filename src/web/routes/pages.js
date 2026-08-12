@@ -1,6 +1,10 @@
-import { SHOW_STATUS } from '../../constants.js';
+import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
+import { bucketEdges, DEFAULT_RANGE, RANGES, resolveRange } from '../../lib/time-range.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
+import { SCAN_OUTCOMES } from '../../services/activity.js';
+import { ACCESS_KIND, NO_ACCESS } from '../../services/stats.js';
+import { TIMELINE_EVENT } from '../../services/timeline.js';
 import { SETTING_KEYS } from '../../services/settings.js';
 import { MIN_PASSWORD_LENGTH } from '../../routes/api/setup.js';
 import { subscribeQrCodes } from '../lib/qr.js';
@@ -275,7 +279,7 @@ export default async function pageRoutes(fastify, services) {
   fastify.get('/shows/:slug', guarded, async (request, reply) => {
     const show = shows.getBySlug(request.params.slug);
     if (!show) throw notFound('That show does not exist.', 'show_not_found');
-    const presented = presentShow(show, { includeEpisodes: true });
+    const presented = presentShow(show, { includeEpisodes: true, includeReadiness: true });
 
     return reply.view(
       'pages/show-detail.eta',
@@ -345,28 +349,9 @@ export default async function pageRoutes(fastify, services) {
 
   /* -------------------------------------------------------------- activity */
 
-  fastify.get('/activity', guarded, async (request, reply) => {
-    const showFilter = request.query?.showId ? String(request.query.showId) : null;
-    const filtered = showFilter ? shows.getBySlug(showFilter) ?? shows.get(showFilter) : null;
-    const limit = 25;
-    const entries = activity.list({ showId: filtered?.id ?? null, limit, offset: 0 });
-    const total = activity.count({ showId: filtered?.id ?? null });
-
-    return reply.view(
-      'pages/activity.eta',
-      shell(request, {
-        title: 'Activity',
-        active: 'activity',
-        crumbs: [{ label: 'Activity' }],
-        entries,
-        total,
-        showFilter: filtered?.slug ?? null,
-        hasMore: entries.length < total,
-        nextOffset: entries.length,
-      }),
-      APP_LAYOUT,
-    );
-  });
+  fastify.get('/activity', guarded, async (request, reply) =>
+    reply.view('pages/activity.eta', shell(request, activityContext(request)), APP_LAYOUT),
+  );
 
   /* ----------------------------------------------------------- statistics */
 
@@ -379,30 +364,266 @@ export default async function pageRoutes(fastify, services) {
     reply.view('pages/stats.eta', shell(request, statsContext(request)), APP_LAYOUT),
   );
 
+  /**
+   * The filtered access log as a file.
+   *
+   * A page route rather than a `/ui/` fragment: it is a navigation that produces a
+   * file, so it must behave the same with JavaScript off, and an expired session
+   * should land on the sign-in page rather than write a JSON 401 into someone's
+   * downloads folder. Paging is ignored on purpose — what is on screen is a window,
+   * the export is what the filters describe.
+   */
+  const CSV_MAX_ROWS = 50_000;
+
+  const CSV_COLUMNS = [
+    'requested_at_utc',
+    'show',
+    'episode',
+    'filename',
+    'kind',
+    'status_code',
+    'result',
+    'bytes_sent',
+    'total_bytes',
+    'range_header',
+    'app',
+    'error',
+  ];
+
+  /** Leading characters a spreadsheet treats as the start of a formula. */
+  const FORMULA_START = /^[=+\-@\t\r]/;
+
+  function csvCell(value) {
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    // An episode title genuinely can begin with "-" or "@". Prefixing an apostrophe is
+    // the standard defusal: a spreadsheet shows the text instead of evaluating it, and
+    // anything reading the file as data sees one extra character rather than a formula.
+    const safe = FORMULA_START.test(text) ? `'${text}` : text;
+    return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+  }
+
+  fastify.get('/stats/access-log.csv', guarded, async (request, reply) => {
+    const filter = logFilter(request);
+    const rows = services.stats.list({ ...filter.query, limit: CSV_MAX_ROWS, offset: 0 });
+
+    const lines = [CSV_COLUMNS.join(',')];
+    for (const row of rows) {
+      lines.push(
+        [
+          row.requestedAt,
+          row.showTitle,
+          row.episodeTitle,
+          row.episodeFilename,
+          row.kind,
+          row.statusCode,
+          row.ok ? (row.incomplete ? 'partial' : 'ok') : 'failed',
+          row.bytesSent,
+          row.totalBytes,
+          row.rangeHeader,
+          row.client,
+          row.error,
+        ]
+          .map(csvCell)
+          .join(','),
+      );
+    }
+
+    const parts = ['selfpod-access-log', filter.slug ?? 'all-shows', filter.range.key];
+    if (filter.failuresOnly) parts.push('failures');
+    if (filter.kind) parts.push(filter.kind);
+    const filename = `${parts.join('_')}.csv`;
+
+    reply.header('content-type', 'text/csv; charset=utf-8');
+    reply.header('content-disposition', `attachment; filename="${filename}"`);
+    reply.header('cache-control', 'no-store');
+    // A BOM, so a spreadsheet opens an accented episode title as UTF-8 rather than
+    // as mojibake — the difference between a working export and a support question.
+    return reply.send(`﻿${lines.join('\r\n')}\r\n`);
+  });
+
   const LOG_PAGE_SIZE = 40;
+
+  /** Sortable columns of the access log, in the order the headers appear. */
+  const LOG_SORTS = ['time', 'bytes', 'status'];
+
+  const KIND_OPTIONS = [
+    { value: ACCESS_KIND.DOWNLOAD, label: 'Downloads' },
+    { value: ACCESS_KIND.STREAM, label: 'Streams' },
+    { value: ACCESS_KIND.FEED, label: 'Feed checks' },
+    { value: ACCESS_KIND.COVER, label: 'Artwork' },
+  ];
+
+  const RANGE_OPTIONS = Object.entries(RANGES).map(([key, spec]) => ({
+    key,
+    label: spec.label,
+    // The chips are narrow, so they carry the short form and the label is the title.
+    chip: key === 'all' ? 'All time' : `${spec.days} days`,
+  }));
+
+  /**
+   * The keys that describe a stats view, in a fixed order.
+   *
+   * `offset` is deliberately absent. It is real request state, but a URL carrying
+   * offset=80 reloads into a log that begins eighty rows in, with the eighty rows the
+   * reader had already worked through simply gone.
+   */
+  const STATS_URL_KEYS = ['range', 'showId', 'kind', 'client', 'failuresOnly', 'sort', 'dir'];
+  const ACTIVITY_URL_KEYS = ['event', 'timelineShow', 'showId', 'trigger', 'outcome'];
+
+  function toQueryString(keys, params) {
+    const search = new URLSearchParams();
+    for (const key of keys) {
+      const value = params[key];
+      if (value === null || value === undefined || value === '') continue;
+      search.set(key, String(value));
+    }
+    return search.toString();
+  }
+
+  function positiveInt(value) {
+    const parsed = Number.parseInt(value ?? '0', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function resolveShow(value) {
+    if (!value) return null;
+    const key = String(value);
+    return shows.getBySlug(key) ?? shows.get(key) ?? null;
+  }
+
+  /**
+   * The single place a stats filter is read from a request and written back into a URL.
+   *
+   * The page, the htmx fragments and the CSV export all go through this. Templates used
+   * to hand-assemble the round-trip URL out of the two filters that existed; with eight
+   * of them, that hand-assembly is exactly where "Show older" or "Export" quietly drops
+   * one and nobody notices until the numbers disagree.
+   */
+  function logFilter(request) {
+    const query = request.query ?? {};
+    const show = resolveShow(query.showId);
+    const range = resolveRange(String(query.range ?? ''), { timeZone: config.timeZone });
+    const kind = KIND_OPTIONS.some((k) => k.value === query.kind) ? String(query.kind) : null;
+    const rawClient = typeof query.client === 'string' ? query.client.trim() : '';
+    const client = rawClient ? rawClient.slice(0, 60) : null;
+    const failuresOnly =
+      query.failuresOnly === '1' || query.failuresOnly === 'true' || query.failuresOnly === 'on';
+    const sort = LOG_SORTS.includes(String(query.sort)) ? String(query.sort) : 'time';
+    const dir = String(query.dir).toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    // Defaults are omitted from the written URL, so a plain /stats stays clean and two
+    // routes that mean the same thing produce the same string.
+    const params = {
+      range: range.key === DEFAULT_RANGE ? null : range.key,
+      showId: show?.slug ?? null,
+      kind,
+      client,
+      failuresOnly: failuresOnly ? '1' : null,
+      sort: sort === 'time' ? null : sort,
+      dir: dir === 'desc' ? null : dir,
+    };
+
+    return {
+      slug: show?.slug ?? null,
+      range,
+      kind,
+      client,
+      failuresOnly,
+      sort,
+      dir,
+      offset: positiveInt(query.offset),
+      /** Exactly what stats.list / count accept. Nothing else builds one. */
+      query: {
+        showId: show?.id ?? null,
+        from: range.from,
+        to: range.to,
+        kinds: kind ? [kind] : null,
+        client,
+        failuresOnly,
+        sort,
+        dir,
+      },
+      params,
+      /** Canonical query string minus offset; pagers append their own. */
+      qs: toQueryString(STATS_URL_KEYS, params),
+      /** Same filter, different sort — and the opposite direction if it is already active. */
+      sortLink(key) {
+        return toQueryString(STATS_URL_KEYS, {
+          ...params,
+          sort: key === 'time' ? null : key,
+          dir: sort === key && dir === 'desc' ? 'asc' : null,
+        });
+      },
+    };
+  }
+  services.logFilter = logFilter;
+
+  function statsPageUrl(filter, patch = {}) {
+    const query = toQueryString(STATS_URL_KEYS, { ...filter.params, ...patch });
+    return query ? `/stats?${query}` : '/stats';
+  }
+  services.statsPageUrl = statsPageUrl;
+
+  /**
+   * Buckets for the chart.
+   *
+   * All time starts at the oldest request rather than at an arbitrary date, and ends
+   * where any range ends — tomorrow's local midnight, so today's partial day counts.
+   */
+  function chartBuckets(range) {
+    const to = range.to ?? resolveRange(DEFAULT_RANGE, { timeZone: config.timeZone }).to;
+    const from = range.from ?? services.stats.firstAccessAt();
+    if (!from) return [];
+    return bucketEdges({ from, to, timeZone: config.timeZone });
+  }
 
   function statsContext(request) {
     const filter = logFilter(request);
-    const entries = services.stats.list({ ...filter.query, limit: LOG_PAGE_SIZE, offset: filter.offset });
+    const { range } = filter;
+    const scope = { from: range.from, to: range.to };
+
+    const entries = services.stats.list({
+      ...filter.query,
+      limit: LOG_PAGE_SIZE,
+      offset: filter.offset,
+    });
     const total = services.stats.count(filter.query);
+
+    // One grouped query for every show, rather than four per show in a loop.
+    const rollups = services.stats.forShows(scope);
+    const clients = services.stats.byClient(scope);
 
     return {
       title: 'Statistics',
       active: 'stats',
       crumbs: [{ label: 'Statistics' }],
-      overview: services.stats.overview(),
+      overview: services.stats.overview({ ...scope, prevFrom: range.prevFrom }),
       showStats: shows.list().map((show) => ({
         id: show.id,
         slug: show.slug,
         title: show.title,
-        ...services.stats.forShow(show.id),
+        ...NO_ACCESS,
+        episodesTouched: 0,
+        feedFetches: 0,
+        feedLastAt: null,
+        ...rollups[show.id],
       })),
-      busiest: services.stats.busiest(10),
-      failures: services.stats.recentFailures(6),
+      busiest: services.stats.busiest(10, scope),
+      failures: services.stats.recentFailures(6, scope),
+      daily: services.stats.daily({ buckets: chartBuckets(range) }),
+      clients,
+      range,
+      rangeOptions: RANGE_OPTIONS,
+      kindOptions: KIND_OPTIONS,
+      clientOptions: clients.map((row) => row.client),
+      log: filter,
+      csvHref: `/stats/access-log.csv${filter.qs ? `?${filter.qs}` : ''}`,
       entries,
       total,
+      loaded: filter.offset + entries.length,
       showFilter: filter.slug,
-      failuresOnly: filter.query.failuresOnly,
+      failuresOnly: filter.failuresOnly,
       hasMore: filter.offset + entries.length < total,
       nextOffset: filter.offset + entries.length,
     };
@@ -410,22 +631,128 @@ export default async function pageRoutes(fastify, services) {
   services.statsContext = statsContext;
   services.logPageSize = LOG_PAGE_SIZE;
 
-  /** Shared by the page and its htmx fragment so both filter identically. */
-  function logFilter(request) {
+  /* ---------------------------------------------------- the activity filters */
+
+  const ACTIVITY_PAGE_SIZE = 25;
+
+  const EVENT_OPTIONS = [
+    { key: TIMELINE_EVENT.ADDED, label: 'Added' },
+    { key: TIMELINE_EVENT.MISSING, label: 'Went missing' },
+    { key: TIMELINE_EVENT.REMOVED, label: 'Removed' },
+    { key: TIMELINE_EVENT.EXPIRED, label: 'Expired' },
+  ];
+
+  const TRIGGER_OPTIONS = [
+    { value: SCAN_TRIGGER.WATCHER, label: 'File change' },
+    { value: SCAN_TRIGGER.SCHEDULED, label: 'Scheduled' },
+    { value: SCAN_TRIGGER.MANUAL, label: 'Rescan button' },
+    { value: SCAN_TRIGGER.STARTUP, label: 'Startup' },
+    { value: SCAN_TRIGGER.UPLOAD, label: 'Upload' },
+  ];
+
+  const OUTCOME_OPTIONS = [
+    { key: 'problems', label: 'Problems' },
+    { key: 'clean', label: 'Clean' },
+  ];
+
+  /**
+   * Both cards on /activity share one URL, so the timeline owns `event` and
+   * `timelineShow` while the scan log owns `showId`, `trigger` and `outcome`. Each
+   * form carries the other's keys as hidden fields, so filtering one never resets
+   * the other.
+   */
+  function activityFilter(request) {
     const query = request.query ?? {};
-    const slug = query.showId ? String(query.showId) : null;
-    const show = slug ? (shows.getBySlug(slug) ?? shows.get(slug)) : null;
-    const offset = Number.parseInt(query.offset ?? '0', 10);
+    const scanShow = resolveShow(query.showId);
+    const timelineShow = resolveShow(query.timelineShow);
+    const event = EVENT_OPTIONS.some((option) => option.key === query.event)
+      ? String(query.event)
+      : null;
+    const trigger = TRIGGER_OPTIONS.some((option) => option.value === query.trigger)
+      ? String(query.trigger)
+      : null;
+    const outcome = SCAN_OUTCOMES.includes(String(query.outcome)) ? String(query.outcome) : null;
+
+    const params = {
+      event,
+      timelineShow: timelineShow?.slug ?? null,
+      showId: scanShow?.slug ?? null,
+      trigger,
+      outcome,
+    };
+
     return {
-      slug: show?.slug ?? null,
-      offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
-      query: {
-        showId: show?.id ?? null,
-        failuresOnly: query.failuresOnly === '1' || query.failuresOnly === 'true' || query.failuresOnly === 'on',
+      event,
+      trigger,
+      outcome,
+      timelineSlug: timelineShow?.slug ?? null,
+      scanSlug: scanShow?.slug ?? null,
+      offset: positiveInt(query.offset),
+      timelineOffset: positiveInt(query.timelineOffset),
+      timelineQuery: { showId: timelineShow?.id ?? null, events: event ? [event] : null },
+      scanQuery: { showId: scanShow?.id ?? null, triggers: trigger ? [trigger] : null, outcome },
+      params,
+      qs: toQueryString(ACTIVITY_URL_KEYS, params),
+      /** Everything this bar does not own, so a chip click cannot drop it. */
+      carry(owned) {
+        return ACTIVITY_URL_KEYS.filter((key) => !owned.includes(key) && params[key]).map((key) => [
+          key,
+          params[key],
+        ]);
       },
     };
   }
-  services.logFilter = logFilter;
+  services.activityFilter = activityFilter;
+
+  function activityPageUrl(filter, patch = {}) {
+    const query = toQueryString(ACTIVITY_URL_KEYS, { ...filter.params, ...patch });
+    return query ? `/activity?${query}` : '/activity';
+  }
+  services.activityPageUrl = activityPageUrl;
+
+  function activityContext(request) {
+    const filter = activityFilter(request);
+
+    const entries = activity.list({
+      ...filter.scanQuery,
+      limit: ACTIVITY_PAGE_SIZE,
+      offset: filter.offset,
+    });
+    const total = activity.count(filter.scanQuery);
+
+    const timelineEntries = services.timeline.list({
+      ...filter.timelineQuery,
+      limit: ACTIVITY_PAGE_SIZE,
+      offset: filter.timelineOffset,
+    });
+    const timelineTotal = services.timeline.count(filter.timelineQuery);
+
+    return {
+      title: 'Activity',
+      active: 'activity',
+      crumbs: [{ label: 'Activity' }],
+      filter,
+      eventOptions: EVENT_OPTIONS,
+      triggerOptions: TRIGGER_OPTIONS,
+      outcomeOptions: OUTCOME_OPTIONS,
+      entries,
+      total,
+      showFilter: filter.scanSlug,
+      loaded: filter.offset + entries.length,
+      hasMore: filter.offset + entries.length < total,
+      nextOffset: filter.offset + entries.length,
+      timeline: {
+        filter,
+        entries: timelineEntries,
+        total: timelineTotal,
+        loaded: filter.timelineOffset + timelineEntries.length,
+        hasMore: filter.timelineOffset + timelineEntries.length < timelineTotal,
+        nextOffset: filter.timelineOffset + timelineEntries.length,
+      },
+    };
+  }
+  services.activityContext = activityContext;
+  services.activityPageSize = ACTIVITY_PAGE_SIZE;
 
   /* -------------------------------------------------------------- settings */
 
@@ -437,11 +764,16 @@ export default async function pageRoutes(fastify, services) {
         title: 'Settings',
         active: 'settings',
         crumbs: [{ label: 'Settings' }],
+        previousBaseUrlWindowDays: PREVIOUS_BASE_URL_WINDOW_DAYS,
         settings: {
           publicBaseUrl: settings.publicBaseUrl(),
+          previousPublicBaseUrl: settings.previousPublicBaseUrl(),
           defaultAuthorName: defaults.authorName,
           defaultAuthorEmail: defaults.authorEmail,
           defaultLanguage: defaults.language,
+          defaultCategory: defaults.category,
+          defaultSubcategory: defaults.subcategory,
+          defaultExplicit: defaults.explicit,
           rescanIntervalSeconds: settings.rescanIntervalSeconds(),
           missingGraceSeconds: settings.missingGraceSeconds(),
           watcherEnabled: settings.watcherEnabled(),
@@ -461,6 +793,23 @@ export default async function pageRoutes(fastify, services) {
       }),
       APP_LAYOUT,
     );
+  });
+
+  /**
+   * Ends the forwarding period early, before the window runs out on its own.
+   *
+   * A plain POST and a redirect, with no htmx counterpart: it is a once-per-move
+   * action whose whole visible result is that a notice on the page it returns to has
+   * gone, and a fragment swap would have to re-render that notice's own container to
+   * say the same thing.
+   */
+  fastify.post('/settings/forget-previous-base-url', guarded, async (request, reply) => {
+    settings.forgetPreviousBaseUrl();
+    setFlash(
+      request,
+      'Feeds have stopped naming the new address. Anyone still subscribed on the old one will not be moved across now.',
+    );
+    return reply.redirect('/settings', 303);
   });
 }
 

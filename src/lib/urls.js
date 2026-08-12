@@ -61,6 +61,19 @@ export function coverUrl(baseUrl, slug, token, { cacheBust } = {}) {
   return cacheBust ? `${url}?v=${encodeURIComponent(cacheBust)}` : url;
 }
 
+/**
+ * `{base}/media/{slug}/{token}/{episodeId}/cover.jpg` — this episode's own artwork.
+ *
+ * One segment deeper than the show cover and, like it, always ending in `cover.jpg`
+ * whatever the stored file really is; the server sends the real content type. The
+ * cache-buster is the artwork's content hash, so replacing the image gives it a URL
+ * no app has already cached, and re-extracting the identical image does not.
+ */
+export function episodeArtUrl(baseUrl, slug, token, episodeId, { cacheBust } = {}) {
+  const url = join(baseUrl, 'media', slug, token, episodeId, 'cover.jpg');
+  return cacheBust ? `${url}?v=${encodeURIComponent(cacheBust)}` : url;
+}
+
 export function healthUrl(baseUrl) {
   return `${String(baseUrl).replace(/\/+$/, '')}/health`;
 }

@@ -66,9 +66,13 @@ export function createViewHelpers({ config }) {
       return { cls: 'badge-ok', label: `${n} ep${n === 1 ? '' : 's'}` };
     },
 
-    episodeBadge(status) {
-      if (status === 'missing') return { cls: 'badge-warn', label: 'Missing' };
-      if (status === 'removed') return { cls: 'badge-mute', label: 'Not in feed' };
+    episodeBadge(episode) {
+      // Scheduled first: it is the only one of these that describes the future, and an
+      // episode waiting on its date is far more interesting than the fact that it is
+      // otherwise perfectly ordinary.
+      if (episode?.scheduled) return { cls: 'badge-info', label: 'Scheduled' };
+      if (episode?.status === 'missing') return { cls: 'badge-warn', label: 'Missing' };
+      if (episode?.status === 'removed') return { cls: 'badge-mute', label: 'Not in feed' };
       return { cls: 'badge-ok', label: 'Active' };
     },
 
@@ -96,6 +100,122 @@ export function createViewHelpers({ config }) {
       if (!words.length) return '??';
       if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
       return words.slice(0, 3).map((w) => w[0].toUpperCase()).join('');
+    },
+
+    /**
+     * Stacked column geometry for the requests-per-day chart.
+     *
+     * Heights are worked out here rather than in the template so the markup sets no
+     * numbers of its own, and so the page and its htmx fragment cannot drift. The rows
+     * arrive already aligned to the buckets — one per bucket, zeros included — because
+     * a chart that closes the gap over a quiet Tuesday tells a different story from
+     * the data.
+     */
+    dailySeries(rows, { series = [] } = {}) {
+      const columns = (rows ?? []).map((row) => {
+        const values = series.map((s) => ({ ...s, value: Number(row[s.key] ?? 0) }));
+        const total = values.reduce((sum, v) => sum + v.value, 0);
+        return { key: row.key, label: row.label, values, total };
+      });
+
+      const max = columns.reduce((highest, col) => Math.max(highest, col.total), 0);
+      const empty = max === 0;
+
+      for (const col of columns) {
+        col.segments = col.values.map((v) => ({
+          ...v,
+          // Share of the tallest column, so the stack reaches the top exactly once.
+          pct: max === 0 ? 0 : (v.value / max) * 100,
+        }));
+        col.title = `${col.label} — ${col.values
+          .map((v) => `${v.value.toLocaleString('en')} ${v.label.toLowerCase()}`)
+          .join(', ')}`;
+      }
+
+      // Three ticks: first, middle, last. More than that and they collide at 360px.
+      const ticks = empty
+        ? []
+        : [columns[0], columns[Math.floor((columns.length - 1) / 2)], columns[columns.length - 1]]
+            .filter(Boolean)
+            .map((col) => ({ label: col.label }));
+
+      const peak = columns.reduce(
+        (best, col) => (best === null || col.total > best.total ? col : best),
+        null,
+      );
+
+      return {
+        empty,
+        max,
+        mid: Math.round(max / 2),
+        total: columns.reduce((sum, col) => sum + col.total, 0),
+        columns,
+        ticks,
+        peak,
+        series,
+      };
+    },
+
+    /**
+     * Horizontal share bars, longest first.
+     *
+     * `pct` is bar length as a share of the biggest row, so the largest always fills
+     * its track; `share` is the percentage of the whole, which is the number printed.
+     * Anything past `limit` is summed rather than drawn as a sliver nobody can compare.
+     */
+    shareBars(rows, { labelKey = 'client', valueKey = 'n', limit = 8 } = {}) {
+      const all = (rows ?? [])
+        .map((row) => ({ label: String(row[labelKey] ?? 'Unknown'), value: Number(row[valueKey] ?? 0) }))
+        .filter((row) => row.value > 0)
+        .sort((a, b) => b.value - a.value);
+
+      const total = all.reduce((sum, row) => sum + row.value, 0);
+      const kept = all.slice(0, limit);
+      const biggest = kept[0]?.value ?? 0;
+
+      return {
+        total,
+        other: all.slice(limit).reduce((sum, row) => sum + row.value, 0),
+        rows: kept.map((row) => ({
+          ...row,
+          pct: biggest === 0 ? 0 : (row.value / biggest) * 100,
+          share: total === 0 ? 0 : Math.round((row.value / total) * 100),
+          // "Unknown" and "Other" are the absence of a classification, not an app, and
+          // the bar should not read as one.
+          vague: row.label === 'Unknown' || row.label === 'Other',
+        })),
+      };
+    },
+
+    /**
+     * The "vs the previous period" line under a headline number.
+     *
+     * Whether up is good is the caller's business: more downloads and more failures
+     * are not the same news, so the tone is decided here from `higherIsBetter` and the
+     * stylesheet never has to know which card it is on.
+     */
+    changeLine(change, { higherIsBetter = true, periodLabel = 'the previous period' } = {}) {
+      if (!change) return null;
+      const { absolute, percent, direction } = change;
+      if (direction === 'flat') {
+        return { tone: 'flat', glyph: '=', label: `no change vs ${periodLabel}` };
+      }
+      const tone = (direction === 'up') === higherIsBetter ? 'good' : 'bad';
+      const glyph = direction === 'up' ? '▲' : '▼';
+      // A rise from zero has no percentage — see changeFrom in services/stats.js.
+      const size =
+        percent === null
+          ? `${absolute > 0 ? '+' : ''}${absolute.toLocaleString('en')}`
+          : `${percent > 0 ? '+' : '−'}${Math.abs(Math.round(percent)).toLocaleString('en')}%`;
+      return { tone, glyph, label: `${size} vs ${periodLabel}` };
+    },
+
+    /** Dot colour + label for one episode-timeline event, mirroring episodeBadge. */
+    episodeEventBadge(event) {
+      if (event === 'added') return { cls: 'badge-ok', label: 'Added' };
+      if (event === 'missing') return { cls: 'badge-warn', label: 'Went missing' };
+      if (event === 'expired') return { cls: 'badge-err', label: 'Expired' };
+      return { cls: 'badge-mute', label: 'Removed' };
     },
 
     /** Pseudo-random but stable waveform bars for the episode preview strip. */

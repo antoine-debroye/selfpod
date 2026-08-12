@@ -1,5 +1,5 @@
 import { SHOW_STATUS } from '../constants.js';
-import { coverUrl, feedUrl, mediaUrl } from '../lib/urls.js';
+import { coverUrl, episodeArtUrl, feedUrl, mediaUrl } from '../lib/urls.js';
 import { NO_ACCESS } from './stats.js';
 
 /**
@@ -9,8 +9,26 @@ import { NO_ACCESS } from './stats.js';
  * can never drift: a field the dashboard relies on is the same field an API
  * consumer sees.
  */
-export function createPresenters({ settings, shows, episodes, covers, activity, stats }) {
-  function presentShow(show, { includeEpisodes = false } = {}) {
+/**
+ * Which failed readiness checks earn a warning on the dashboard card.
+ *
+ * Deliberately not all of them. The card badge answers "is SelfPod working for this
+ * show", asked on every visit; readiness answers "would a podcast directory accept
+ * this", asked once per show. Most SelfPod feeds are private and will never be
+ * submitted anywhere, so lighting the dashboard for every one of them is the banner
+ * this project has already walked back twice. These are the same five conditions the
+ * card has always shown — readiness now owns the wording, so the two cannot drift.
+ */
+const BADGE_CHECKS = new Set([
+  'folder_present',
+  'artwork_present',
+  'artwork_size',
+  'owner_email',
+  'author_name',
+]);
+
+export function createPresenters({ settings, shows, episodes, covers, activity, stats, readiness }) {
+  function presentShow(show, { includeEpisodes = false, includeReadiness = false } = {}) {
     const baseUrl = settings.publicBaseUrl();
     const counts = episodes.counts(show.id);
     const lastScan = activity.latestForShow(show.id);
@@ -20,35 +38,13 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
         : null;
 
     const folder = shows.dirFor(show);
-    const warnings = [];
 
-    if (show.status === SHOW_STATUS.FOLDER_MISSING) {
-      warnings.push({
-        key: 'folder_missing',
-        message: `The folder \`${folder}\` is gone, so this feed is paused. Put the folder back, or remove the show.`,
-      });
-    }
-    if (!show.cover_filename) {
-      warnings.push({
-        key: 'no_cover',
-        message: `No cover art yet. Drop a cover.jpg (or .png/.webp) into ${folder}, or upload one here.`,
-      });
-    }
-    if (coverWarning) {
-      warnings.push({ key: 'cover_dimensions', message: coverWarning.message, detail: coverWarning });
-    }
-    if (!show.author_email?.trim()) {
-      warnings.push({
-        key: 'no_owner_email',
-        message: 'Add an author email — podcast directories require one to verify ownership.',
-      });
-    }
-    if (!show.author_name?.trim()) {
-      warnings.push({
-        key: 'no_author_name',
-        message: `No author name set, so the feed falls back to the show title. Set one here, or in Settings as a default for every show.`,
-      });
-    }
+    // One computation of "this show has no cover", not two. Readiness owns the
+    // conditions and their wording; this picks which of them are worth a card warning.
+    const report = readiness.forShow(show, { counts, baseUrl, folder });
+    const warnings = report.failed
+      .filter((check) => BADGE_CHECKS.has(check.id))
+      .map((check) => ({ key: check.id, message: check.detail }));
 
     const errorCount = lastScan?.errors?.length ?? 0;
     const tokenPath = `${encodeURIComponent(show.slug)}/${encodeURIComponent(show.feed_token)}`;
@@ -64,6 +60,8 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
       category: show.itunes_category,
       subcategory: show.itunes_subcategory,
       explicit: show.explicit === 1,
+      itunesType: show.itunes_type ?? 'episodic',
+      directoryListing: show.directory_listing ?? 'allowed',
       status: show.status,
       folderMissingSince: show.folder_missing_since,
       folder,
@@ -87,6 +85,14 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
       feedToken: show.feed_token,
       counts,
       warnings,
+      // The summary always; the full list only where one show is being looked at, since
+      // fifty shows' worth of mostly-passing rows is a lot of payload nobody asked for.
+      readiness: {
+        ready: report.ready,
+        blocking: report.blocking,
+        advisory: report.advisory,
+        ...(includeReadiness ? { checks: report.checks } : {}),
+      },
       health: errorCount > 0 ? 'error' : warnings.length > 0 ? 'warn' : 'ok',
       lastScan: lastScan
         ? {
@@ -134,6 +140,7 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
       season: episode.season,
       episodeNumber: episode.episode_number,
       explicit: episode.explicit === null ? null : episode.explicit === 1,
+      episodeType: episode.episode_type ?? 'full',
       resolvedExplicit: episodes.resolveExplicit(episode, show),
       pubDate: episode.pub_date,
       pubDateIsCustom: episode.pub_date_is_custom === 1,
@@ -142,11 +149,41 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
       fileSizeBytes: episode.file_size_bytes,
       mimeType: episode.mime_type,
       status: episode.status,
+      // Derived, not stored — see episodes.isScheduled. A consumer that wants the rule
+      // rather than the answer has pubDate right here.
+      scheduled: episodes.isScheduled(episode),
       missingSince: episode.missing_since,
+      // When SelfPod first saw the file, as opposed to the editorial publication date.
+      // "Did my drop just get picked up?" is asked far more often than it is answered.
+      createdAt: episode.created_at,
+      removedAt: episode.removed_at,
       mediaUrl: baseUrl
         ? mediaUrl(baseUrl, show.slug, show.feed_token, episode.id, episode.filename)
         : null,
       localMediaUrl: `/media/${tokenPath}/${encodeURIComponent(episode.id)}/${encodeURIComponent(episode.filename)}`,
+      // Null means "this episode uses the show's cover", which is what the feed does
+      // for it too. The warning is the same arithmetic on the same numbers as a show
+      // cover's, only labelled for an episode — see covers.describeDimensions.
+      art: episode.art_filename
+        ? {
+            source: episode.art_source,
+            sidecarName: episode.art_sidecar_name,
+            width: episode.art_width,
+            height: episode.art_height,
+            url: baseUrl
+              ? episodeArtUrl(baseUrl, show.slug, show.feed_token, episode.id, {
+                  cacheBust: episode.art_etag,
+                })
+              : null,
+            localUrl: `/media/${tokenPath}/${encodeURIComponent(episode.id)}/cover.jpg?v=${encodeURIComponent(
+              episode.art_etag ?? '',
+            )}`,
+            warning: covers.describeDimensions(
+              { width: episode.art_width, height: episode.art_height },
+              { label: 'Episode artwork' },
+            ),
+          }
+        : null,
       updatedAt: episode.updated_at,
       // Supplied by the caller when a whole list is being presented; looked up
       // otherwise, so a single episode still carries its numbers.

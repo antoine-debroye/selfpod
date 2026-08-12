@@ -1,0 +1,58 @@
+<%
+  /* The scan rows, lifted out of activity-list.eta unchanged so the pager has
+     something to fetch that is not the container it lives in. /ui/activity returns
+     the container; /ui/activity/items returns only this. */
+  const entries = it.entries;
+%>
+<% for (const entry of entries) { %>
+  <article class="log-item">
+    <div class="time">
+      <%= it.helpers.formatTime(entry.startedAt) %>
+      <small><%= it.helpers.formatDate(entry.startedAt) %></small>
+    </div>
+    <div class="body">
+      <b><%= entry.showTitle || 'All shows' %></b> ·
+      <%= entry.trigger %> scan<%
+      %><% if (entry.finishedAt) { %> — <%
+        %><%= entry.filesFound === null ? 0 : entry.filesFound %> file<%= entry.filesFound === 1 ? '' : 's' %> found<%
+        %><% if (entry.added) { %>, <%= entry.added %> added<% } %><%
+        %><% if (entry.updated) { %>, <%= entry.updated %> updated<% } %><%
+        %><% if (entry.missing) { %>, <%= entry.missing %> missing<% } %><%
+        %><% if (entry.removed) { %>, <%= entry.removed %> dropped<% } %>.<%
+      %><% } else { %> — still running…<% } %>
+      <% if (entry.note) { %><span class="log-item__note"><%= entry.note %></span><% } %>
+
+      <% if (entry.errors.length) { %>
+        <div class="err">
+          <strong><%= entry.errors.length %> problem<%= entry.errors.length === 1 ? '' : 's' %>:</strong>
+          <ul>
+            <% for (const error of entry.errors) { %>
+              <li><%= error.message %></li>
+            <% } %>
+          </ul>
+        </div>
+      <% } %>
+
+      <% if (entry.warnings.length) { %>
+        <details class="log-item__warnings">
+          <summary><%= entry.warnings.length %> warning<%= entry.warnings.length === 1 ? '' : 's' %></summary>
+          <ul>
+            <% for (const warning of entry.warnings) { %>
+              <li><%= warning.message %></li>
+            <% } %>
+          </ul>
+        </details>
+      <% } %>
+    </div>
+    <div class="trig"><%= entry.trigger %></div>
+  </article>
+<% } %>
+
+<% if (it.hasMore) { %>
+  <div class="log-more" id="activity-more">
+    <button class="btn btn-ghost btn-sm" type="button"
+            hx-get="/ui/activity/items?<%= it.filter.qs %><%= it.filter.qs ? '&' : '' %>offset=<%= it.nextOffset %>"
+            hx-target="#activity-more" hx-swap="outerHTML">Show older</button>
+    <span class="dim"><%= it.loaded %> of <%= it.total %> shown</span>
+  </div>
+<% } %>

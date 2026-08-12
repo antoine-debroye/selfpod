@@ -1,0 +1,62 @@
+<%
+  /* Which apps are fetching.
+
+     This replaces a comma-separated list of app names, which told you who was there but
+     nothing about proportion — and proportion is the whole question. */
+  const apps = it.helpers.shareBars(it.clients, { labelKey: 'client', valueKey: 'n', limit: 8 });
+%>
+<div class="form-card" style="margin-bottom:18px">
+  <div class="ftitle">Which apps are fetching</div>
+  <div class="fdesc">
+    The app family behind each request, <%= it.range.lede %>. SelfPod records the family —
+    “Pocket Casts”, “Apple Podcasts” — and never the full user agent or an IP address.
+  </div>
+
+  <% if (!apps.rows.length) { %>
+    <div class="empty">
+      <div class="empty__title">No apps yet</div>
+      <p class="empty__hint">
+        Subscribe from a podcast app and it appears here. Your own visits to this page are
+        not counted.
+      </p>
+    </div>
+  <% } else { %>
+    <figure class="chart">
+      <div class="hbars" aria-hidden="true">
+        <% for (const row of apps.rows) { %>
+          <div class="hbar<%= row.vague ? ' hbar--muted' : '' %>">
+            <span class="hbar__label" title="<%= row.label %>"><%= row.label %></span>
+            <span class="hbar__track">
+              <span class="hbar__fill" style="width:<%= row.pct %>%"></span>
+            </span>
+            <span class="hbar__n"><%= row.value.toLocaleString('en') %> · <%= row.share %>%</span>
+          </div>
+        <% } %>
+      </div>
+
+      <table class="sr-only">
+        <caption>Requests by app, <%= it.range.lede %></caption>
+        <thead>
+          <tr><th scope="col">App</th><th scope="col">Requests</th><th scope="col">Share</th></tr>
+        </thead>
+        <tbody>
+          <% for (const row of apps.rows) { %>
+            <tr>
+              <th scope="row"><%= row.label %></th>
+              <td><%= row.value %></td>
+              <td><%= row.share %>%</td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+
+      <figcaption class="chart__caption">
+        <%= apps.rows[0].label %> accounts for <%= apps.rows[0].share %>% of requests in this
+        period.<% if (apps.other) { %> <%= apps.other.toLocaleString('en') %> more came from apps
+        below the top eight.<% } %>
+        “Unknown” and “Other” mean SelfPod could not place the user agent, not that anything
+        went wrong.
+      </figcaption>
+    </figure>
+  <% } %>
+</div>
