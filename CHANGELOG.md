@@ -104,9 +104,10 @@ changes what your listeners see, it says so.
   is on, `<itunes:new-feed-url>` during a move, and the owner address on
   `<podcast:locked>` that the Podcasting 2.0 spec asks for.
 
-## 1.4.0 — 2026-08-12
+### Also in this release
 
-### Added
+These were written as 1.4.0 and never published on their own, so they ship here rather
+than under a version number no image was ever built for.
 
 - **An episode timeline on Activity**, above the scan history. The scan log has always
   said "3 added" without saying *which* three — the only place a new episode's name
