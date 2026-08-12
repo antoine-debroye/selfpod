@@ -548,7 +548,7 @@ npm test                       # 469 unit, integration and security tests
 npm run dev                    # http://localhost:8080, data in ./.devdata
 
 docker build -t selfpod:test .
-./test/acceptance/run.sh       # 22 end-to-end checks against a real container
+./test/acceptance/run.sh       # 32 end-to-end checks against a real container
 ```
 
 The acceptance script checks the behaviours that matter most: an `.m4a` appearing

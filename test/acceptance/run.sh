@@ -252,6 +252,108 @@ api "${BASE}/api/stats/log" | grep -q "$LONG_TOKEN" \
   && fail "the feed token leaked into the access log" \
   || pass "the feed token is never stored in the access log"
 
+step "12. A podcast app that already has the feed is answered 304, and still counted"
+
+# This one is here rather than only in the unit suite for a specific reason: the
+# recording hangs off socket lifecycle events, and fastify.inject fires them a
+# different number of times than a real socket does. A conditional poll returning
+# 304 without being recorded is invisible in-process and obvious here.
+POLL_SLUG="$(api "${BASE}/api/shows" | json '
+d = json.load(sys.stdin)["shows"]
+print(d[0]["slug"] if d else "")')"
+POLL_TOKEN="$(api "${BASE}/api/shows" | json '
+d = json.load(sys.stdin)["shows"]
+print(d[0]["feedToken"] if d else "")')"
+POLL_URL="${BASE}/feeds/${POLL_SLUG}/${POLL_TOKEN}.xml"
+
+POLL_ETAG="$(curl -s -D- -o /dev/null "$POLL_URL" | awk 'tolower($1)=="etag:"{print $2}' | tr -d '\r')"
+[ -n "$POLL_ETAG" ] \
+  && pass "the feed carries an ETag to revalidate against" \
+  || fail "no ETag on the feed, so nothing can be revalidated"
+
+curl -s -D- -o /dev/null -H "If-None-Match: ${POLL_ETAG}" "$POLL_URL" \
+  | grep -qE '^HTTP/[0-9.]+ 304' \
+  && pass "an unchanged feed answers 304 rather than resending itself" \
+  || fail "a conditional request re-sent the whole feed"
+
+# The Cloudflare case: a proxy may re-label a strong validator as weak. Comparing
+# the two as exact strings — which is what SelfPod used to do — silently turns
+# every poll back into a full download, with no error anywhere to notice.
+curl -s -D- -o /dev/null -H "If-None-Match: W/${POLL_ETAG}" "$POLL_URL" \
+  | grep -qE '^HTTP/[0-9.]+ 304' \
+  && pass "a validator relabelled in transit still revalidates" \
+  || fail "a weak validator was not matched, so every poll downloads the feed again"
+
+# Per-show figures are spread onto the show itself, not nested under a "stats"
+# key. No default and no error swallowing here on purpose: a wrong path that
+# quietly reads zero would make this check pass against a broken app for ever.
+feed_checks() {
+  api "${BASE}/api/stats" | json '
+d = json.load(sys.stdin)["shows"]
+print(sum(s["feedFetches"] for s in d))'
+}
+BEFORE_CHECKS="$(feed_checks)"
+curl -s -o /dev/null -A 'Pocket Casts/7.5 (iPhone)' -H "If-None-Match: ${POLL_ETAG}" "$POLL_URL"
+sleep 2
+AFTER_CHECKS="$(feed_checks)"
+[ "${AFTER_CHECKS:-0}" -gt "${BEFORE_CHECKS:-0}" ] \
+  && pass "the 304 is counted as a feed check, so a well-behaved app is not invisible" \
+  || fail "a conditional poll was not recorded (${BEFORE_CHECKS} -> ${AFTER_CHECKS})"
+
+# A 304 completed and deliberately carried no body. That is a zero, not the null
+# that means "the transfer died and we cannot know".
+api "${BASE}/api/stats/log" | json '
+rows = [r for r in json.load(sys.stdin)["entries"] if r["kind"] == "feed" and r["status_code"] == 304]
+bad = [r for r in rows if r["bytes_sent"] is None]
+if not rows:
+    print("no 304 rows recorded at all")
+sys.exit(1 if bad or not rows else 0)
+' && pass "a 304 records zero bytes, not an unknown" \
+  || fail "a 304 was recorded with no byte figure"
+
+# Compression is scoped to the feed on purpose: audio is already compressed and is
+# served with byte ranges, where a content-coding would spend CPU to break seeking.
+curl -s -D- -o /dev/null --compressed "$POLL_URL" \
+  | grep -qi '^content-encoding: *gzip' \
+  && pass "the feed is compressed when the app asks for it" \
+  || fail "the feed was sent uncompressed to a client that accepts gzip"
+
+step "13. An episode dated in the future stays out of the feed until its time"
+
+# The publish-date picker has always accepted a date in the future, and used to
+# publish immediately anyway — the app doing something reasonable and never saying
+# it had.
+FUTURE_EP="$(api "${BASE}/api/shows/$(api "${BASE}/api/shows" | json '
+print(json.load(sys.stdin)["shows"][0]["id"])')" | json '
+d = json.load(sys.stdin)["show"]["episodes"]
+print(d[0]["id"] if d else "")')"
+
+BEFORE_ITEMS="$(curl -s "$POLL_URL" | grep -c '<item>')"
+FUTURE_DATE="$(python3 -c "
+import datetime
+print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M'))")"
+api -X PATCH -H 'Content-Type: application/json' \
+  -d "{\"pubDate\":\"${FUTURE_DATE}\"}" "${BASE}/api/episodes/${FUTURE_EP}" >/dev/null
+AFTER_ITEMS="$(curl -s "$POLL_URL" | grep -c '<item>')"
+[ "${AFTER_ITEMS}" -lt "${BEFORE_ITEMS}" ] \
+  && pass "a future publish date holds the episode out of the feed" \
+  || fail "a future-dated episode was published anyway (${BEFORE_ITEMS} -> ${AFTER_ITEMS})"
+
+curl -s "$POLL_URL" | grep -q "$FUTURE_EP" \
+  && fail "the scheduled episode is still in the feed" \
+  || pass "no podcast app can see it yet"
+
+# Setting the date back publishes it again, with no scan and nothing restarted.
+PAST_DATE="$(python3 -c "
+import datetime
+print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M'))")"
+api -X PATCH -H 'Content-Type: application/json' \
+  -d "{\"pubDate\":\"${PAST_DATE}\"}" "${BASE}/api/episodes/${FUTURE_EP}" >/dev/null
+BACK_ITEMS="$(curl -s "$POLL_URL" | grep -c '<item>')"
+[ "${BACK_ITEMS}" -eq "${BEFORE_ITEMS}" ] \
+  && pass "it rejoins the feed once its time has passed" \
+  || fail "the episode did not come back (${BACK_ITEMS} vs ${BEFORE_ITEMS})"
+
 # ---------------------------------------------------------------------- report
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"
