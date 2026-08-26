@@ -1,0 +1,93 @@
+<%
+  const show = it.show;
+  const mode = it.mode ?? 'off';
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">Repeated audio in <%= show.title %></div>
+    <h1>Adverts</h1>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Back to show</a>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div>
+    <form class="form-card" method="post"
+          action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-trim"
+          hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-trim"
+          hx-target="#ad-segments" hx-swap="outerHTML">
+      <div class="ftitle">What SelfPod should do</div>
+
+      <fieldset class="modal__choices">
+        <legend class="sr-only">What should SelfPod do about repeated audio?</legend>
+
+        <label class="choice">
+          <input type="radio" name="mode" value="off" <%= mode === 'off' ? 'checked' : '' %>>
+          <span class="choice__body">
+            <strong>Nothing</strong>
+            <small>Your episodes are published exactly as they arrive. SelfPod does not
+              read them looking for repeats.</small>
+          </span>
+        </label>
+
+        <label class="choice">
+          <input type="radio" name="mode" value="review" <%= mode === 'review' ? 'checked' : '' %>>
+          <span class="choice__body">
+            <strong>Show me what repeats, and wait</strong>
+            <small>New episodes are held back until you have decided about them. Nothing
+              is removed that you have not asked for.</small>
+          </span>
+        </label>
+
+        <label class="choice">
+          <input type="radio" name="mode" value="auto" <%= mode === 'auto' ? 'checked' : '' %>>
+          <span class="choice__body">
+            <strong>Remove repeats without asking</strong>
+            <small>SelfPod cuts what it is confident about and publishes. It still will
+              not touch anything that looks like a theme tune or credits — those are
+              listed for you instead.</small>
+          </span>
+        </label>
+      </fieldset>
+
+      <div class="field">
+        <label for="min-episodes">Episodes to compare before deciding anything</label>
+        <input id="min-episodes" type="number" name="minEpisodes" min="2" max="20"
+               value="<%= it.minEpisodes ?? 3 %>">
+        <div class="hint">
+          Audio has to appear in this many episodes before SelfPod will offer it. Fewer
+          finds sponsor reads sooner, and finds more things that are not sponsor reads.
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-sm" type="submit">Save</button>
+      </div>
+    </form>
+
+    <% if (mode !== 'off') { %>
+      <form class="form-card" method="post"
+            action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-detect"
+            hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-detect"
+            hx-target="#ad-segments" hx-swap="outerHTML">
+        <div class="ftitle">Look again now</div>
+        <p class="muted">
+          SelfPod does this on its own after each scan. This is for when you have just
+          added episodes and would rather not wait.
+        </p>
+        <button class="btn btn-ghost btn-sm" type="submit">Check this show now</button>
+      </form>
+    <% } %>
+  </div>
+
+  <div>
+    <%~ include('../partials/ad-segments.eta', {
+      show,
+      segments: it.segments,
+      mode,
+      held: it.held,
+    }) %>
+  </div>
+</div>

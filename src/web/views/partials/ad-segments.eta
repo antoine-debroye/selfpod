@@ -1,0 +1,132 @@
+<%
+  const show = it.show;
+  const segments = it.segments ?? [];
+  const mode = it.mode ?? 'off';
+  /* With the feature off nothing will be cut, so offering decisions would be asking
+     for an answer SelfPod is not going to act on. What was found already stays in the
+     catalogue and comes back if it is turned on again. */
+  const off = mode === 'off';
+  const waiting = off ? [] : segments.filter((row) => row.status === 'candidate');
+  const decided = off ? [] : segments.filter((row) => row.status !== 'candidate');
+%>
+<div id="ad-segments">
+  <% if (it.held > 0) { %>
+    <div class="callout callout-warn" role="status">
+      <strong><%= it.held %> <%= it.held === 1 ? 'episode is' : 'episodes are' %> waiting, and not in your feed yet.</strong>
+      <%
+        /* An episode held with nothing explaining why is the failure this app is built
+           against, so the reason is spelled out rather than implied by a badge. */
+      %>
+      <% if (mode === 'auto' && !waiting.length) { %>
+        SelfPod needs a few episodes to compare before it can tell what this show repeats.
+        They will be published as soon as it can.
+      <% } else { %>
+        They will be published as soon as you have decided about the segments below.
+      <% } %>
+    </div>
+  <% } %>
+
+  <% if (off) { %>
+    <div class="empty">
+      SelfPod is not looking for repeated audio in this show. Your episodes are
+      published exactly as they arrive.
+      <% if (segments.length) { %>
+        <div class="muted">
+          <%= segments.length %> <%= segments.length === 1 ? 'segment it had found is' : 'segments it had found are' %>
+          remembered, and will be here again if you turn this back on.
+        </div>
+      <% } %>
+    </div>
+  <% } else if (!segments.length) { %>
+    <div class="empty">
+      Nothing found yet. SelfPod compares episodes to each other, so it needs a few
+      before it can tell what this show repeats.
+    </div>
+  <% } %>
+
+  <% if (waiting.length) { %>
+    <p class="muted">
+      This is audio that repeats across your episodes. SelfPod cannot tell a sponsor read
+      from a theme tune — they repeat in exactly the same way — so it does not guess.
+      Listen, and decide.
+    </p>
+  <% } %>
+
+  <% for (const found of waiting) { %>
+    <div class="form-card seg-card" data-segment="<%= found.id %>">
+      <div class="ftitle">
+        <%= found.durationLabel %>
+        <span class="muted">· <%= found.sourceLabel %></span>
+      </div>
+
+      <dl class="seg-facts">
+        <dt>Where</dt>
+        <dd><%= found.positionLabel ?? 'Varies' %></dd>
+        <dt>Episodes</dt>
+        <dd><%= found.episodeCount %> of them<%= found.occurrenceCount > found.episodeCount ? `, ${found.occurrenceCount} times in total` : '' %></dd>
+      </dl>
+
+      <% if (found.holdMessage) { %>
+        <div class="callout callout-warn" role="status">
+          <strong>SelfPod will not remove this on its own.</strong>
+          <%= found.holdMessage %>
+        </div>
+      <% } %>
+
+      <% if (found.exemplar) { %>
+        <%
+          /* Loaded on demand rather than preloaded: a review session can hold a dozen
+             of these, and each one is a slice of a real episode read off the disk. */
+        %>
+        <audio controls preload="none" src="<%= found.exemplar.sampleUrl %>"></audio>
+        <div class="seg-from">From <%= found.exemplar.title ?? 'an episode' %></div>
+      <% } %>
+
+      <div class="seg-actions">
+        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+              hx-target="#ad-segments" hx-swap="outerHTML">
+          <input type="hidden" name="status" value="approved">
+          <button class="btn btn-sm" type="submit">Remove this from every episode</button>
+        </form>
+        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+              hx-target="#ad-segments" hx-swap="outerHTML">
+          <input type="hidden" name="status" value="rejected">
+          <button class="btn btn-ghost btn-sm" type="submit">Keep it</button>
+        </form>
+      </div>
+    </div>
+  <% } %>
+
+  <% if (decided.length) { %>
+    <div class="form-card">
+      <div class="ftitle">Already decided</div>
+      <ul class="seg-decided">
+        <% for (const found of decided) { %>
+          <li>
+            <span class="seg-decided__len mono"><%= found.durationLabel %></span>
+            <span class="seg-decided__where"><%= found.positionLabel ?? 'Varies' %></span>
+            <span class="seg-decided__state seg-decided__state--<%= found.status === 'approved' ? 'cut' : 'kept' %>">
+              <%= found.status === 'approved' ? 'Removed' : 'Kept' %><%
+              %><% if (found.autoApproved) { %> automatically<% } %>
+            </span>
+            <%
+              /* The reverse of whatever was decided, so changing your mind is one click
+                 rather than a hunt for where the decision lives. */
+              const reverse = found.status === 'approved' ? 'rejected' : 'approved';
+            %>
+            <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                  hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                  hx-target="#ad-segments" hx-swap="outerHTML">
+              <input type="hidden" name="status" value="<%= reverse %>">
+              <button class="btn btn-ghost btn-xs" type="submit">
+                <%= found.status === 'approved' ? 'Put it back' : 'Remove it' %>
+              </button>
+            </form>
+          </li>
+        <% } %>
+      </ul>
+    </div>
+  <% } %>
+</div>

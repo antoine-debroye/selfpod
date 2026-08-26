@@ -12,11 +12,29 @@
     <h1><%= show.title %></h1>
   </div>
   <div class="actions">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Adverts</a>
     <span class="badge <%= badge.cls %>"><span class="d" aria-hidden="true"></span><%= badge.label %></span>
   </div>
 </div>
 
 <div id="scan-progress-slot"></div>
+
+<% if (show.counts.held) { %>
+  <%
+    /* An episode on disk, not in the feed, with nothing saying why is the failure this
+       app exists against. It is stated here rather than only on the adverts page,
+       because this is where someone comes when an episode has not appeared. */
+  %>
+  <div class="notice warn" style="margin-bottom:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div>
+      <strong><%= show.counts.held %> episode<%= show.counts.held === 1 ? ' is' : 's are' %> not in your feed yet.</strong>
+      They are waiting on a decision about the audio this show repeats — nothing is lost,
+      and they go out as soon as it is settled.
+      <a href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Take a look</a>
+    </div>
+  </div>
+<% } %>
 
 <% if (show.status === 'folder_missing') { %>
   <div class="notice warn" style="margin-bottom:18px">

@@ -1929,3 +1929,48 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 .readiness__passing > summary {
   font-size: 13px; color: var(--ink-soft); cursor: pointer; padding-top: 14px;
 }
+
+/* ADDED · adverts review. The page where someone decides whether a stretch of audio
+   is a sponsor read or the theme tune. Everything here is in service of answering
+   that in about two seconds: how long, where, how many episodes, and a way to hear
+   it — laid out so the four can be compared down a column of candidates rather than
+   read one card at a time. */
+.seg-card .ftitle { display: flex; align-items: baseline; gap: 8px; }
+/* Facts on one line each, label first at a fixed width, so the answers line up
+   between cards and the eye can run down them. */
+.seg-facts { display: grid; grid-template-columns: 92px 1fr; gap: 4px 12px; margin-bottom: 14px; }
+.seg-facts dt { font-size: 12px; color: var(--ink-soft); }
+.seg-facts dd { font-size: 13.5px; color: var(--ink); margin: 0; }
+/* Full width: the scrubber is how you skip to the middle of a 40-second read, and a
+   narrow one makes that a game of precision. */
+.seg-card audio { width: 100%; margin: 4px 0 6px; }
+.seg-card .seg-from { font-size: 12px; color: var(--ink-soft); margin-bottom: 14px; }
+/* Side by side, because they are two answers to one question. Each is its own form
+   so that the page works with no JavaScript, which is what stops them being buttons
+   in a single row for free. */
+.seg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg-actions form { margin: 0; }
+.seg-decided { list-style: none; }
+.seg-decided li {
+  display: flex; align-items: center; gap: 14px;
+  padding: 9px 0; border-top: 1px solid var(--line);
+}
+.seg-decided li:first-child { border-top: 0; }
+.seg-decided__len { flex: none; width: 46px; font-size: 12.5px; color: var(--ink-soft); }
+.seg-decided__where { flex: 1; min-width: 0; font-size: 13.5px; }
+/* The word carries the state, not the colour: someone who cannot separate the two
+   tints still has to be able to read which of these is being cut out of their feed. */
+.seg-decided__state { flex: none; font-size: 12.5px; color: var(--ink-soft); }
+.seg-decided__state--cut { color: var(--ink); font-weight: 500; }
+.seg-decided form { flex: none; margin: 0; }
+
+@media (max-width: 640px) {
+  /* The position of a segment is the most useful thing on the row and the longest
+     thing on it, so on a narrow screen it gets the width and the decision moves
+     underneath rather than being squeezed into four words a line. */
+  .seg-decided li { flex-wrap: wrap; row-gap: 6px; }
+  .seg-decided__where { flex: 1 1 100%; order: 1; }
+  .seg-decided__len { order: 2; width: auto; }
+  .seg-decided__state { order: 3; margin-right: auto; }
+  .seg-decided form { order: 4; }
+}

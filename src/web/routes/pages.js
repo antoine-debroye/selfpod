@@ -1,4 +1,5 @@
 import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
+import { presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
 import { bucketEdges, DEFAULT_RANGE, RANGES, resolveRange } from '../../lib/time-range.js';
@@ -325,6 +326,34 @@ export default async function pageRoutes(fastify, services) {
               .map((row) => presentItem(row, services))
           : [],
         filter: '',
+      }),
+      APP_LAYOUT,
+    );
+  });
+
+  /* ---------------------------------------------------------- ad segments */
+
+  fastify.get('/shows/:slug/adverts', guarded, async (request, reply) => {
+    const show = shows.getBySlug(request.params.slug);
+    if (!show) throw notFound('That show does not exist.', 'show_not_found');
+
+    return reply.view(
+      'pages/ad-segments.eta',
+      shell(request, {
+        title: `${show.title} — adverts`,
+        activeSlug: show.slug,
+        crumbs: [
+          { label: 'Dashboard', href: '/' },
+          { label: show.title, href: `/shows/${encodeURIComponent(show.slug)}` },
+          { label: 'Adverts' },
+        ],
+        show: presentShow(show),
+        mode: show.ad_trim_mode ?? 'off',
+        minEpisodes: show.ad_auto_min_episodes ?? 3,
+        held: episodes.counts(show.id).held,
+        segments: services.adDetect
+          .listSegments(show.id)
+          .map((row) => presentSegment(row, { episodes })),
       }),
       APP_LAYOUT,
     );

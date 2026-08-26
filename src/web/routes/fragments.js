@@ -1,6 +1,7 @@
-import { ITEM_DECISION, SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
+import { AD_TRIM_MODES, ITEM_DECISION, SCAN_TRIGGER, SEGMENT_STATUS, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseKeywords } from '../../lib/feed-filter.js';
+import { presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
@@ -40,6 +41,96 @@ export default async function fragmentRoutes(fastify, services) {
       if (message) services.setFlash(request, message, level);
       return reply.redirect(path, 303);
     }
+
+    /* ----------------------------------------------------------- ad segments */
+
+    function advertsPath(slug) {
+      return `/shows/${encodeURIComponent(slug)}/adverts`;
+    }
+
+    /** The one place the review panel is rendered, so htmx and a reload agree. */
+    function renderSegments(reply, show) {
+      return reply.view('partials/ad-segments.eta', {
+        show: presentShow(show),
+        mode: show.ad_trim_mode ?? 'off',
+        held: episodes.counts(show.id).held,
+        segments: services.adDetect
+          .listSegments(show.id)
+          .map((row) => presentSegment(row, { episodes })),
+      });
+    }
+
+    scoped.post('/ui/shows/:slug/ad-trim', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const body = request.body ?? {};
+      const mode = AD_TRIM_MODES.includes(body.mode) ? body.mode : show.ad_trim_mode ?? 'off';
+      const parsed = Number(body.minEpisodes);
+      const minEpisodes =
+        Number.isInteger(parsed) && parsed >= 2 && parsed <= 20
+          ? parsed
+          : (show.ad_auto_min_episodes ?? 3);
+
+      services.db
+        .prepare('UPDATE shows SET ad_trim_mode = ?, ad_auto_min_episodes = ?, updated_at = ? WHERE id = ?')
+        .run(mode, minEpisodes, new Date().toISOString(), show.id);
+
+      // Settled in the same request. Switching a show off has to actually let its
+      // episodes out, and waiting for a scheduler tick to find out whether it worked
+      // is how someone concludes it did not.
+      const settled = services.adPipeline.settle(show.id);
+      const updated = shows.get(show.id);
+
+      if (!isHtmx(request)) {
+        const note = settled.released
+          ? `Saved. ${settled.released} ${settled.released === 1 ? 'episode is' : 'episodes are'} now in your feed.`
+          : 'Saved.';
+        return redirectBack(request, reply, advertsPath(show.slug), note);
+      }
+      return renderSegments(reply, updated);
+    });
+
+    scoped.post('/ui/shows/:slug/ad-detect', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      if (!show.ad_trim_mode || show.ad_trim_mode === 'off') {
+        return isHtmx(request)
+          ? renderSegments(reply, show)
+          : redirectBack(request, reply, advertsPath(show.slug), 'Advert detection is off for this show.', 'err');
+      }
+      await services.adPipeline.processShow(show.id);
+      if (!isHtmx(request)) {
+        return redirectBack(request, reply, advertsPath(show.slug), 'Checked.');
+      }
+      return renderSegments(reply, shows.get(show.id));
+    });
+
+    scoped.post('/ui/shows/:slug/ad-segments/:segmentId', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const status = request.body?.status;
+      if (status !== SEGMENT_STATUS.APPROVED && status !== SEGMENT_STATUS.REJECTED) {
+        return isHtmx(request)
+          ? renderSegments(reply, show)
+          : redirectBack(request, reply, advertsPath(show.slug), 'A segment is either removed or kept.', 'err');
+      }
+
+      const segment = services.adDetect.getSegment(request.params.segmentId);
+      if (!segment || segment.show_id !== show.id) {
+        throw notFound('That segment no longer exists.', 'segment_not_found');
+      }
+
+      services.adDetect.decide(segment.id, status);
+      // The cut happens here rather than on the next tick, because a decision that has
+      // not reached the audio has not really been taken.
+      const result = await services.adPipeline.processShow(show.id);
+
+      if (!isHtmx(request)) {
+        const note =
+          status === SEGMENT_STATUS.APPROVED
+            ? `Removed from ${result.trimmed?.trimmed ?? 0} ${(result.trimmed?.trimmed ?? 0) === 1 ? 'episode' : 'episodes'}.`
+            : 'Kept.';
+        return redirectBack(request, reply, advertsPath(show.slug), note);
+      }
+      return renderSegments(reply, shows.get(show.id));
+    });
 
     /* ---------------------------------------------------------- subscription */
 
