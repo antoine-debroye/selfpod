@@ -160,3 +160,21 @@ describe('cost', () => {
     assert.ok(ms < 2000, `took ${ms.toFixed(0)}ms for 8,000 frames`);
   });
 });
+
+describe('the shape a range has to arrive in', () => {
+  it('names frames, not only milliseconds', () => {
+    // Everything downstream cuts by frame. A range carrying only milliseconds can be
+    // catalogued, approved, and shown to the owner as removed, while the cut it
+    // implies is empty and nothing happens to the audio — which is exactly what did
+    // happen until a differently-sized advert in a second download exposed it.
+    const a = stitch(segment(10_000, 300), segment(50_000, 200), segment(90_000, 300));
+    const b = stitch(segment(10_000, 300), segment(70_000, 200), segment(90_000, 300));
+
+    const diff = diffFrames(frameProfile(a).hashes, frameProfile(b).hashes);
+    const [range] = runsToRanges(diff.onlyInA, frameProfile(a).frames);
+
+    assert.equal(range.startFrame, 300);
+    assert.equal(range.endFrame, 500);
+    assert.ok(range.endFrame > range.startFrame, 'an empty range cuts nothing');
+  });
+});

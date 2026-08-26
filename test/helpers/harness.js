@@ -122,7 +122,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
-    metadata, activity, health, events, logger: silentLogger,
+    metadata, activity, health, events, logger: silentLogger, adDetect,
   });
 
   return {

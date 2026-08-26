@@ -173,6 +173,13 @@ export function runsToRanges(runs, frames) {
     starts[i + 1] = starts[i] + (frames[i].samplesPerFrame / frames[i].sampleRate) * 1000;
   }
   return runs.map((run) => ({
+    // Frames first, because frames are what a cut is made of. The milliseconds are
+    // for showing a person; rounding one to the other and back would move a cut by
+    // most of a frame, and a caller that only had the milliseconds would have to
+    // convert them back — which is how a range ends up a frame away from the audio it
+    // was measured against.
+    startFrame: Math.min(run.start, frames.length),
+    endFrame: Math.min(run.end, frames.length),
     startMs: Math.round(starts[Math.min(run.start, frames.length)]),
     endMs: Math.round(starts[Math.min(run.end, frames.length)]),
     frames: run.frames,

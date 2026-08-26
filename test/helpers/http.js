@@ -88,7 +88,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
   // asks it to.
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
-    metadata, activity, health, events, logger: silentLogger,
+    metadata, activity, health, events, logger: silentLogger, adDetect,
   });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger: silentLogger });

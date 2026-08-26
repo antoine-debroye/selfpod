@@ -393,8 +393,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
           occurrences: [
             {
               episodeId: episode.id,
-              start: range.start ?? 0,
-              end: range.end ?? 0,
+              // Frames are what the trimmer cuts by, so a range that arrives without
+              // them is not a cut at all — it is a row in the catalogue that can be
+              // approved, shown as removed, and quietly do nothing.
+              start: range.startFrame ?? range.start ?? 0,
+              end: range.endFrame ?? range.end ?? 0,
               startMs: range.startMs,
               endMs: range.endMs,
             },

@@ -1,4 +1,4 @@
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, readFileSync } from 'node:fs';
 import { readdir, stat, unlink, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -19,6 +19,9 @@ import { computeIdentityKey } from '../lib/identity.js';
 import { moveIntoPlace } from '../lib/move.js';
 import { remoteEpisodeFilename } from '../lib/remote-filename.js';
 import { uniqueTarget } from '../lib/unique-filename.js';
+import { diffFrames, runsToRanges } from '../lib/frame-diff.js';
+import { frameProfile } from '../lib/mp3-frames.js';
+import { describeStitchSignals } from '../lib/stitch-signals.js';
 import { newId } from '../lib/tokens.js';
 import { projectFeed } from '../lib/feed-projection.js';
 import { TERMINAL_FETCH_FAILURES, createGuardedFetch } from '../lib/guarded-fetch.js';
@@ -48,6 +51,28 @@ const ALLOWED_FEED_TYPES = new Set(REMOTE_FEED_CONTENT_TYPES);
 /** Never let one poll's work grow without bound, however large the feed is. */
 const MAX_ITEMS_RECORDED_PER_POLL = 500;
 
+/**
+ * A day before an episode is downloaded again.
+ *
+ * Not minutes. A host stitches per listener and caches the result — Acast documents 72
+ * hours — and the listener key is the requesting address and user agent, which for two
+ * requests from this container seconds apart is the same listener by construction.
+ * Fetching again straight away is asking the cache to hit. Waiting a day is the only
+ * honest way to get a different stitch without pretending to be someone else, which
+ * SelfPod will not do.
+ */
+const RECHECK_DELAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many second downloads one tick may make.
+ *
+ * Two. This spends bandwidth re-fetching episodes SelfPod already has, and each one
+ * counts again in the publisher's figures, so it is a trickle rather than a sweep —
+ * and a backlog clears at a rate nobody notices instead of in one burst that looks
+ * like scraping.
+ */
+const RECHECK_PER_TICK = 2;
+
 export function createRemoteFeeds({
   config,
   settings,
@@ -60,6 +85,9 @@ export function createRemoteFeeds({
   health,
   events,
   logger,
+  // Where a difference between two downloads of one episode is recorded. Optional:
+  // with it absent SelfPod still downloads and publishes, it simply never looks twice.
+  adDetect = null,
   // Injected so tests can drive a loopback server without a bypass inside the guard
   // itself. Production never passes this.
   guardedFetch = null,
@@ -379,6 +407,28 @@ export function createRemoteFeeds({
    *
    * @returns {{ staged: string, filename: string, item: object } | null}
    */
+  /**
+   * Whether to look at this episode again in a day, and why.
+   *
+   * Reads the file that was just downloaded, never the network. A failure here must
+   * not cost the download: the episode is fine, SelfPod simply will not be re-checking
+   * it, and an exception thrown for that would throw away a file that is already on
+   * disk and already accepted.
+   */
+  function planRecheck(path, filename) {
+    if (!filename.toLowerCase().endsWith('.mp3')) return {};
+    try {
+      const signals = describeStitchSignals(frameProfile(readFileSync(path)));
+      if (!signals.likely) return {};
+      return {
+        recheck_reason: signals.detail,
+        recheck_after: new Date(Date.now() + RECHECK_DELAY_MS).toISOString(),
+      };
+    } catch {
+      return {};
+    }
+  }
+
   async function downloadOne(subscription, show, row, stagedKeys = new Map()) {
     const showDir = shows.dirFor(show);
     const staged = join(showDir, `${STAGING_PREFIX}${newId()}`);
@@ -515,7 +565,17 @@ export function createRemoteFeeds({
         if (!Number.isNaN(when.getTime())) await utimes(staged, when, when);
       }
 
-      subscriptions.markItem(row.id, { identity_key: identityKey, bytes: actualBytes });
+      // Read the frame headers while the file is still staged and note whether this
+      // one looks like it had adverts joined on rather than mixed in. It decides one
+      // thing: whether to spend a second download on it in a day's time. See
+      // lib/stitch-signals.js for why that bar is deliberately high.
+      const recheck = planRecheck(staged, extension.filename);
+
+      subscriptions.markItem(row.id, {
+        identity_key: identityKey,
+        bytes: actualBytes,
+        ...recheck,
+      });
       return { staged, filename, row, identityKey, bytes: actualBytes };
     } catch (error) {
       await unlink(staged).catch(() => {});
@@ -675,7 +735,132 @@ export function createRemoteFeeds({
     episodes.setSystemFields(episode.id, fields);
   }
 
+  /**
+   * Downloads one episode a second time and records what changed.
+   *
+   * The strongest signal SelfPod has, and the only one that identifies an advert
+   * rather than merely something that repeats: a theme tune is in both copies of an
+   * episode, so it cannot be what differs between them. Anything found here is an
+   * advert by construction, which is why automatic mode may act on it without the
+   * position and length guards that hold back a merely-repeated segment.
+   *
+   * The second copy is downloaded to a temporary file and deleted afterwards. It is
+   * never published and never becomes an episode: the copy already on the share is the
+   * one the owner has, and replacing it with a differently-advertised one would be a
+   * strange thing to do to a file they can see.
+   */
+  async function recheckOne(item) {
+    const show = shows.get(item.show_id);
+    const episode = episodes.get(item.episode_id);
+    if (!show || !episode) {
+      subscriptions.markItem(item.id, { rechecked_at: nowIso(), recheck_outcome: 'episode_gone' });
+      return { outcome: 'episode_gone' };
+    }
+
+    const limit = settings.remoteMaxDownloadBytes();
+    const expected = Math.min(item.bytes || limit, limit);
+    if (!subscriptions.reserveBytes(expected, { limit: dailyByteLimit(), windowMs: 86_400_000 })) {
+      // Not marked as done: a second look that never happened should still happen, and
+      // the ordinary downloads are the ones that deserve the day's budget.
+      return { outcome: 'budget_exhausted' };
+    }
+
+    const staged = join(config.tempDir, `${STAGING_PREFIX}${newId()}`);
+    let actualBytes = 0;
+    let outcome = 'failed';
+    let segments = 0;
+    try {
+      const sink = createWriteStream(staged);
+      let response;
+      try {
+        response = await fetcher(item.enclosure_url, {
+          accept: 'audio/*',
+          allowedTypes: AUDIO_TYPES,
+          maxBytes: limit,
+          sink,
+        });
+        await new Promise((resolve, rejectStream) => {
+          sink.end(() => resolve());
+          sink.on('error', rejectStream);
+        });
+      } catch (error) {
+        await closeStream(sink);
+        throw error;
+      }
+      actualBytes = response.bytes;
+
+      const original = frameProfile(readFileSync(join(shows.dirFor(show), episode.filename)));
+      const second = frameProfile(readFileSync(staged));
+      if (!original || !second) {
+        outcome = 'unreadable';
+      } else {
+        const diff = diffFrames(original.hashes, second.hashes);
+        if (!diff.comparable) {
+          // Two files with nothing in common are not two stitches of one episode —
+          // more likely the publisher replaced the audio outright. Cutting on that
+          // basis would remove the whole programme.
+          outcome = 'not_comparable';
+        } else {
+          // Only what is in the copy on the share and not in the second one. Ranges
+          // taken from the second file index a different file — the adverts in two
+          // stitches are rarely the same length, so everything after the first one
+          // sits at a different offset — and applying them here would cut the
+          // programme at an offset nobody would think to check.
+          const ranges = runsToRanges(diff.onlyInA, original.frames);
+          segments = adDetect ? (adDetect.recordDiffSegments(episode, ranges, { timing: null })?.segments ?? 0) : 0;
+          outcome = ranges.length
+            ? 'differs'
+            : diff.identical
+              ? 'identical'
+              // The two downloads differ, but only by audio the second copy has and
+              // this one does not. The host is stitching; this copy simply came back
+              // without that advert. Nothing to cut, and worth saying so rather than
+              // recording it as "the same", which would be untrue.
+              : 'differs_elsewhere';
+        }
+      }
+    } catch (error) {
+      logger?.warn(
+        { itemId: item.id, err: error?.code ?? error?.message },
+        'could not download an episode a second time',
+      );
+      outcome = 'failed';
+    } finally {
+      await unlink(staged).catch(() => {});
+      subscriptions.settleBytes(expected, actualBytes);
+    }
+
+    // Marked done whatever happened, including "the two were the same". That is the
+    // answer most of the time, and re-asking it every day would be the whole cost of
+    // the feature for none of the benefit.
+    subscriptions.markItem(item.id, { rechecked_at: nowIso(), recheck_outcome: outcome });
+    logger?.info({ itemId: item.id, outcome, segments, bytes: actualBytes }, 'looked at an episode again');
+    return { outcome, segments };
+  }
+
   const api = {
+    /**
+     * Second downloads that are due.
+     *
+     * Capped hard, and across every subscription rather than per feed. This spends
+     * bandwidth re-fetching episodes SelfPod already has, and each one also counts
+     * again in the publisher's figures — so it is a trickle by design, not a sweep.
+     */
+    async recheckDue({ limit = RECHECK_PER_TICK } = {}) {
+      if (stopped || !enabled()) return { rechecked: 0 };
+      const due = subscriptions.recheckDue({ limit });
+      let rechecked = 0;
+      let found = 0;
+      for (const item of due) {
+        if (stopped) break;
+        const result = await recheckOne(item);
+        if (result.outcome === 'budget_exhausted') break;
+        rechecked += 1;
+        found += result.segments ?? 0;
+      }
+      return { rechecked, found };
+    },
+
     /** Polls everything that is due, one at a time. */
     async pollDue() {
       if (stopped || polling || !enabled()) return { polled: 0 };

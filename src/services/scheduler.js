@@ -82,6 +82,10 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
     polling = true;
     try {
       await remoteFeeds.pollDue();
+      // After the polls, and only ever a couple at a time: this re-downloads episodes
+      // SelfPod already has, to see what a stitching host changed. New episodes are
+      // what someone is waiting for; a second look at an old one is not.
+      await remoteFeeds.recheckDue?.();
     } catch (err) {
       logger?.error({ err }, 'remote feed poll failed');
     } finally {

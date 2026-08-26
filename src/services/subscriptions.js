@@ -461,6 +461,12 @@ export function createSubscriptions({ db, config, events, logger }) {
         'bytes',
         'attempts',
         'next_attempt_at',
+        // Whether this episode is worth downloading a second time to see what a
+        // stitching host changed. See migration 008.
+        'recheck_reason',
+        'recheck_after',
+        'rechecked_at',
+        'recheck_outcome',
       ];
       const entries = Object.entries(fields).filter(([key]) => allowed.includes(key));
       if (!entries.length) return api.getItem(itemId);
@@ -473,6 +479,30 @@ export function createSubscriptions({ db, config, events, logger }) {
         .join(', ');
       db.prepare(`UPDATE feed_items SET ${assignments} WHERE id = @id`).run(payload);
       return api.getItem(itemId);
+    },
+
+    /**
+     * Items whose second download is due, oldest deadline first.
+     *
+     * Across every subscription rather than per feed: the point of the cap is that
+     * SelfPod does not spend a whole day's bandwidth fetching episodes it already has,
+     * and a per-feed cap would multiply by however many feeds are followed.
+     */
+    recheckDue({ limit = 2, now = new Date().toISOString() } = {}) {
+      return db
+        .prepare(
+          `SELECT i.*, s.show_id
+             FROM feed_items i
+             JOIN feed_subscriptions s ON s.id = i.subscription_id
+            WHERE i.recheck_after IS NOT NULL
+              AND i.rechecked_at IS NULL
+              AND i.recheck_after <= @now
+              AND i.episode_id IS NOT NULL
+              AND s.enabled = 1
+            ORDER BY i.recheck_after
+            LIMIT @limit`,
+        )
+        .all({ now, limit });
     },
 
     items({ subscriptionId, decision = null, limit = 50, offset = 0 } = {}) {

@@ -118,11 +118,11 @@ async function main() {
   });
   const stats = createStats({ db, logger });
   const subscriptions = createSubscriptions({ db, config, events, logger });
+  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
-    metadata, activity, health, events, logger,
+    metadata, activity, health, events, logger, adDetect,
   });
-  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes });
   const trimmer = createTrimmer({
     db, config, events, logger, health, shows, episodes, adDetect, metadata,
   });
