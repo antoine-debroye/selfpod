@@ -1,4 +1,5 @@
 import activityRoutes from './activity.js';
+import adSegmentRoutes from './ad-segments.js';
 import authRoutes from './auth.js';
 import episodeRoutes from './episodes.js';
 import reachabilityRoutes from './reachability.js';
@@ -30,5 +31,6 @@ export default async function apiRoutes(fastify, options) {
   await fastify.register(statsRoutes, services);
   await fastify.register(reachabilityRoutes, services);
   await fastify.register(subscriptionRoutes, services);
+  await fastify.register(adSegmentRoutes, services);
   await fastify.register(settingsRoutes, services);
 }
