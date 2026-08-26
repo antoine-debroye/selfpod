@@ -184,6 +184,24 @@ export const DIRECTORY_NAMES = Object.freeze({
    * column on `episodes` exists so it can be rebuilt.
    */
   EPISODE_ART: '.art',
+  /**
+   * Frame fingerprints, as `/data/.fp/{show_id}/{episode_id}.{version}.fp`.
+   *
+   * On disk rather than in SQLite, for the reason `.art` is: everything here is
+   * derived and rebuildable. An hour-long episode is roughly 137,000 frame hashes, so
+   * a library of five hundred would put hundreds of megabytes of BLOBs into a database
+   * that is otherwise measured in megabytes — read synchronously on the thread that
+   * also serves media, and inside the file the operator backs up.
+   */
+  FINGERPRINTS: '.fp',
+  /**
+   * Trimmed copies, as `/data/.trimmed/{show_id}/{episode_id}.{ext}`.
+   *
+   * Outside the show folder because the original is the user's file and the trimmed
+   * version is SelfPod's derivative of it. Keeping them apart is what makes "the
+   * original is never modified" a property of the layout rather than a promise.
+   */
+  TRIMMED: '.trimmed',
 });
 
 export const FILE_NAMES = Object.freeze({
@@ -418,3 +436,52 @@ export function remoteAudioExtension(contentType) {
   // already knows how to serve, so this table can never widen SUPPORTED_EXTENSIONS.
   return SUPPORTED_EXTENSIONS.includes(extension) ? extension : null;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Ad detection and trimming (spec §19)                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The fingerprint format's version.
+ *
+ * Bumping it invalidates every stored fingerprint, which is deliberate: mixing hashes
+ * from two algorithms silently produces matches that mean nothing. It is also
+ * expensive — the whole corpus is re-read — so it belongs to a release, not to a
+ * refactor.
+ */
+export const FINGERPRINT_VERSION = 1;
+
+export const AD_TRIM_MODES = Object.freeze(['off', 'review', 'auto']);
+
+export const SEGMENT_STATUS = Object.freeze({
+  CANDIDATE: 'candidate',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+});
+
+export const SEGMENT_SOURCES = Object.freeze({ CORPUS: 'corpus', DIFF: 'diff' });
+
+/** Why automatic approval was withheld. Shown to the user, so each has wording. */
+export const HOLD_REASONS = Object.freeze({
+  seen_too_few_times: 'Not seen in enough episodes yet to be sure it repeats.',
+  too_short_to_be_an_advert: 'Shorter than any advert — more likely a sting or a join.',
+  too_long_to_be_an_advert: 'Longer than any advert — more likely a recurring part of the show.',
+  always_at_the_start: 'It is always at the very start, which is where a theme tune lives.',
+  always_at_the_end: 'It is always at the very end, which is where credits live.',
+});
+
+export const TRIM_STATUS = Object.freeze({
+  PENDING: 'pending',
+  TRIMMING: 'trimming',
+  TRIMMED: 'trimmed',
+  FAILED: 'failed',
+});
+
+export const PUBLISH_HOLDS = Object.freeze({
+  AWAITING_REVIEW: 'awaiting_review',
+  AWAITING_CORPUS: 'awaiting_corpus',
+  TRIMMING: 'trimming',
+});
+
+/** Formats whose frames can be read without decoding. Others are not fingerprinted. */
+export const FINGERPRINTABLE_EXTENSIONS = Object.freeze(['.mp3']);

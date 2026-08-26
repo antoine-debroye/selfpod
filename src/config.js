@@ -126,6 +126,8 @@ export function loadConfig(env = process.env) {
     showsDir: join(dataDir, DIRECTORY_NAMES.SHOWS),
     tempDir: join(dataDir, DIRECTORY_NAMES.TEMP),
     episodeArtDir: join(dataDir, DIRECTORY_NAMES.EPISODE_ART),
+    fingerprintDir: join(dataDir, DIRECTORY_NAMES.FINGERPRINTS),
+    trimmedDir: join(dataDir, DIRECTORY_NAMES.TRIMMED),
     databasePath: join(dataDir, FILE_NAMES.DATABASE),
     configPath: join(dataDir, FILE_NAMES.CONFIG),
 

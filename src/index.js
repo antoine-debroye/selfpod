@@ -24,6 +24,7 @@ import { createReadiness } from './services/readiness.js';
 import { createStats } from './services/stats.js';
 import { createSubscriptions } from './services/subscriptions.js';
 import { createRemoteFeeds } from './services/remote-feeds.js';
+import { createAdDetect } from './services/ad-detect.js';
 
 import { createShows } from './services/shows.js';
 import { createTimeline } from './services/timeline.js';
@@ -69,6 +70,8 @@ async function main() {
     await mkdir(config.showsDir, { recursive: true });
     await mkdir(config.tempDir, { recursive: true });
     await mkdir(config.episodeArtDir, { recursive: true });
+    await mkdir(config.fingerprintDir, { recursive: true });
+    await mkdir(config.trimmedDir, { recursive: true });
   } catch (err) {
     logger.error({ err }, 'could not prepare the data directory');
   }
@@ -117,6 +120,7 @@ async function main() {
     config, settings, subscriptions, shows, episodes, scanner,
     metadata, activity, health, events, logger,
   });
+  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
@@ -129,7 +133,7 @@ async function main() {
   const services = {
     config, logger, db, events, settings, health, activity, covers, episodeArt, metadata,
     shows, episodes, feeds, scanner, watcher, scheduler, stats, timeline, readiness,
-    subscriptions, remoteFeeds,
+    subscriptions, remoteFeeds, adDetect,
     ...presenters,
   };
 

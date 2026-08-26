@@ -19,6 +19,7 @@ import { createSettings } from '../../src/services/settings.js';
 import { createReadiness } from '../../src/services/readiness.js';
 import { createStats } from '../../src/services/stats.js';
 import { createRemoteFeeds } from '../../src/services/remote-feeds.js';
+import { createAdDetect } from '../../src/services/ad-detect.js';
 import { createSubscriptions } from '../../src/services/subscriptions.js';
 
 import { createShows } from '../../src/services/shows.js';
@@ -82,6 +83,8 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   await mkdir(config.showsDir, { recursive: true });
   await mkdir(config.tempDir, { recursive: true });
   await mkdir(config.episodeArtDir, { recursive: true });
+  await mkdir(config.fingerprintDir, { recursive: true });
+  await mkdir(config.trimmedDir, { recursive: true });
 
   const { db } = openDatabase(config.databasePath, { logger: silentLogger });
   const events = createEventBus();
@@ -108,6 +111,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   });
 
   const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
+  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
     metadata, activity, health, events, logger: silentLogger,
@@ -115,7 +119,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
 
   return {
     config, db, events, settings, health, activity, covers, episodeArt, metadata,
-    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds,
+    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds, adDetect,
     dataDir,
 
     /** Copies a fixture into a show folder, optionally under a different name. */

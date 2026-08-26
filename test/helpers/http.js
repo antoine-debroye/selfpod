@@ -20,6 +20,7 @@ import { createSettings } from '../../src/services/settings.js';
 import { createReadiness } from '../../src/services/readiness.js';
 import { createStats } from '../../src/services/stats.js';
 import { createRemoteFeeds } from '../../src/services/remote-feeds.js';
+import { createAdDetect } from '../../src/services/ad-detect.js';
 import { createSubscriptions } from '../../src/services/subscriptions.js';
 
 import { createShows } from '../../src/services/shows.js';
@@ -48,6 +49,8 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
   await mkdir(config.showsDir, { recursive: true });
   await mkdir(config.tempDir, { recursive: true });
   await mkdir(config.episodeArtDir, { recursive: true });
+  await mkdir(config.fingerprintDir, { recursive: true });
+  await mkdir(config.trimmedDir, { recursive: true });
 
   const { db } = openDatabase(config.databasePath, { logger: silentLogger });
   const events = createEventBus();
@@ -71,6 +74,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
 
   const stats = createStats({ db, logger: silentLogger });
   const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
+  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes });
   // The real service, not a stub: the routes drive it, and it never schedules
   // anything itself — the scheduler owns the timer — so nothing fires unless a test
   // asks it to.
@@ -84,7 +88,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
 
   const services = {
     config, logger: silentLogger, db, events, settings, health, activity, covers, episodeArt, metadata,
-    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds, ...presenters,
+    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds, adDetect, ...presenters,
     watcher: { status: () => ({ mode: 'events', enabled: true, degraded: false, lastEventAt: null }), restart: async () => {} },
     scheduler: { status: () => ({ running: false, intervalSeconds: 300, lastRunAt: null, nextRunAt: null }) },
   };
