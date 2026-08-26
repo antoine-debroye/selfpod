@@ -11,13 +11,14 @@ import { SETTING_KEYS } from './settings.js';
  *  2. the missing-file grace sweep, which is what finally drops an episode whose
  *     file has been gone long enough (deliberately not the scanner's job, so a
  *     brief share outage can't drop episodes);
- *  3. expired-session cleanup.
+ *  3. expired-session cleanup;
+ *  4. advert detection and trimming, for the shows that have it on.
  *
  * A recursive timeout is used rather than setInterval so a slow scan can't cause
  * ticks to pile up, and the interval is re-read every tick so a change in the UI
  * takes effect without a restart.
  */
-export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds }) {
+export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline }) {
   let timer = null;
   let pollTimer = null;
   let polling = false;
@@ -119,6 +120,14 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
 
       sessionCleanup?.();
       trimAccessLog();
+
+      // Last, and after the scan, because it works on episodes the scan has just found
+      // and it is the only job here that reads whole files off the disk. It runs on its
+      // own chain, so a show that takes a while cannot hold up the next tick's rescan —
+      // and its work is behind a publish hold, so nobody is waiting on it.
+      adPipeline?.processAll().catch((err) => {
+        logger?.error({ err }, 'advert detection failed');
+      });
     } catch (err) {
       logger?.error({ err }, 'scheduled rescan failed');
     } finally {

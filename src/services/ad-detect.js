@@ -150,6 +150,28 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
   /* ---- the catalogue ------------------------------------------------------- */
 
   /**
+   * Marks every episode a segment occurs in as needing its audio cut again.
+   *
+   * Called wherever an approval appears — the owner deciding, and automatic mode
+   * deciding for them. It has to be both: an auto-approved segment that never marked
+   * its episodes would leave them looking settled, and the publish gate would let them
+   * out before the cut carrying that very approval had been made.
+   */
+  function markForRecut(segmentId, only = null) {
+    const rows = db
+      .prepare('SELECT DISTINCT episode_id FROM ad_segment_occurrences WHERE segment_id = ?')
+      .all(segmentId)
+      .map((row) => row.episode_id)
+      .filter((id) => !only || only.has(id));
+    if (!rows.length) return;
+    const mark = db.prepare(
+      `UPDATE episodes SET trim_status = '${TRIM_STATUS.PENDING}', updated_at = @now WHERE id = @id`,
+    );
+    const now = nowIso();
+    for (const id of rows) mark.run({ id, now });
+  }
+
+  /**
    * Records a segment, or updates what is known about one already recorded.
    *
    * A segment already decided about keeps its decision. Re-running detection after a
@@ -177,7 +199,10 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
         hold_reason: segment.holdReason ?? null,
         now,
       });
-      replaceOccurrences(existing.id, segment.occurrences);
+      const moved = replaceOccurrences(existing.id, segment.occurrences);
+      // Only what actually moved, so a tick that finds the same thing again rewrites
+      // no audio, and an episode whose cut list genuinely grew is not left behind.
+      if (existing.status === SEGMENT_STATUS.APPROVED && moved.size) markForRecut(existing.id, moved);
       return { ...selectSegment.get(existing.id), isNew: false };
     }
 
@@ -210,10 +235,37 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       now,
     });
     replaceOccurrences(id, segment.occurrences);
+    if ((segment.status ?? SEGMENT_STATUS.CANDIDATE) === SEGMENT_STATUS.APPROVED) markForRecut(id);
     return { ...selectSegment.get(id), isNew: true };
   }
 
+  /**
+   * Rewrites a segment's occurrences, and reports which episodes' cut lists changed.
+   *
+   * The return value is the point. Detection runs again every time a new episode
+   * arrives, and re-marking every approved segment's episodes would re-cut the whole
+   * library on every scheduler tick. Marking none of them is worse and quieter: an
+   * episode already trimmed that gains a new occurrence of an already-approved segment
+   * would keep its old cut for good, because the trimmer skips what is already done.
+   */
   function replaceOccurrences(segmentId, occurrences) {
+    const key = (row) => `${row.episode_id ?? row.episodeId}:${row.start_frame ?? row.start ?? 0}:${row.end_frame ?? row.end ?? 0}`;
+    const before = new Set(
+      db
+        .prepare('SELECT episode_id, start_frame, end_frame FROM ad_segment_occurrences WHERE segment_id = ?')
+        .all(segmentId)
+        .map(key),
+    );
+    const changed = new Set();
+    for (const occurrence of occurrences) {
+      if (!before.has(key(occurrence))) changed.add(occurrence.episodeId);
+    }
+    for (const row of db
+      .prepare('SELECT episode_id, start_frame, end_frame FROM ad_segment_occurrences WHERE segment_id = ?')
+      .all(segmentId)) {
+      if (!occurrences.some((occurrence) => key(occurrence) === key(row))) changed.add(row.episode_id);
+    }
+
     const apply = db.transaction(() => {
       db.prepare('DELETE FROM ad_segment_occurrences WHERE segment_id = ?').run(segmentId);
       const insert = db.prepare(
@@ -233,6 +285,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       }
     });
     apply();
+    return changed;
   }
 
   const api = {
@@ -387,13 +440,9 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
 
       // Every episode this segment occurs in now has a trimmed copy that disagrees with
       // the decisions — approving adds a cut to it, rejecting takes one away. Marking
-      // them pending is what makes a decision reach the audio; without it a rejection
-      // would show as reversed in the UI while subscribers kept getting the old cut.
-      db.prepare(
-        `UPDATE episodes
-            SET trim_status = '${TRIM_STATUS.PENDING}', updated_at = @now
-          WHERE id IN (SELECT episode_id FROM ad_segment_occurrences WHERE segment_id = @id)`,
-      ).run({ id: segmentId, now: nowIso() });
+      // them is what makes a decision reach the audio; without it a rejection would
+      // show as reversed in the UI while subscribers kept getting the old cut.
+      markForRecut(segmentId);
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: segment.show_id });
       return selectSegment.get(segmentId);

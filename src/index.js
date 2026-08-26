@@ -24,6 +24,7 @@ import { createReadiness } from './services/readiness.js';
 import { createStats } from './services/stats.js';
 import { createSubscriptions } from './services/subscriptions.js';
 import { createRemoteFeeds } from './services/remote-feeds.js';
+import { createAdPipeline } from './services/ad-pipeline.js';
 import { createTrimmer } from './services/trimmer.js';
 import { createAdDetect } from './services/ad-detect.js';
 
@@ -125,11 +126,14 @@ async function main() {
   const trimmer = createTrimmer({
     db, config, events, logger, health, shows, episodes, adDetect, metadata,
   });
+  const adPipeline = createAdPipeline({
+    db, events, logger, shows, episodes, adDetect, trimmer,
+  });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
   const scheduler = createScheduler({
-    settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds,
+    settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline,
   });
 
   const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats, readiness });
@@ -137,7 +141,7 @@ async function main() {
   const services = {
     config, logger, db, events, settings, health, activity, covers, episodeArt, metadata,
     shows, episodes, feeds, scanner, watcher, scheduler, stats, timeline, readiness,
-    subscriptions, remoteFeeds, adDetect, trimmer,
+    subscriptions, remoteFeeds, adDetect, trimmer, adPipeline,
     ...presenters,
   };
 

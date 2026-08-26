@@ -62,11 +62,11 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
     `INSERT INTO episodes (id, show_id, filename, identity_key, title, title_is_custom, tag_title,
                            description, season, episode_number, explicit, pub_date, pub_date_is_custom,
                            duration_seconds, bitrate_kbps, file_size_bytes, file_mtime, mime_type,
-                           status, created_at, updated_at)
+                           status, publish_hold, created_at, updated_at)
      VALUES (@id, @show_id, @filename, @identity_key, @title, @title_is_custom, @tag_title,
              @description, @season, @episode_number, @explicit, @pub_date, @pub_date_is_custom,
              @duration_seconds, @bitrate_kbps, @file_size_bytes, @file_mtime, @mime_type,
-             @status, @created_at, @updated_at)`,
+             @status, @publish_hold, @created_at, @updated_at)`,
   );
   const deleteEpisode = db.prepare('DELETE FROM episodes WHERE id = ?');
 
@@ -147,6 +147,9 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
         bitrate_kbps: null,
         file_mtime: null,
         status: EPISODE_STATUS.ACTIVE,
+        // Set at insert so an episode is never briefly publishable before the show's
+        // advert settings are applied to it. See lib/publish-hold.js.
+        publish_hold: null,
         created_at: nowIso(),
         updated_at: nowIso(),
         ...row,

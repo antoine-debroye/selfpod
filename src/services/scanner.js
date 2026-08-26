@@ -13,6 +13,7 @@ import {
 } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
 import { EVENTS } from '../lib/events.js';
+import { initialPublishHold } from '../lib/publish-hold.js';
 import { computeIdentityKey } from '../lib/identity.js';
 import { isUsableSlug } from '../lib/slug.js';
 import { newId } from '../lib/tokens.js';
@@ -571,6 +572,12 @@ export function createScanner({
         file_size_bytes: stats.size,
         file_mtime: mtimeIso,
         mime_type: mimeType,
+        // Applied here rather than in a pass afterwards. This folder's scan invalidates
+        // the feed cache when it finishes, so an episode inserted unheld and held a
+        // moment later would still have had a window in which the feed could be built
+        // with the untrimmed audio in it — a window nobody will ever reproduce, and
+        // which gets reported as "sometimes an episode goes out with the ads still in".
+        publish_hold: initialPublishHold(show),
       });
       seenEpisodeIds.add(created.id);
       added += 1;
