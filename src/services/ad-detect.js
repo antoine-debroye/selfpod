@@ -8,6 +8,7 @@ import {
   HOLD_REASONS,
   SEGMENT_SOURCES,
   SEGMENT_STATUS,
+  TRIM_STATUS,
 } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
 import { notFound } from '../lib/errors.js';
@@ -383,6 +384,16 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
             SET status = @status, auto_approved = 0, decided_at = @now, updated_at = @now
           WHERE id = @id`,
       ).run({ id: segmentId, status, now: nowIso() });
+
+      // Every episode this segment occurs in now has a trimmed copy that disagrees with
+      // the decisions — approving adds a cut to it, rejecting takes one away. Marking
+      // them pending is what makes a decision reach the audio; without it a rejection
+      // would show as reversed in the UI while subscribers kept getting the old cut.
+      db.prepare(
+        `UPDATE episodes
+            SET trim_status = '${TRIM_STATUS.PENDING}', updated_at = @now
+          WHERE id IN (SELECT episode_id FROM ad_segment_occurrences WHERE segment_id = @id)`,
+      ).run({ id: segmentId, now: nowIso() });
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: segment.show_id });
       return selectSegment.get(segmentId);

@@ -485,3 +485,11 @@ export const PUBLISH_HOLDS = Object.freeze({
 
 /** Formats whose frames can be read without decoding. Others are not fingerprinted. */
 export const FINGERPRINTABLE_EXTENSIONS = Object.freeze(['.mp3']);
+
+/**
+ * Formats whose frames can be removed without decoding. The same list as the one above
+ * today, and deliberately a separate one: reading a format's frames and being able to
+ * cut them apart and rejoin them are different claims, and the second is the one that
+ * publishes bytes to your subscribers.
+ */
+export const TRIMMABLE_EXTENSIONS = Object.freeze(['.mp3']);

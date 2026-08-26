@@ -173,6 +173,15 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
         'art_width',
         'art_height',
         'art_etag',
+        // The trimmed copy, all owned by the trimmer. `publish_hold` is here rather
+        // than on `update` on purpose: whether an episode is ready to be published is
+        // SelfPod's answer, not an editable field.
+        'trim_status',
+        'trimmed_filename',
+        'trimmed_bytes',
+        'trimmed_duration_seconds',
+        'trimmed_etag',
+        'publish_hold',
       ];
       const entries = Object.entries(fields).filter(([key]) => allowed.includes(key));
       if (!entries.length) return api.get(id);
