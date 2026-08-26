@@ -6,6 +6,7 @@ import { FEED_CACHE_TTL_MS, GENERATOR, SHOW_STATUS } from '../constants.js';
 import { formatDurationFeed, toRFC2822 } from '../lib/dates.js';
 import { EVENTS } from '../lib/events.js';
 import { sha256Hex } from '../lib/tokens.js';
+import { publishedAudio } from '../lib/published-audio.js';
 import { coverUrl, episodeArtUrl, feedUrl, mediaUrl } from '../lib/urls.js';
 import { SETTING_KEYS } from './settings.js';
 
@@ -279,9 +280,14 @@ function buildXml({ show, items, base, previousBase, config }) {
     item.ele('guid', { isPermaLink: 'false' }).txt(xmlSafe(episode.id)).up();
     item.ele('pubDate').txt(toRFC2822(episode.pub_date)).up();
 
+    // Whatever this episode actually publishes — the original, or the copy with the
+    // approved adverts removed. Stating the untrimmed duration for trimmed audio would
+    // show every listener a progress bar that ends before the episode does.
+    const audio = publishedAudio(episode);
+
     // Omitted entirely when unknown — never zero, never an empty tag (§8.3 req 3).
-    if (episode.duration_seconds !== null && episode.duration_seconds !== undefined) {
-      item.ele('itunes:duration').txt(formatDurationFeed(episode.duration_seconds)).up();
+    if (audio.durationSeconds !== null && audio.durationSeconds !== undefined) {
+      item.ele('itunes:duration').txt(formatDurationFeed(audio.durationSeconds)).up();
     }
 
     const explicit =
@@ -323,9 +329,15 @@ function buildXml({ show, items, base, previousBase, config }) {
         : null;
     if (itemArt) item.ele('itunes:image', { href: itemArt }).up();
 
+    // The URL keeps the *original* filename even when trimmed bytes are served: it is
+    // there so apps that infer a type from the extension behave and so a download gets
+    // a sensible name, and naming the file after its database id would give every
+    // listener a folder of hex. The version, not the name, is what identifies the bytes.
     item.ele('enclosure', {
-      url: mediaUrl(base, show.slug, show.feed_token, episode.id, episode.filename),
-      length: String(episode.file_size_bytes ?? 0),
+      url: mediaUrl(base, show.slug, show.feed_token, episode.id, episode.filename, {
+        cacheBust: audio.version ?? undefined,
+      }),
+      length: String(audio.sizeBytes ?? 0),
       type: episode.mime_type,
     }).up();
 

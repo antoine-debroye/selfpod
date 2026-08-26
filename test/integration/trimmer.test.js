@@ -69,7 +69,8 @@ describe('producing the trimmed copy', () => {
       'the original was modified',
     );
     const derived = await readdir(join(app.config.trimmedDir, show.id));
-    assert.deepEqual(derived, [`${episode.id}.mp3`]);
+    // Named after its own content, so the row and the bytes it describes move together.
+    assert.deepEqual(derived, [`${episode.id}.${app.episodes.get(episode.id).trimmed_etag}.mp3`]);
   });
 
   it('actually removes the sponsor read, and only that', async () => {
@@ -324,16 +325,21 @@ describe('when a trim cannot be done', () => {
     const show = await makeShow();
     await detectAndApprove(show);
     const [episode] = app.episodes.listByShow(show.id);
-    // A directory sitting exactly where the trimmed file has to go, so the write
-    // succeeds and the rename onto it fails — the case that strands staging.
-    await mkdir(join(app.config.trimmedDir, show.id, `${episode.id}.mp3`), { recursive: true });
+    // Trim once to learn the name the content will land under, then put a directory
+    // exactly there so the write succeeds and the rename onto it fails — the case that
+    // strands a staging file.
+    await app.trimmer.trimEpisode(episode);
+    const name = app.episodes.get(episode.id).trimmed_filename;
+    await rm(join(app.config.trimmedDir, show.id, name));
+    await mkdir(join(app.config.trimmedDir, show.id, name), { recursive: true });
+    app.episodes.setSystemFields(episode.id, { trimmed_filename: null, trimmed_etag: null });
 
-    const result = await app.trimmer.trimEpisode(episode);
+    const result = await app.trimmer.trimEpisode(app.episodes.get(episode.id));
 
     assert.equal(result.trimmed, false);
     assert.equal(result.reason, 'unwritable');
     const left = await readdir(join(app.config.trimmedDir, show.id));
-    assert.deepEqual(left, [`${episode.id}.mp3`], `staging was left behind: ${left.join(', ')}`);
+    assert.deepEqual(left, [name], `staging was left behind: ${left.join(', ')}`);
   });
 });
 

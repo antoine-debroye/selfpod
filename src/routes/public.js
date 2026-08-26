@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
-import { EPISODE_STATUS, SHOW_STATUS, imageMimeType } from '../constants.js';
+import { EPISODE_STATUS, SHOW_STATUS, TRIM_STATUS, imageMimeType } from '../constants.js';
 import { ACCESS_KIND } from '../services/stats.js';
 import { resolveContained } from '../lib/contained-path.js';
 import { notFound } from '../lib/errors.js';
+import { publishedAudio } from '../lib/published-audio.js';
 import { etagMatches, notModifiedSince, preferredEncoding } from '../lib/http-headers.js';
 import { signPing } from '../lib/instance-proof.js';
 import { isSafeFilename } from '../lib/slug.js';
@@ -383,12 +384,24 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     if (!isSafeFilename(episode.filename)) throw notFound('No episode here.', 'not_found');
     void filename;
 
-    const showDir = shows.dirFor(show);
-    // Resolves symlinks and proves the result is genuinely inside the show folder.
-    // A lexical prefix check is not sufficient: `/data/shows` is usually a network
-    // share, and a symlink placed there by anyone who can write to it would
-    // otherwise publish a file from elsewhere on the host through this feed.
-    const resolved = await resolveContained(showDir, episode.filename);
+    // The original, or the copy with the approved adverts cut out of it. The same
+    // function the feed used to state this episode's length, so the size advertised
+    // and the size served cannot disagree — which matters here more than anywhere
+    // else, because this route answers byte-range requests against it.
+    const audio = publishedAudio(episode);
+    if (!isSafeFilename(audio.filename)) throw notFound('No episode here.', 'not_found');
+
+    const sourceDir = audio.isTrimmed
+      ? join(config.trimmedDir, episode.show_id)
+      : shows.dirFor(show);
+    // Resolves symlinks and proves the result is genuinely inside the folder it should
+    // be in. A lexical prefix check is not sufficient: `/data/shows` is usually a
+    // network share, and a symlink placed there by anyone who can write to it would
+    // otherwise publish a file from elsewhere on the host through this feed. The
+    // trimmed directory is SelfPod's own and holds no symlinks, but it is on the same
+    // volume as the share, and the check costs one `realpath`.
+    const showDir = sourceDir;
+    const resolved = await resolveContained(sourceDir, audio.filename);
 
     /**
      * One place to record a file that could not be served, in the owner's language.
@@ -396,7 +409,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      * used to be invisible here.
      */
     const refuse = (error, code) => {
-      request.log.warn({ file: episode.filename, show: show.slug, code }, error);
+      request.log.warn({ file: audio.filename, show: show.slug, code }, error);
       if (!isOwnRequest(request)) {
         stats?.record({
           kind: ACCESS_KIND.DOWNLOAD,
@@ -417,17 +430,17 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     if (!resolved.path) {
       if (resolved.reason === 'escapes') {
         throw refuse(
-          `${episode.filename} does not resolve to a file inside this show's folder, so SelfPod refused to serve it. If it is a symlink pointing elsewhere on the host, replace it with the real file — SelfPod only serves what is genuinely in the folder.`,
+          `${audio.filename} does not resolve to a file inside this show's folder, so SelfPod refused to serve it. If it is a symlink pointing elsewhere on the host, replace it with the real file — SelfPod only serves what is genuinely in the folder.`,
           null,
         );
       }
       if (resolved.code === 'EACCES') {
         throw refuse(
-          `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`,
+          `Permission denied reading ${audio.filename} as UID ${config.runtimeUid ?? config.puid}.`,
           'EACCES',
         );
       }
-      throw refuse(`${episode.filename} is not on disk.`, resolved.code);
+      throw refuse(`${audio.filename} is not on disk.`, resolved.code);
     }
 
     const absolute = resolved.path;
@@ -437,8 +450,8 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     } catch (err) {
       throw refuse(
         err.code === 'EACCES'
-          ? `Permission denied reading ${episode.filename} as UID ${config.runtimeUid ?? config.puid}.`
-          : `${episode.filename} is not on disk.`,
+          ? `Permission denied reading ${audio.filename} as UID ${config.runtimeUid ?? config.puid}.`
+          : `${audio.filename} is not on disk.`,
         err.code,
       );
     }
@@ -451,7 +464,19 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       // `private` rather than `public`: Cloudflare caches .mp3/.ogg/.flac at the
       // edge by default, which would keep serving a rotated token's media for up
       // to a day. Clients still cache; the CDN does not.
-      .header('cache-control', 'private, max-age=86400')
+      //
+      // While a trim is outstanding these bytes are the ones this episode is about to
+      // stop having. The swap is versioned, so a cached copy is stale rather than
+      // corrupt — but a day is a long time to keep handing out adverts the owner has
+      // already told SelfPod to remove.
+      .header(
+        'cache-control',
+        episode.trim_status === TRIM_STATUS.PENDING || episode.trim_status === TRIM_STATUS.TRIMMING
+          ? 'private, no-cache'
+          : 'private, max-age=86400',
+      )
+      // Named after the original either way: a listener saving the file wants the
+      // episode's name, not SelfPod's internal one for the copy.
       .header('content-disposition', contentDisposition(episode.filename));
 
     // A range request is a player streaming or seeking; a plain GET is an app
@@ -463,7 +488,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       episodeId: episode.id,
       showId: show.id,
       totalBytes: fileStats.size,
-      name: episode.filename,
+      name: audio.filename,
     });
 
     // Range handling (206 responses, `Accept-Ranges`, 416 for an unsatisfiable

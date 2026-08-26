@@ -126,10 +126,19 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         );
       }
 
-      const filename = `${episode.id}.mp3`;
+      // The version is part of the filename, not just of the URL. Writing every cut to
+      // one name per episode leaves a window between the rename and the database write
+      // where the columns describe the old file and the disk holds the new one — and a
+      // byte-range request landing in that window is handed bytes from a file that is
+      // not the length the feed just advertised. Naming the file after its own content
+      // means the two can never disagree: the old cut stays readable at its own name
+      // until the row has moved, and only then does it go.
+      const version = createHash('sha256').update(result.buffer).digest('hex').slice(0, 12);
+      const filename = `${episode.id}.${version}.mp3`;
       const directory = showDir(episode.show_id);
       const staging = join(directory, `.${newId()}.tmp`);
       const destination = join(directory, filename);
+      const previous = pathFor(episode);
       try {
         await mkdir(directory, { recursive: true });
         await writeFile(staging, result.buffer);
@@ -150,9 +159,12 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         trimmed_filename: filename,
         trimmed_bytes: bytes,
         trimmed_duration_seconds: measured.durationSeconds ?? null,
-        trimmed_etag: createHash('sha256').update(result.buffer).digest('hex').slice(0, 12),
+        trimmed_etag: version,
         publish_hold: null,
       });
+
+      // Only now, with nothing pointing at it any more.
+      if (previous && previous !== destination) await rm(previous, { force: true }).catch(() => {});
 
       health?.clear(`trim_${episode.id}`);
       logger?.info(

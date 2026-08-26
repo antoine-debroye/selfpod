@@ -45,9 +45,20 @@ export function feedUrl(baseUrl, slug, token) {
   return `${join(baseUrl, 'feeds', slug)}/${encodePathSegment(token)}.xml`;
 }
 
-/** `{base}/media/{slug}/{token}/{episodeId}/{filename}` (spec §8.4). */
-export function mediaUrl(baseUrl, slug, token, episodeId, filename) {
-  return join(baseUrl, 'media', slug, token, episodeId, filename);
+/**
+ * `{base}/media/{slug}/{token}/{episodeId}/{filename}` (spec §8.4).
+ *
+ * `cacheBust` is the content version of the bytes this URL currently serves, and it
+ * is what makes replacing an episode's audio — cutting adverts out of it — safe. The
+ * hazard is not a stale copy, which podcast apps tolerate: it is that this route
+ * serves byte ranges, so a client holding the first half of one file and asking for
+ * the rest would be handed the second half of a different one and would stitch the
+ * two together without any error to notice. A version in the URL means the second
+ * request is simply a different resource. `coverUrl` has done this since §10.3.
+ */
+export function mediaUrl(baseUrl, slug, token, episodeId, filename, { cacheBust } = {}) {
+  const url = join(baseUrl, 'media', slug, token, episodeId, filename);
+  return cacheBust ? `${url}?v=${encodeURIComponent(cacheBust)}` : url;
 }
 
 /**

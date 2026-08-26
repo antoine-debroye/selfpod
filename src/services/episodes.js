@@ -28,9 +28,16 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
   // did something reasonable and never said it had. ISO-8601 UTC strings compare
   // lexicographically in the order they compare chronologically, which is what the
   // missing-file sweep already relies on.
+  //
+  // `publish_hold IS NULL` is the second gate, and it is a stored column rather than
+  // an inference from `trim_status` on purpose. "This episode is on disk but is not
+  // ready to go out" did not exist in SelfPod before adverts could be cut out of one,
+  // and inferring it would mean every future reason to hold an episode back had to be
+  // expressible as a trim state. It is a gate; what put it there is a separate question.
   const selectFeedItems = db.prepare(
     `SELECT * FROM episodes
       WHERE show_id = @showId AND status IN ('active','missing') AND pub_date <= @now
+        AND publish_hold IS NULL
       ORDER BY pub_date DESC, created_at DESC`,
   );
   const countByShow = db.prepare(
@@ -42,8 +49,11 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
        -- Both from the same predicate as selectFeedItems, so counts().inFeed is exactly
        -- listForFeed().length and the two cannot drift apart.
        SUM(CASE WHEN status IN ('active','missing') AND pub_date >  @now THEN 1 ELSE 0 END) AS scheduled,
-       SUM(CASE WHEN status IN ('active','missing') AND pub_date <= @now THEN 1 ELSE 0 END) AS inFeed,
+       SUM(CASE WHEN status IN ('active','missing') AND publish_hold IS NOT NULL THEN 1 ELSE 0 END) AS held,
        SUM(CASE WHEN status IN ('active','missing') AND pub_date <= @now
+                 AND publish_hold IS NULL THEN 1 ELSE 0 END) AS inFeed,
+       SUM(CASE WHEN status IN ('active','missing') AND pub_date <= @now
+                 AND publish_hold IS NULL
                  AND duration_seconds IS NULL THEN 1 ELSE 0 END) AS inFeedNoDuration,
        COUNT(*) AS total
      FROM episodes WHERE show_id = @showId`,
@@ -117,6 +127,7 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
         removed: row?.removed ?? 0,
         expired: row?.expired ?? 0,
         scheduled: row?.scheduled ?? 0,
+        held: row?.held ?? 0,
         total: row?.total ?? 0,
         inFeed: row?.inFeed ?? 0,
         inFeedNoDuration: row?.inFeedNoDuration ?? 0,
