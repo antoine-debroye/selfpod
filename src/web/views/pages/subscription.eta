@@ -1,0 +1,89 @@
+<%
+  const show = it.show;
+  const sub = it.subscription;
+%>
+<div class="page-title">
+  <div>
+    <div class="sub">Following a feed into <%= show.title %></div>
+    <h1>Subscription</h1>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Back to show</a>
+  </div>
+</div>
+
+<% if (!it.featureEnabled) { %>
+  <div class="callout callout-warn" role="status">
+    <strong>Following feeds is switched off.</strong>
+    It is off by default, because it is the only thing that makes SelfPod fetch from the
+    internet at all — with it off, SelfPod only ever talks to your own network.
+    Turn it on in <a href="/settings">Settings</a> when you want to use it.
+  </div>
+<% } %>
+
+<div class="grid-2">
+  <div>
+    <%~ include('../partials/subscription-form.eta', { show, subscription: sub, helpers: it.helpers, errors: it.errors, values: it.values, saved: it.saved, reopened: it.reopened }) %>
+    <div id="subscription-preview"></div>
+  </div>
+
+  <div>
+    <% if (sub) { %>
+      <div class="form-card">
+        <div class="ftitle">Status</div>
+        <dl class="kv">
+          <dt>Last checked</dt>
+          <dd><%= sub.lastPolledAt ? it.helpers.formatDateTime(sub.lastPolledAt) : 'not yet' %></dd>
+          <dt>Next check</dt>
+          <dd><%= sub.enabled ? (sub.nextPollAt ? it.helpers.formatDateTime(sub.nextPollAt) : 'as soon as possible') : 'paused' %></dd>
+          <dt>In your feed</dt>
+          <dd><%= sub.counts.downloaded || 0 %> <%= (sub.counts.downloaded || 0) === 1 ? 'episode' : 'episodes' %></dd>
+        </dl>
+
+        <% if (sub.lastError) { %>
+          <div class="callout callout-<%= sub.lastStatus === 'blocked' ? 'err' : 'warn' %>" role="status">
+            <%= sub.lastError %>
+            <% if (sub.lastStatus === 'blocked') { %>
+              <div class="muted">SelfPod has stopped checking this feed. Fix the address and switch it back on.</div>
+            <% } %>
+          </div>
+        <% } %>
+
+        <div class="form-actions">
+          <form method="post" action="/ui/subscriptions/<%= sub.id %>/poll"
+                hx-post="/ui/subscriptions/<%= sub.id %>/poll" hx-target="body" hx-swap="none">
+            <button class="btn btn-secondary btn-sm" type="submit">Check now</button>
+          </form>
+          <form method="post" action="/ui/subscriptions/<%= sub.id %>/toggle"
+                hx-post="/ui/subscriptions/<%= sub.id %>/toggle" hx-target="body" hx-swap="none">
+            <button class="btn btn-ghost btn-sm" type="submit"><%= sub.enabled ? 'Pause' : 'Resume' %></button>
+          </form>
+        </div>
+      </div>
+
+      <div class="form-card">
+        <div class="ftitle">Stop following</div>
+        <div class="fdesc">
+          The episodes SelfPod already downloaded stay exactly where they are — in your feed
+          and on your share. Only the checking stops.
+        </div>
+        <form method="post" action="/ui/subscriptions/<%= sub.id %>/delete"
+              hx-post="/ui/subscriptions/<%= sub.id %>/delete" hx-target="body" hx-swap="none">
+          <button class="btn btn-danger btn-sm" type="submit">Stop following this feed</button>
+        </form>
+      </div>
+    <% } %>
+  </div>
+</div>
+
+<% if (sub) { %>
+  <div class="section">
+    <div class="section-title">
+      <h2>Every episode SelfPod has seen</h2>
+      <p class="muted">
+        Including the ones it skipped, and why. This is the answer to “where is that episode?”.
+      </p>
+    </div>
+    <%~ include('../partials/subscription-items.eta', { subscription: sub, items: it.items, counts: sub.counts, filter: it.filter, helpers: it.helpers }) %>
+  </div>
+<% } %>

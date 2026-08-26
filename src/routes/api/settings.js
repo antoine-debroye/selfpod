@@ -1,6 +1,11 @@
 import bcrypt from 'bcryptjs';
 
-import { RESCAN_INTERVAL_MAX_SECONDS, RESCAN_INTERVAL_MIN_SECONDS } from '../../constants.js';
+import {
+  REMOTE_POLL_MAX_SECONDS,
+  REMOTE_POLL_MIN_SECONDS,
+  RESCAN_INTERVAL_MAX_SECONDS,
+  RESCAN_INTERVAL_MIN_SECONDS,
+} from '../../constants.js';
 import { unprocessable } from '../../lib/errors.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
@@ -22,6 +27,8 @@ export default async function settingsRoutes(fastify, { config, settings, watche
       rescanIntervalSeconds: settings.rescanIntervalSeconds(),
       missingGraceSeconds: settings.missingGraceSeconds(),
       watcherEnabled: settings.watcherEnabled(),
+      subscriptionsEnabled: settings.subscriptionsEnabled(),
+      remotePollIntervalSeconds: settings.remotePollIntervalSeconds(),
       sessionTtlHours: settings.sessionTtlHours(),
       adminUsername: settings.adminUsername(),
       setupComplete: settings.setupComplete(),
@@ -132,6 +139,28 @@ export default async function settingsRoutes(fastify, { config, settings, watche
 
     if (body.watcherEnabled !== undefined) {
       patch[SETTING_KEYS.WATCHER_ENABLED] = isTrue(body.watcherEnabled) ? '1' : '0';
+    }
+
+    /**
+     * The switch that decides whether SelfPod may reach the internet at all.
+     *
+     * Editable here rather than env-only because the env var is a *seed*: it populates
+     * the setting on first run, and after that the database wins, exactly like every
+     * other setting. Without this route an operator who started the container before
+     * the feature existed could never turn it on without deleting their database —
+     * and the env var would appear to do nothing, which is worse than it not existing.
+     */
+    if (body.subscriptionsEnabled !== undefined) {
+      patch[SETTING_KEYS.SUBSCRIPTIONS_ENABLED] = isTrue(body.subscriptionsEnabled) ? '1' : '0';
+    }
+
+    if (body.remotePollIntervalSeconds !== undefined) {
+      const parsed = Number.parseInt(String(body.remotePollIntervalSeconds), 10);
+      if (!Number.isFinite(parsed) || parsed < REMOTE_POLL_MIN_SECONDS || parsed > REMOTE_POLL_MAX_SECONDS) {
+        fields.remotePollIntervalSeconds = `Check feeds between every ${REMOTE_POLL_MIN_SECONDS / 60} minutes and every ${REMOTE_POLL_MAX_SECONDS / 3600} hours. This is someone else's server.`;
+      } else {
+        patch[SETTING_KEYS.REMOTE_POLL_INTERVAL_SECONDS] = String(parsed);
+      }
     }
 
     if (body.sessionTtlHours !== undefined) {

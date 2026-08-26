@@ -2,9 +2,11 @@ import { join } from 'node:path';
 
 import fastifyFormbody from '@fastify/formbody';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 
+import { AppError } from './lib/errors.js';
 import authPlugin from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import { loggerRedactPaths, loggerSerializers } from './plugins/log-redaction.js';
@@ -73,6 +75,57 @@ export async function buildApp(services) {
     settings: services.settings,
     config,
     logger,
+  });
+
+  /**
+   * Rate limiting, opt-in per route.
+   *
+   * `@fastify/rate-limit` has been a declared dependency for some time and was never
+   * actually registered; the only limiter in the app was a twelve-line array inside
+   * the reachability route. Registering it is overdue — but **`global: false` is not
+   * a preference, it is the whole design**, and turning it on would break the app in
+   * two ways that are both worse than having no limiter at all:
+   *
+   *  1. `/media/...` serves Range requests. A podcast app scrubbing through an
+   *     episode issues a burst of 206s, and a 429 in the middle of that is a broken
+   *     episode with no explanation anywhere.
+   *  2. `loginSourceKey` is `socket.remoteAddress | cf-connecting-ip`. Behind nginx,
+   *     Traefik or Tailscale — anything that is not Cloudflare — the socket address
+   *     is the proxy's, so **every listener in the world shares one bucket**. That
+   *     key is right for login precisely because it is paired with an account-level
+   *     backoff; as a general key for public traffic it is a self-inflicted outage
+   *     on the app's main job.
+   *
+   * So: no route is limited unless it opts in with `config.rateLimit`, and the ones
+   * that do are all admin-only actions where a shared bucket is the intent.
+   *
+   * `keyGenerator` reads `fastify.loginSourceKey` lazily, inside the call. Referring
+   * to it eagerly here would throw at boot, because authPlugin decorates it and has
+   * only just been registered above — a detail worth stating, since moving this
+   * registration a few lines either way would look harmless.
+   */
+  await fastify.register(fastifyRateLimit, {
+    global: false,
+    keyGenerator: (request) => fastify.loginSourceKey(request),
+    // Advertising the remaining budget tells an attacker exactly how hard they can
+    // push; Retry-After is the only one that helps an honest client.
+    addHeaders: {
+      'x-ratelimit-limit': false,
+      'x-ratelimit-remaining': false,
+      'x-ratelimit-reset': false,
+      'retry-after': true,
+    },
+    // Must return an **Error**, not a payload object. The plugin's own default body
+    // is {statusCode, error, message}, while the app's contract is {error:{message,
+    // code}} — but returning a plain object of that shape produces a 500, because
+    // Fastify has nothing to take a status from. Returning an AppError instead lets
+    // the app's error handler do the shaping it already does for every other route,
+    // so there is one error shape in the app rather than two.
+    errorResponseBuilder: (request, context) =>
+      new AppError(
+        `That has run several times in the last little while. Wait ${Math.ceil(context.ttl / 1000)} seconds and try again.`,
+        { code: 'rate_limited', status: 429 },
+      ),
   });
 
   await fastify.register(publicRoutes, services);

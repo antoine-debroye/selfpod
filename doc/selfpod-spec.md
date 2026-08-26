@@ -46,9 +46,18 @@ built from") explains the reasoning behind each non-obvious decision.
   multi-tenant/multi-user. One admin account per instance.
 - Not a transcoding/normalization pipeline. Files are served as uploaded
   (format support means "serve correctly," not "convert").
-- Not a podcast *client* — no playback history, subscriptions to other
-  feeds, etc. This app only produces feeds; listening happens in the
-  user's existing podcast app.
+- Not a podcast *client* — no playback history, no listening, no library
+  of other people's shows. This app produces feeds; listening happens in
+  the user's existing podcast app.
+  - **Amended in 1.6.0.** SelfPod can now follow a remote feed and
+    download the episodes matching a filter into a show folder (§18).
+    That is deliberately *not* a client: nothing is played here, no
+    played state is kept, and the downloaded file is treated as exactly
+    what it would be if it had arrived over SMB. It is a third way for a
+    file to land in a folder, alongside the share and the upload button.
+    The distinction matters because it is what keeps the rest of this
+    specification unchanged — §6, §7 and §8 apply to a downloaded
+    episode without a single exception.
 - Not responsible for TLS termination or the public reverse
   proxy/tunnel — this app runs plain HTTP internally, same as any other
   self-hosted service; the user's existing reverse proxy (Caddy, Traefik,
@@ -880,6 +889,90 @@ Not a rigid order, but a sensible sequence for an initial build:
    scan error surfacing, "test public URL" button.
 5. **Polish**: QR codes, category picker, cover art dimension
    validation, upload-via-browser flow, multi-arch Docker build.
+
+## 18. Following remote feeds
+
+Off by default. With `subscriptions_enabled` unset, SelfPod makes exactly
+the outbound requests it made before this feature existed — one, the
+reachability self-check — so an install that never asks for this keeps
+its previous security posture unchanged.
+
+### 18.1 Reading a feed
+
+A feed document is fetched, its bytes decoded using the charset the server
+or the document declares, and refused outright if it carries a `DOCTYPE`.
+Podcast feeds never need one, and every entity-expansion attack requires a
+DTD to declare the entities it expands — refusing it removes the whole
+class in a way no dependency upgrade can undo.
+
+Entities are decoded in a single pass, so `&amp;amp;` becomes `&amp;` and
+stops there: exponential expansion is unrepresentable rather than bounded.
+Remote descriptions are reduced to plain text at ingest, because §8.3
+emits `content:encoded` inside a CDATA section where markup is not
+escaped, and republishing a stranger's HTML to the operator's own
+subscribers is not acceptable.
+
+### 18.2 Deciding what to take
+
+Per subscription: a list of positive title keywords (any one is enough; an
+empty list means no positive requirement), a list of negative keywords
+(these always win), and an optional minimum and maximum duration.
+Matching is case- and accent-insensitive substring matching on the title
+only.
+
+When a feed does not state an episode's length, the file is downloaded and
+measured, and discarded if it falls outside the range. A length the feed
+*did* state is trusted: re-checking it against the file would discard
+episodes over a metadata discrepancy the user cannot see or fix.
+
+Every item the feed lists is recorded with a decision and, for a refusal,
+a sentence explaining it. "Why is that episode not in my feed?" must be
+answerable, and the answer must be a sentence rather than a code.
+
+### 18.3 Downloading
+
+The file is staged inside the show folder under a dot-prefixed name (both
+the scanner and the watcher skip those), validated, given the publication
+date as its mtime, and only then moved into place. A batch is moved
+together so one scan and one feed update cover the whole run.
+
+Filenames are **generated, never adopted**: the extension comes from the
+response's own content type, the stem from the publisher's title through
+the same sanitising every upload gets, and the result is asserted portable
+before it touches the filesystem. `Content-Disposition` is never consulted.
+
+### 18.4 Reaching the network
+
+Every address SelfPod connects to must be public unicast. The rules, and
+the reasoning behind each, are documented in `src/lib/address-rules.js`
+and `src/lib/guarded-fetch.js`. In summary: http/https only, port 80 or
+443 only, no credentials in the URL, every address a name resolves to
+checked, the connection pinned to the address that was checked, and the
+whole check repeated at every redirect hop and every poll — never once, at
+subscribe time, and then trusted.
+
+Two holes are real and stated rather than hidden: a public host that
+proxies inwards cannot be detected by any address rule, and SelfPod's own
+public address resolves publicly like anyone else's. The first is why the
+projection returned to the admin is a closed list of named fields; the
+second is handled with a signed probe header.
+
+### 18.5 What the admin may see
+
+A bounded, name-by-name, length-clamped projection: feed title and
+description, up to fifty episode titles with their dates and durations,
+and the *host* of each enclosure. Never the raw body, never a response
+header, never the redirect chain, never a resolved address, and never an
+upstream error code — distinguishing "refused" from "timed out" is the
+oracle that turns a blocked-address refusal into a working port scan.
+
+### 18.6 Failure
+
+A subscription that stops working is surfaced, never silently abandoned:
+it backs off, and from the third consecutive failure raises a health
+warning. A subscription whose *address* is refused is a different case —
+it can never work as written, so it is stopped and reported rather than
+retried every fifteen minutes for ever.
 
 ## 17. Acceptance checklist
 

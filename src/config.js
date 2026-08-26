@@ -1,9 +1,13 @@
+import { isIP } from 'node:net';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   DEFAULT_MISSING_GRACE_SECONDS,
+  DEFAULT_REMOTE_POLL_SECONDS,
   DIRECTORY_NAMES,
   FILE_NAMES,
+  REMOTE_POLL_MAX_SECONDS,
+  REMOTE_POLL_MIN_SECONDS,
   RESCAN_INTERVAL_MAX_SECONDS,
   RESCAN_INTERVAL_MIN_SECONDS,
 } from './constants.js';
@@ -41,6 +45,44 @@ function readInt(raw, fallback, { min, max, name } = {}) {
     return { value: max, warning: `${name} was ${parsed}, above the maximum of ${max}; using ${max}.` };
   }
   return { value: parsed, warning: null };
+}
+
+/**
+ * Parses ALLOW_PRIVATE_FEED_HOSTS: a comma-separated list of literal IP addresses
+ * that are exempt from the "public addresses only" rule for outbound feed fetches.
+ *
+ * Deliberately a **list**, not a boolean. As an on/off switch it would disable the
+ * single most important control in the whole feature — and because the test suite
+ * needs loopback to reach its fixture server, every integration test would then run
+ * with the guard switched off, exercising the scheme rules, the port rules, the
+ * address pin, the redirect re-check and the self-reference check only in their
+ * neutered form. Naming one address keeps all of those live and exempts exactly the
+ * thing that was meant to be exempted.
+ *
+ * It is also the better shape in production: an operator with one real feed on their
+ * LAN allows that host, rather than opening the whole private address space.
+ *
+ * Hostnames are refused on purpose. The exemption is checked against the address a
+ * name resolved to, so accepting a name here would be a promise this cannot keep.
+ */
+function readAllowedPrivateHosts(raw, { name }) {
+  const warnings = [];
+  const allowed = new Set();
+  for (const entry of String(raw ?? '').split(',')) {
+    const value = entry.trim();
+    if (!value) continue;
+    // Bracketed IPv6 is what a URL yields, so accept it here rather than making
+    // every caller remember to strip them.
+    const bare = value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+    if (isIP(bare) === 0) {
+      warnings.push(
+        `${name} entry "${value}" is not an IP address and was ignored. List literal addresses like 127.0.0.1 or ::1; hostnames cannot be allowed here because the exemption is checked against the address a name resolves to.`,
+      );
+      continue;
+    }
+    allowed.add(bare.toLowerCase());
+  }
+  return { value: Object.freeze(allowed), warnings };
 }
 
 const LOG_LEVELS = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']);
@@ -136,6 +178,25 @@ export function loadConfig(env = process.env) {
       readInt(env.MAX_UPLOAD_SIZE_MB, 1024, { min: 1, max: 65536, name: 'MAX_UPLOAD_SIZE_MB' }),
     ),
 
+    /**
+     * Seeds for feed subscriptions (spec §18). Like every other value here these only
+     * populate the settings table on first run; after that the database wins.
+     *
+     * Off by default, and that is not politeness. With subscriptions off SelfPod makes
+     * exactly the outbound requests it made before the feature existed — one, the
+     * reachability self-check — so upgrading cannot quietly change the security posture
+     * of an install that never asked for this. Turning it on is an explicit, logged,
+     * admin-only grant of network reach.
+     */
+    subscriptionsEnabled: env.SUBSCRIPTIONS_ENABLED === '1' || env.SUBSCRIPTIONS_ENABLED === 'true',
+    remotePollIntervalSeconds: collect(
+      readInt(env.REMOTE_POLL_INTERVAL_SECONDS, DEFAULT_REMOTE_POLL_SECONDS, {
+        min: REMOTE_POLL_MIN_SECONDS,
+        max: REMOTE_POLL_MAX_SECONDS,
+        name: 'REMOTE_POLL_INTERVAL_SECONDS',
+      }),
+    ),
+
     /** Set by the entrypoint when its own /data read+write test failed. */
     entrypointSelfTestFailed: env.SELFPOD_DATA_SELFTEST === 'failed',
 
@@ -143,6 +204,30 @@ export function loadConfig(env = process.env) {
   };
 
   config.maxUploadBytes = config.maxUploadSizeMb * 1024 * 1024;
+
+  // Defaults to the upload cap so an operator who has already decided "episodes on this
+  // instance are at most N MB" does not have to decide it twice.
+  config.maxDownloadSizeMb = collect(
+    readInt(env.MAX_DOWNLOAD_SIZE_MB, config.maxUploadSizeMb, {
+      min: 1,
+      max: 65536,
+      name: 'MAX_DOWNLOAD_SIZE_MB',
+    }),
+  );
+  config.maxDownloadBytes = config.maxDownloadSizeMb * 1024 * 1024;
+
+  /**
+   * Env-only, with no settings row and no control in the UI — the same treatment
+   * ENABLE_HSTS gets, and for the same reason: this weakens a security guarantee, so
+   * changing it should require touching the container rather than clicking something a
+   * stolen admin session could also click. /data/config.json is export-only (settings.js
+   * never reads it back), so there is no path by which a file can turn this on either.
+   */
+  const privateHosts = readAllowedPrivateHosts(env.ALLOW_PRIVATE_FEED_HOSTS, {
+    name: 'ALLOW_PRIVATE_FEED_HOSTS',
+  });
+  warnings.push(...privateHosts.warnings);
+  config.allowedPrivateFeedHosts = privateHosts.value;
 
   if (!isAbsolute(config.dataDir)) {
     throw new Error(`DATA_DIR must be an absolute path (got "${config.dataDir}").`);

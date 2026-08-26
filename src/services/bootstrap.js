@@ -44,6 +44,18 @@ export async function bootstrap({ db, settings, config, logger }) {
     settings.seedIfAbsent(SETTING_KEYS.RESCAN_INTERVAL_SECONDS, config.rescanIntervalSeconds);
     settings.seedIfAbsent(SETTING_KEYS.MISSING_GRACE_SECONDS, config.missingGraceSeconds);
     settings.seedIfAbsent(SETTING_KEYS.WATCHER_ENABLED, '1');
+    // Seeded from the env so the value is visible and editable in the UI from the
+    // first boot, rather than being an invisible default the settings page disagrees
+    // with. Off unless the operator asked for it.
+    settings.seedIfAbsent(
+      SETTING_KEYS.SUBSCRIPTIONS_ENABLED,
+      config.subscriptionsEnabled ? '1' : '0',
+    );
+    settings.seedIfAbsent(
+      SETTING_KEYS.REMOTE_POLL_INTERVAL_SECONDS,
+      config.remotePollIntervalSeconds,
+    );
+    settings.seedIfAbsent(SETTING_KEYS.REMOTE_MAX_DOWNLOAD_MB, config.maxDownloadSizeMb);
     settings.seedIfAbsent(SETTING_KEYS.SESSION_TTL_HOURS, '12');
     settings.setRaw(SETTING_KEYS.INSTALLED_VERSION, VERSION);
   });

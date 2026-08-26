@@ -22,6 +22,8 @@ import { createScheduler } from './services/scheduler.js';
 import { createSettings } from './services/settings.js';
 import { createReadiness } from './services/readiness.js';
 import { createStats } from './services/stats.js';
+import { createSubscriptions } from './services/subscriptions.js';
+import { createRemoteFeeds } from './services/remote-feeds.js';
 
 import { createShows } from './services/shows.js';
 import { createTimeline } from './services/timeline.js';
@@ -110,11 +112,16 @@ async function main() {
     shows, episodes, covers, episodeArt, metadata, activity, health,
   });
   const stats = createStats({ db, logger });
+  const subscriptions = createSubscriptions({ db, config, events, logger });
+  const remoteFeeds = createRemoteFeeds({
+    config, settings, subscriptions, shows, episodes, scanner,
+    metadata, activity, health, events, logger,
+  });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
   const scheduler = createScheduler({
-    settings, events, logger, scanner, episodes, watcher, activity, stats,
+    settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds,
   });
 
   const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats, readiness });
@@ -122,12 +129,13 @@ async function main() {
   const services = {
     config, logger, db, events, settings, health, activity, covers, episodeArt, metadata,
     shows, episodes, feeds, scanner, watcher, scheduler, stats, timeline, readiness,
+    subscriptions, remoteFeeds,
     ...presenters,
   };
 
   const app = await buildApp(services);
 
-  shutdown = createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, logger });
+  shutdown = createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, logger });
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
@@ -146,9 +154,17 @@ async function main() {
   scanner.enqueueAll(SCAN_TRIGGER.STARTUP);
   await watcher.start();
   scheduler.start({ onSessionCleanup: () => app.cleanupSessions() });
+
+  // Not awaited, for the same reason the startup scan is not: a library with a large
+  // backlog must not delay the UI becoming reachable. Both are idempotent, so a crash
+  // part-way through costs nothing but a repeat.
+  remoteFeeds
+    .sweepStaging()
+    .then(() => remoteFeeds.reconcile())
+    .catch((err) => logger.warn({ err }, 'could not tidy up interrupted downloads'));
 }
 
-function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, logger }) {
+function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, logger }) {
   let running = false;
   return async (signal) => {
     if (running) return;
@@ -156,6 +172,9 @@ function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, l
     logger.info({ signal }, 'shutting down');
     try {
       scheduler.stop();
+      // Before app.close(), so an in-flight download is abandoned rather than holding
+      // SIGTERM open for however long an eighty-megabyte fetch has left to run.
+      remoteFeeds.stop();
       settings.stop();
       shows.stop();
       feeds.stop();

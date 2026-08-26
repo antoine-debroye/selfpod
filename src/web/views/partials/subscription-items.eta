@@ -1,0 +1,84 @@
+<%
+  const items = it.items || [];
+  const counts = it.counts || {};
+  const sub = it.subscription;
+  const filter = it.filter || '';
+  const base = `/ui/subscriptions/${sub.id}/items`;
+  /* Every decision gets a word, because a bare enum in the one place someone looks
+     to find out what happened is not an answer. */
+  const LABEL = {
+    downloaded: ['In your feed', 'pill-ok'],
+    matched: ['Waiting to download', 'pill-warn'],
+    downloading: ['Downloading', 'pill-warn'],
+    pending: ['Not looked at yet', 'pill-muted'],
+    rejected_declared: ["Didn't match your rules", 'pill-muted'],
+    rejected_measured: ['Downloaded, then found too short or too long', 'pill-muted'],
+    rejected_blocked: ['Refused: its audio is on a private address', 'pill-err'],
+    skipped_backfill: ['Older than your backfill limit', 'pill-muted'],
+    duplicate: ['Identical to an episode you already have', 'pill-muted'],
+    deleted_by_user: ['You deleted this one', 'pill-muted'],
+    failed: ["Couldn't be fetched", 'pill-err'],
+  };
+%>
+<div id="subscription-items">
+  <div class="filter-row">
+    <a class="chip<%= filter === '' ? ' is-active' : '' %>" href="<%= base %>"
+       hx-get="<%= base %>" hx-target="#subscription-items" hx-swap="outerHTML">All (<%= counts.total || 0 %>)</a>
+    <% for (const key of ['downloaded', 'rejected_declared', 'skipped_backfill', 'rejected_measured', 'failed']) { %>
+      <% if (counts[key]) { %>
+        <a class="chip<%= filter === key ? ' is-active' : '' %>" href="<%= base %>?decision=<%= key %>"
+           hx-get="<%= base %>?decision=<%= key %>" hx-target="#subscription-items" hx-swap="outerHTML">
+          <%= LABEL[key] ? LABEL[key][0] : key %> (<%= counts[key] %>)
+        </a>
+      <% } %>
+    <% } %>
+  </div>
+
+  <% if (!items.length) { %>
+    <div class="empty">
+      Nothing here yet. SelfPod records every episode it sees — including the ones it
+      skips, and why — as soon as it first checks the feed.
+    </div>
+  <% } else { %>
+    <table class="table table-compact">
+      <thead><tr><th>Episode</th><th>Published</th><th>What happened</th><th></th></tr></thead>
+      <tbody>
+        <% for (const entry of items) { %>
+          <tr>
+            <td>
+              <%= entry.title || '(untitled)' %>
+              <% if (entry.filename) { %><div class="muted mono"><%= entry.filename %></div><% } %>
+            </td>
+            <td class="mono"><%= entry.publishedAt ? it.helpers.formatDate(entry.publishedAt) : '—' %></td>
+            <td>
+              <%
+                const label = LABEL[entry.decision] || [entry.decision, 'pill-muted'];
+                const missing = entry.decision === 'downloaded' && entry.episodeStatus && entry.episodeStatus !== 'active';
+              %>
+              <span class="pill <%= label[1] %>"><%= label[0] %></span>
+              <% if (missing) { %>
+                <div class="muted">…but the file is no longer on your share.</div>
+              <% } %>
+              <% if (entry.detail) { %><div class="muted"><%= entry.detail %></div><% } %>
+            </td>
+            <td>
+              <% if (entry.decision !== 'rejected_blocked' && entry.decision !== 'downloaded') { %>
+                <form method="post" action="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
+                      hx-post="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
+                      hx-target="#subscription-items" hx-swap="outerHTML">
+                  <button class="btn btn-ghost btn-xs" type="submit">Fetch it anyway</button>
+                </form>
+              <% } else if (entry.decision === 'downloaded') { %>
+                <form method="post" action="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
+                      hx-post="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
+                      hx-target="#subscription-items" hx-swap="outerHTML">
+                  <button class="btn btn-ghost btn-xs" type="submit">Download again</button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+  <% } %>
+</div>

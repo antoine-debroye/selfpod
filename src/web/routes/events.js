@@ -1,4 +1,5 @@
 import { EVENTS } from '../../lib/events.js';
+import { escapeHtml } from '../../lib/html.js';
 
 /**
  * Server-sent events for live scan progress (spec §6.2 point 3).
@@ -118,12 +119,4 @@ function progressHtml(scope, label) {
   )}" hx-swap="outerHTML"><span class="scan-progress__dot" aria-hidden="true"></span><span class="scan-progress__status">${escapeHtml(
     label,
   )}</span><span class="scan-progress__bar" aria-hidden="true"><i></i></span></div>`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

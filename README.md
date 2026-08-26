@@ -267,6 +267,10 @@ of it can be changed later in **Settings** without touching the container.
 | `RESCAN_INTERVAL_SECONDS` | `300` | How often the whole library is re-checked as a fallback. 60–21600. |
 | `MISSING_GRACE_SECONDS` | `86400` | How long an episode whose file vanished stays in the feed, so a brief share outage doesn't drop episodes. |
 | `MAX_UPLOAD_SIZE_MB` | `1024` | Cap for browser uploads. A proxy in front may impose a lower one. |
+| `MAX_DOWNLOAD_SIZE_MB` | same as upload cap | Largest episode SelfPod will fetch from a followed feed. |
+| `SUBSCRIPTIONS_ENABLED` | off | Lets SelfPod follow remote feeds. Off by default: it is the only thing that makes SelfPod fetch from the internet. Seeds the setting on first run; after that the Settings page wins. |
+| `REMOTE_POLL_INTERVAL_SECONDS` | `3600` | How often to check a followed feed. Clamped to 15 minutes – 24 hours — this is someone else's server. |
+| `ALLOW_PRIVATE_FEED_HOSTS` | *(empty)* | Comma-separated **IP addresses** that may be followed despite being private, e.g. a feed on your own NAS. Exempts only the addresses listed, and only from the address and port rules. Env-only on purpose: it weakens a guarantee, so changing it should mean touching the container. |
 | `ADMIN_USERNAME` | `admin` | First-run only. |
 | `ADMIN_PASSWORD` | — | First-run only. If unset, a random password is generated and printed once to the logs. |
 | `SESSION_SECRET` | generated | First-run only; afterwards it lives in the database. |
@@ -335,13 +339,36 @@ episodes are looked up by id, so nothing you put there changes which file is rea
 The audio directory is registered with `serve: false`, meaning there is no open
 static root over your media at all.
 
-**Getting from SelfPod onto your network.** SelfPod makes exactly one kind of
-outbound request: the optional public-address self-test, which fetches the address in
-Settings and nothing else. It takes no URL from the request, it is rate limited, and
-it returns nothing from the response body unless the reply cryptographically proves
-it came from this same instance. No unauthenticated request causes any outbound
-traffic. There is no shell execution, no `eval`, and no dynamic code loading anywhere
-in the app.
+**Getting from SelfPod onto your network.** With feed subscriptions switched off —
+which is the default — SelfPod makes exactly one kind of outbound request: the
+optional public-address self-test, which fetches the address in Settings and nothing
+else. It takes no URL from the request, it is rate limited, and it returns nothing
+from the response body unless the reply cryptographically proves it came from this
+same instance.
+
+Turning on **Follow a feed** grants SelfPod the ability to fetch an address you give
+it, which is a real change and is why it is opt-in. It is held to four rules:
+
+- only a signed-in admin, on a same-origin request, can supply a URL at all;
+- the address is refused unless it is http or https, on port 80 or 443, with no
+  credentials in it, and **every** address it resolves to is public — private ranges,
+  loopback, link-local, carrier-grade NAT and the cloud metadata address are all
+  refused, including when written in an obscure form or hidden inside an IPv6 address;
+- the connection goes to the address that was checked, and the whole check runs again
+  at **every redirect hop and every poll** — never once, when you save it, and then
+  trusted afterwards;
+- what comes back reaches you as a fixed list of fields — feed title, episode titles,
+  dates, durations, and the host of each audio file. Never a response body, never a
+  header, never a redirect target, and never *why* a fetch failed, because telling
+  "refused" apart from "timed out" is enough to map a network.
+
+No unauthenticated request causes any outbound traffic, with or without the feature
+on. There is no shell execution, no `eval`, and no dynamic code loading anywhere in
+the app.
+
+If you have a feed on your own LAN that you genuinely want followed, name its address
+in `ALLOW_PRIVATE_FEED_HOSTS`. It exempts exactly the addresses you list — not their
+neighbours, not their range — and leaves every other rule above in force.
 
 **If a browser bug ever did get through.** Responses carry
 `Content-Security-Policy: script-src 'self'` with no `unsafe-inline` — every script in

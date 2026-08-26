@@ -28,6 +28,8 @@ step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker rm -f "${NAME}-feed" >/dev/null 2>&1 || true
+  docker network rm "${NAME}-net" >/dev/null 2>&1 || true
   docker volume rm "${NAME}-locked" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -406,6 +408,174 @@ BACK_ITEMS="$(curl -s "$POLL_URL" | grep -c '<item>')"
 [ "${BACK_ITEMS}" -eq "${BEFORE_ITEMS}" ] \
   && pass "it rejoins the feed once its time has passed" \
   || fail "the episode did not come back (${BACK_ITEMS} vs ${BEFORE_ITEMS})"
+
+step "14. A followed feed downloads only the episodes that match, and republishes them"
+
+# In acceptance rather than only in-process because three things here are properties
+# of the container and not of the code: outbound DNS from inside the network
+# namespace, the PUID's ability to write into the show folder, and the fact that
+# ALLOW_PRIVATE_FEED_HOSTS has to be set at all — which is itself the point. Without
+# that variable SelfPod refuses to fetch from a private address, and the fixture feed
+# below is on one.
+
+FEED_DIR="${WORK}/remote"
+mkdir -p "$FEED_DIR"
+cp "${FIXTURES}/sample.mp3" "${FEED_DIR}/a.mp3"
+# Distinct bytes per episode: SelfPod identifies episodes by content, so three copies
+# of one file are correctly refused as duplicates and would prove nothing.
+printf 'bbbbbbbbbbbbbbbb' >> "${FEED_DIR}/a.mp3"
+cp "${FIXTURES}/sample.mp3" "${FEED_DIR}/b.mp3"
+printf 'cccccccccccccccccccccccccccccccc' >> "${FEED_DIR}/b.mp3"
+cp "${FIXTURES}/sample.mp3" "${FEED_DIR}/c.mp3"
+printf 'dddddddddddddddddddddddddddddddddddddddddddddddd' >> "${FEED_DIR}/c.mp3"
+
+REMOTE_NET="${NAME}-net"
+REMOTE_NAME="${NAME}-feed"
+docker network create "$REMOTE_NET" >/dev/null 2>&1 || true
+docker network connect "$REMOTE_NET" "$NAME" >/dev/null 2>&1 || true
+
+cat > "${FEED_DIR}/feed.xml" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>
+<title>Remote Tape Club</title><language>en-gb</language>
+<item><title>An interview with the archivist</title><guid>rem-a</guid>
+<pubDate>Tue, 04 Mar 2025 09:00:00 GMT</pubDate><itunes:duration>2700</itunes:duration>
+<enclosure url="http://${REMOTE_NAME}/a.mp3" type="audio/mpeg" length="5000"/></item>
+<item><title>Bonus: outtakes</title><guid>rem-b</guid>
+<pubDate>Mon, 03 Mar 2025 09:00:00 GMT</pubDate><itunes:duration>2700</itunes:duration>
+<enclosure url="http://${REMOTE_NAME}/b.mp3" type="audio/mpeg" length="5000"/></item>
+<item><title>An interview about tape</title><guid>rem-c</guid>
+<pubDate>Sun, 02 Mar 2025 09:00:00 GMT</pubDate><itunes:duration>2700</itunes:duration>
+<enclosure url="http://${REMOTE_NAME}/c.mp3" type="audio/mpeg" length="5000"/></item>
+</channel></rss>
+XML
+
+docker run -d --name "$REMOTE_NAME" --network "$REMOTE_NET" \
+  -v "${FEED_DIR}:/usr/share/nginx/html:ro" nginx:alpine >/dev/null 2>&1
+sleep 3
+
+# The container has to be told, explicitly, that this one private address is allowed.
+# Everything else about the guard stays in force — scheme, port, credentials,
+# redirects, and every other address.
+docker rm -f "$NAME" >/dev/null 2>&1
+docker run -d --name "$NAME" -p "${PORT}:8080" --network "$REMOTE_NET" \
+  -v "${WORK}/data:/data" \
+  -e PUBLIC_BASE_URL="$BASE" \
+  -e ADMIN_PASSWORD=acceptance-password \
+  -e RESCAN_INTERVAL_SECONDS=60 \
+  -e SUBSCRIPTIONS_ENABLED=1 \
+  -e ALLOW_PRIVATE_FEED_HOSTS="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$REMOTE_NAME" 2>/dev/null)" \
+  -e TZ=Europe/London \
+  "$IMAGE" >/dev/null
+wait_for_health || { fail "container did not come back up for the subscription tests"; }
+rm -f "$JAR"
+curl -s -c "$JAR" -X POST "${BASE}/api/login" \
+  -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' \
+  -d '{"username":"admin","password":"acceptance-password"}' >/dev/null
+
+# Turned on over the API, not by the environment variable above.
+#
+# SUBSCRIPTIONS_ENABLED is a *seed*: it populates the setting on first run and after
+# that the database wins, like every other setting in SelfPod. This data directory
+# already exists from the earlier steps, so the seed does nothing here — which is
+# exactly the situation an operator upgrading an existing install is in, and worth
+# exercising rather than papering over with a fresh volume.
+api -X PATCH -H 'Content-Type: application/json' \
+  -d '{"subscriptionsEnabled":true}' "${BASE}/api/settings" >/dev/null
+
+SUB_SHOW="$(api "${BASE}/api/shows" | json '
+print(json.load(sys.stdin)["shows"][0]["id"])')"
+
+SUB_ID="$(api -X POST -H 'Content-Type: application/json' \
+  -d "{\"feedUrl\":\"http://${REMOTE_NAME}/feed.xml\",\"includeKeywords\":\"interview\",\"excludeKeywords\":\"bonus\",\"backfillCount\":10}" \
+  "${BASE}/api/shows/${SUB_SHOW}/subscriptions" | json '
+d = json.load(sys.stdin).get("subscription")
+print(d["id"] if d else "")')"
+[ -n "$SUB_ID" ] \
+  && pass "a feed on an allowed address can be followed" \
+  || fail "the subscription could not be created"
+
+api -X POST "${BASE}/api/subscriptions/${SUB_ID}/poll" >/dev/null
+sleep 6
+
+DOWNLOADED="$(api "${BASE}/api/subscriptions/${SUB_ID}/items" | json '
+rows = json.load(sys.stdin)["items"]
+print(sum(1 for r in rows if r["decision"] == "downloaded"))')"
+[ "${DOWNLOADED:-0}" -eq 2 ] \
+  && pass "exactly the two matching episodes were downloaded" \
+  || fail "expected 2 downloads, got ${DOWNLOADED}"
+
+# The whole point of the feature: they are ordinary episodes now, in the feed the
+# user's podcast app actually reads.
+SUB_SLUG="$(api "${BASE}/api/shows" | json '
+print(json.load(sys.stdin)["shows"][0]["slug"])')"
+SUB_TOKEN="$(api "${BASE}/api/shows" | json '
+print(json.load(sys.stdin)["shows"][0]["feedToken"])')"
+SUB_FEED="$(curl -s "${BASE}/feeds/${SUB_SLUG}/${SUB_TOKEN}.xml")"
+
+echo "$SUB_FEED" | grep -q "An interview with the archivist" \
+  && pass "a downloaded episode is republished under the publisher's own title" \
+  || fail "the downloaded episode never reached the feed"
+
+echo "$SUB_FEED" | grep -q "Bonus: outtakes" \
+  && fail "an excluded episode reached the feed" \
+  || pass "the excluded episode is nowhere in the feed"
+
+step "15. A refused episode is never fetched, and the reason is visible"
+
+# Asserted against the fixture server's own access log, because "we did not download
+# it" is not the same claim as "we never asked for it" — and only the second one is
+# worth anything for bandwidth or for a publisher's download figures.
+docker logs "$REMOTE_NAME" 2>&1 | grep -q "GET /b.mp3" \
+  && fail "the excluded episode's audio was fetched anyway" \
+  || pass "the excluded episode's audio was never requested"
+
+docker logs "$REMOTE_NAME" 2>&1 | grep -q "GET /a.mp3" \
+  && pass "…while the matching one was, so the check above means something" \
+  || fail "no audio was fetched at all, so the previous check proves nothing"
+
+api "${BASE}/api/subscriptions/${SUB_ID}/items?decision=rejected_declared" | json '
+rows = json.load(sys.stdin)["items"]
+bad = [r for r in rows if not r.get("detail")]
+if not rows:
+    print("no refusals were recorded")
+sys.exit(1 if bad or not rows else 0)
+' && pass "every refusal carries a sentence saying why" \
+  || fail "a refusal was recorded with no explanation"
+
+step "16. An unchanged feed costs one conditional request and no work"
+
+BEFORE_ITEMS_SUB="$(api "${BASE}/api/subscriptions/${SUB_ID}/items" | json '
+print(len(json.load(sys.stdin)["items"]))')"
+sleep 61
+api -X POST "${BASE}/api/subscriptions/${SUB_ID}/poll" >/dev/null
+sleep 3
+
+SUB_STATUS="$(api "${BASE}/api/subscriptions/${SUB_ID}" | json '
+print(json.load(sys.stdin)["subscription"]["lastStatus"])')"
+[ "$SUB_STATUS" = "not_modified" ] \
+  && pass "the second check was answered 304 and did nothing" \
+  || fail "an unchanged feed was re-processed (status: ${SUB_STATUS})"
+
+AFTER_ITEMS_SUB="$(api "${BASE}/api/subscriptions/${SUB_ID}/items" | json '
+print(len(json.load(sys.stdin)["items"]))')"
+[ "$AFTER_ITEMS_SUB" = "$BEFORE_ITEMS_SUB" ] \
+  && pass "and recorded nothing new" \
+  || fail "a 304 still changed the ledger (${BEFORE_ITEMS_SUB} -> ${AFTER_ITEMS_SUB})"
+
+step "17. SelfPod will not fetch a feed on an address it was not told to allow"
+
+BLOCKED="$(api -X POST -H 'Content-Type: application/json' \
+  -d '{"feedUrl":"http://192.168.99.99/feed.xml"}' \
+  "${BASE}/api/subscriptions/preview" | json '
+d = json.load(sys.stdin)
+print(d.get("error", {}).get("message", "")[:60])')"
+case "$BLOCKED" in
+  *"private or local network"*)
+    pass "a private address is refused even from inside the container" ;;
+  *)
+    fail "a private address was not refused (${BLOCKED})" ;;
+esac
 
 # ---------------------------------------------------------------------- report
 step "Result"

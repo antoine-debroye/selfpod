@@ -1,5 +1,7 @@
-import { SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
+import { ITEM_DECISION, SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
+import { normaliseKeywords } from '../../lib/feed-filter.js';
+import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
 import { isValidCategory, isValidSubcategory } from '../lib/apple-categories.js';
@@ -38,6 +40,203 @@ export default async function fragmentRoutes(fastify, services) {
       if (message) services.setFlash(request, message, level);
       return reply.redirect(path, 303);
     }
+
+    /* ---------------------------------------------------------- subscription */
+
+    /**
+     * Minutes in, seconds out.
+     *
+     * Nobody thinks about episode length in seconds. Asking them to is how a
+     * twenty-minute minimum gets typed as "20" and silently becomes twenty seconds —
+     * a filter that then matches everything, with nothing to say why.
+     */
+    function minutesToSeconds(value) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return null;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return raw; // let the service reject it, with wording
+      return Math.round(parsed * 60);
+    }
+
+    function subscriptionPath(slug) {
+      return `/shows/${encodeURIComponent(slug)}/subscription`;
+    }
+
+    function renderForm(reply, { show, subscription, errors, values, saved, reopened }) {
+      return reply.view('partials/subscription-form.eta', {
+        show: presentShow(show),
+        subscription: subscription ? presentSubscription(subscription, services) : null,
+        errors,
+        values,
+        saved,
+        reopened,
+        helpers: fastify.viewHelpers,
+      });
+    }
+
+    function renderItems(reply, subscription, { filter = '' } = {}) {
+      return reply.view('partials/subscription-items.eta', {
+        subscription: presentSubscription(subscription, services),
+        items: services.subscriptions
+          .items({ subscriptionId: subscription.id, decision: filter || null, limit: 100 })
+          .map((row) => presentItem(row, services)),
+        counts: services.subscriptions.itemCounts(subscription.id),
+        filter,
+        helpers: fastify.viewHelpers,
+      });
+    }
+
+    /** Create or update, on one URL, because the form is the same either way. */
+    scoped.post('/ui/shows/:slug/subscription', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const body = request.body ?? {};
+      const patch = {
+        feedUrl: body.feedUrl,
+        includeKeywords: body.includeKeywords,
+        excludeKeywords: body.excludeKeywords,
+        minDurationSeconds: minutesToSeconds(body.minDurationMinutes),
+        maxDurationSeconds: minutesToSeconds(body.maxDurationMinutes),
+        backfillCount: body.backfillCount,
+      };
+      const existing = services.subscriptions.getForShow(show.id);
+
+      try {
+        let reopened = 0;
+        let subscription;
+        if (existing) {
+          reopened = services.subscriptions.reopenableCount(existing.id);
+          subscription = services.subscriptions.update(existing.id, patch);
+        } else {
+          subscription = services.subscriptions.create(show.id, patch);
+        }
+        if (!isHtmx(request)) {
+          return redirectBack(request, reply, subscriptionPath(show.slug), 'Saved.');
+        }
+        return renderForm(reply, { show, subscription, saved: true, reopened });
+      } catch (error) {
+        if (!error.fields) throw error;
+        // Re-render with the user's own input echoed back, so a rejected form is not
+        // an empty form.
+        if (!isHtmx(request)) {
+          return redirectBack(request, reply, subscriptionPath(show.slug), error.message, 'err');
+        }
+        reply.status(422);
+        return renderForm(reply, { show, subscription: existing, errors: error.fields, values: body });
+      }
+    });
+
+    scoped.post('/ui/shows/:slug/subscription/preview', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const body = request.body ?? {};
+      try {
+        const preview = await services.remoteFeeds.preview(String(body.feedUrl ?? ''), {
+          includeKeywords: normaliseKeywords(body.includeKeywords),
+          excludeKeywords: normaliseKeywords(body.excludeKeywords),
+          minDurationSeconds: minutesToSeconds(body.minDurationMinutes),
+          maxDurationSeconds: minutesToSeconds(body.maxDurationMinutes),
+        });
+        if (!isHtmx(request)) {
+          return redirectBack(request, reply, subscriptionPath(show.slug), `That feed has ${preview.matchCount} matching episodes.`);
+        }
+        return reply.view('partials/subscription-preview.eta', { preview, helpers: fastify.viewHelpers });
+      } catch (error) {
+        if (!isHtmx(request)) {
+          return redirectBack(request, reply, subscriptionPath(show.slug), error.message, 'err');
+        }
+        return reply.view('partials/subscription-preview.eta', {
+          problem: error.message,
+          helpers: fastify.viewHelpers,
+        });
+      }
+    });
+
+    scoped.post('/ui/subscriptions/:id/poll', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      let message = 'Checked.';
+      let level = 'ok';
+      try {
+        const result = await services.remoteFeeds.pollNow(subscription.id);
+        message =
+          result.status === 'not_modified'
+            ? 'Nothing new since the last check.'
+            : `Checked — ${result.downloaded ?? 0} new ${(result.downloaded ?? 0) === 1 ? 'episode' : 'episodes'} downloaded.`;
+        if (result.status !== 'ok' && result.status !== 'not_modified') {
+          message = result.error ?? 'That feed could not be checked.';
+          level = 'err';
+        }
+      } catch (error) {
+        message = error.message;
+        level = 'err';
+      }
+      return redirectBack(request, reply, subscriptionPath(show.slug), message, level);
+    });
+
+    scoped.post('/ui/subscriptions/:id/toggle', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      const updated = services.subscriptions.update(subscription.id, {
+        enabled: !subscription.enabled,
+      });
+      return redirectBack(
+        request,
+        reply,
+        subscriptionPath(show.slug),
+        updated.enabled ? 'Following again.' : 'Paused. Nothing new will be downloaded until you resume.',
+      );
+    });
+
+    scoped.post('/ui/subscriptions/:id/delete', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      services.subscriptions.remove(subscription.id);
+      return redirectBack(
+        request,
+        reply,
+        subscriptionPath(show.slug),
+        'Stopped following that feed. The episodes it already downloaded are untouched.',
+      );
+    });
+
+    scoped.get('/ui/subscriptions/:id/items', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      return renderItems(reply, subscription, { filter: request.query?.decision ?? '' });
+    });
+
+    scoped.post('/ui/subscriptions/:id/items/:itemId/redownload', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      const item = services.subscriptions.getItem(Number(request.params.itemId));
+      if (!item || item.subscription_id !== subscription.id) {
+        throw notFound('That episode is not in this subscription.', 'item_not_found');
+      }
+      if (item.decision === ITEM_DECISION.REJECTED_BLOCKED) {
+        // Never undoable from the UI: it was refused because its audio is on an
+        // address SelfPod must not reach, and a button that overrode that would be a
+        // button that reaches it.
+        return redirectBack(
+          request,
+          reply,
+          subscriptionPath(show.slug),
+          "That episode's audio is on a private or local address, which SelfPod will not fetch from.",
+          'err',
+        );
+      }
+      services.subscriptions.markItem(item.id, {
+        decision: ITEM_DECISION.MATCHED,
+        reject_reason: null,
+        reject_detail: null,
+        episode_id: null,
+        filename: null,
+        identity_key: null,
+        attempts: 0,
+        next_attempt_at: null,
+      });
+      if (!isHtmx(request)) {
+        return redirectBack(request, reply, subscriptionPath(show.slug), 'Queued for the next check.');
+      }
+      return renderItems(reply, subscription);
+    });
 
     /* ------------------------------------------------------------- show card */
 
@@ -772,6 +971,27 @@ export default async function fragmentRoutes(fastify, services) {
       }
       // Re-render the whole settings page section by asking the browser to reload
       // it: the watcher's mode label depends on state this fragment doesn't own.
+      reply.header('HX-Refresh', 'true');
+      return reply.send('');
+    });
+
+    scoped.post('/ui/settings/subscriptions', async (request, reply) => {
+      const enabled =
+        request.body?.subscriptionsEnabled === '1' || request.body?.subscriptionsEnabled === 'on';
+      settings.update({ [SETTING_KEYS.SUBSCRIPTIONS_ENABLED]: enabled ? '1' : '0' });
+
+      if (!isHtmx(request)) {
+        return redirectBack(
+          request,
+          reply,
+          '/settings',
+          enabled
+            ? 'SelfPod can now follow podcast feeds. Set the rules on a show\'s own page.'
+            : 'Feed following switched off. SelfPod will not fetch from the internet.',
+        );
+      }
+      // Whole-page refresh: every show page's subscription section reads this, and
+      // the banner it controls is not part of this fragment.
       reply.header('HX-Refresh', 'true');
       return reply.send('');
     });

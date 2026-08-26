@@ -17,8 +17,10 @@ import { SETTING_KEYS } from './settings.js';
  * ticks to pile up, and the interval is re-read every tick so a change in the UI
  * takes effect without a restart.
  */
-export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats }) {
+export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds }) {
   let timer = null;
+  let pollTimer = null;
+  let polling = false;
   let running = false;
   let stopped = true;
   let lastRunAt = null;
@@ -51,6 +53,40 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
     nextRunAt = new Date(Date.now() + seconds * 1000).toISOString();
     timer = setTimeout(tick, seconds * 1000);
     if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  /**
+   * A second timer, for remote feed polls.
+   *
+   * Deliberately not another job on the rescan tick. The rescan interval is one minute
+   * to six hours and is about the *local* library: someone who shortens it because
+   * their share is slow to report changes would, if the two were coupled, silently
+   * multiply how often SelfPod calls out to someone else's server — and someone who
+   * lengthens it to six hours would stop new episodes arriving for a day.
+   *
+   * The cadence here is fixed and the tick only asks "who is due?". Each subscription
+   * carries its own `next_poll_at`, persisted, so the schedule survives a restart and
+   * several subscriptions stay staggered rather than arriving together.
+   */
+  function scheduleNextPoll() {
+    if (stopped || !remoteFeeds) return;
+    const jitter = 60_000 + Math.round((Math.random() - 0.5) * 30_000);
+    pollTimer = setTimeout(pollTick, jitter);
+    if (typeof pollTimer.unref === 'function') pollTimer.unref();
+  }
+
+  async function pollTick() {
+    pollTimer = null;
+    if (stopped || polling) return;
+    polling = true;
+    try {
+      await remoteFeeds.pollDue();
+    } catch (err) {
+      logger?.error({ err }, 'remote feed poll failed');
+    } finally {
+      polling = false;
+      scheduleNextPoll();
+    }
   }
 
   async function tick() {
@@ -107,6 +143,7 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
       stopped = false;
       sessionCleanup = onSessionCleanup ?? null;
       scheduleNext();
+      scheduleNextPoll();
       logger?.info(
         { seconds: settings.rescanIntervalSeconds() },
         'scheduler started (periodic rescan is the correctness guarantee on network shares)',
@@ -116,7 +153,16 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (pollTimer) clearTimeout(pollTimer);
       timer = null;
+      pollTimer = null;
+    },
+
+    /** Runs a feed-poll tick immediately; used by tests. */
+    async pollNow() {
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+      await pollTick();
     },
 
     /** Runs the tick immediately; used by tests and by "rescan all" from the UI. */
@@ -132,6 +178,8 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
         intervalSeconds: settings.rescanIntervalSeconds(),
         lastRunAt,
         nextRunAt,
+        polling,
+        pollIntervalSeconds: settings.remotePollIntervalSeconds(),
       };
     },
   };

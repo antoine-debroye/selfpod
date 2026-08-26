@@ -7,6 +7,59 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.6.0 — unreleased
+
+### Added
+
+- **Follow a podcast feed and keep only the episodes you want.** Point SelfPod at a
+  show's feed, set the rules — words that must appear in the title, words that must
+  not, a shortest and longest length — and it downloads only the matching episodes
+  into that show's folder. From there they are ordinary episodes: on your share, in
+  your own private feed, in whatever podcast app you already use.
+
+  Everything it decides is written down, including the refusals. The show's
+  subscription page lists every episode the feed has ever offered and what happened to
+  each one — *"skipped because the title contains `bonus`"*, *"skipped because it runs
+  4:12, under the 20:00 minimum"*. "Where is that episode?" was the question worth
+  being able to answer.
+
+  Before committing to anything, **Preview what would match** fetches the feed and
+  shows you which of its recent episodes would be taken and exactly why the rest would
+  not, without downloading a byte or recording anything.
+
+  Some points worth knowing:
+
+  - **It is off by default**, and turning it on is a real decision rather than a
+    formality. Until you do, SelfPod's outbound behaviour is byte-for-byte what it has
+    always been. See the security section of the README for what changes when you
+    switch it on, and what stays true regardless.
+  - **Loosening a rule brings episodes back.** Remove a keyword you had been excluding
+    and the episodes it was skipping are re-checked on the next look — the page tells
+    you how many before you save. Tightening a rule never removes anything already
+    downloaded.
+  - **A feed that omits episode lengths** is handled by downloading and measuring,
+    then discarding what falls outside your range. A length the feed *does* state is
+    trusted rather than second-guessed.
+  - **Deleting an episode is final.** SelfPod will not download it again on the next
+    check. There is a "Download again" button for when you change your mind.
+  - Removing a subscription never touches the episodes it already downloaded.
+
+### Fixed
+
+- **A copy interrupted part-way could leave a file the scanner then complained about.**
+  When a show's folder is on a different filesystem from SelfPod's own data — the usual
+  arrangement on a NAS — a move is done as a copy, and the temporary file it used was
+  visible to the library scan. A scan landing at the wrong moment reported *"`episode.
+  mp3.selfpod-incoming` was ignored because SelfPod doesn't serve that file type"*: a
+  warning about SelfPod's own working file, blamed on the user. It is now hidden from
+  the scan, and cleaned up if the copy dies.
+
+- **`@fastify/rate-limit` had been installed and never switched on.** The only limit in
+  the app was a hand-written one inside the public-address self-test. It is now
+  registered properly and applied to the handful of admin actions that warrant it —
+  and deliberately *not* to media, feeds or ordinary pages, where a shared limit behind
+  a reverse proxy would have turned every listener into one bucket.
+
 ## 1.5.0 — 2026-08-12
 
 ### Fixed

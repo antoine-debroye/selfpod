@@ -1,0 +1,47 @@
+<%
+  const preview = it.preview;
+  const problem = it.problem;
+%>
+<% if (problem) { %>
+  <div class="callout callout-err" role="status"><%= problem %></div>
+<% } else if (preview) { %>
+  <div class="form-card">
+    <div class="ftitle"><%= preview.feed.title || 'That feed' %></div>
+    <div class="fdesc">
+      <%= preview.matchCount %> of the <%= preview.items.length %> most recent
+      <%= preview.items.length === 1 ? 'episode' : 'episodes' %> match your rules.
+      Nothing has been downloaded — this is only a look.
+    </div>
+    <table class="table table-compact">
+      <thead>
+        <tr><th>Episode</th><th>Length</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <% for (const entry of preview.items) { %>
+          <tr>
+            <td>
+              <%= entry.title %>
+              <% if (entry.publishedAt) { %>
+                <div class="muted mono"><%= it.helpers.formatDate(entry.publishedAt) %></div>
+              <% } %>
+            </td>
+            <td class="mono"><%= entry.durationSeconds === null ? '—' : it.helpers.formatDuration(entry.durationSeconds) %></td>
+            <td>
+              <% if (entry.keep && entry.needsDownloadToDecide) { %>
+                <span class="pill pill-warn">Will download to check its length</span>
+              <% } else if (entry.keep) { %>
+                <span class="pill pill-ok">Will download</span>
+              <% } else { %>
+                <span class="pill pill-muted">Skipped</span>
+                <div class="muted"><%= entry.detail %></div>
+              <% } %>
+            </td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+    <% if (preview.truncated) { %>
+      <div class="hint">Only the most recent <%= preview.items.length %> are shown.</div>
+    <% } %>
+  </div>
+<% } %>

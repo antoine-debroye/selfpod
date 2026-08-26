@@ -1,0 +1,105 @@
+<%
+  const show = it.show;
+  const sub = it.subscription;
+  const errors = it.errors || {};
+  const values = it.values || {};
+  const err = (field) => errors[field] ? ' is-invalid' : '';
+  const action = `/ui/shows/${encodeURIComponent(show.slug)}/subscription`;
+  /* Minutes in the form, seconds in the database. Nobody thinks about episode
+     length in seconds, and asking them to is how a 20-minute minimum gets typed
+     as "20" and silently becomes twenty seconds. */
+  const toMinutes = (seconds) => (seconds === null || seconds === undefined || seconds === '') ? '' : Math.round(seconds / 60);
+  const val = (name, fallback) => values[name] !== undefined ? values[name] : fallback;
+%>
+<form class="form-card" id="subscription-form"
+      method="post" action="<%= action %>"
+      hx-post="<%= action %>" hx-target="#subscription-form" hx-swap="outerHTML">
+  <div class="ftitle"><%= sub ? 'Following a feed' : 'Follow a feed' %></div>
+  <div class="fdesc">
+    SelfPod checks this feed on a schedule and downloads only the episodes that match your
+    rules, into this show's folder. Everything it takes becomes an ordinary episode —
+    yours, on your share, in your own private feed.
+  </div>
+
+  <div class="field<%= err('feedUrl') %>">
+    <label for="f-feed-url">Feed address</label>
+    <input id="f-feed-url" name="feedUrl" class="mono mono-input" required maxlength="2048"
+           placeholder="https://example.com/feed.xml"
+           value="<%= val('feedUrl', sub ? sub.feedUrl : '') %>">
+    <% if (errors.feedUrl) { %>
+      <div class="field-error"><%= errors.feedUrl %></div>
+    <% } else { %>
+      <div class="hint">
+        The address of the feed itself, not the show's home page. Use this only for feeds you
+        are entitled to — a private feed's link is personal to you.
+      </div>
+    <% } %>
+  </div>
+
+  <div class="form-row" style="margin-bottom:14px">
+    <div class="field<%= err('includeKeywords') %>" style="margin:0">
+      <label for="f-include">Only episodes whose title contains</label>
+      <input id="f-include" name="includeKeywords" maxlength="900"
+             placeholder="interview, deep dive"
+             value="<%= val('includeKeywords', sub ? sub.includeKeywords.join(', ') : '') %>">
+      <div class="hint">Any one of these is enough. Leave empty to accept every title.</div>
+    </div>
+    <div class="field<%= err('excludeKeywords') %>" style="margin:0">
+      <label for="f-exclude">…but never if it contains</label>
+      <input id="f-exclude" name="excludeKeywords" maxlength="900"
+             placeholder="bonus, trailer"
+             value="<%= val('excludeKeywords', sub ? sub.excludeKeywords.join(', ') : '') %>">
+      <div class="hint">These always win, even against a match above.</div>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-bottom:14px">
+    <div class="field<%= err('minDurationMinutes') %>" style="margin:0">
+      <label for="f-min">Shortest episode (minutes)</label>
+      <input id="f-min" name="minDurationMinutes" type="number" min="0" max="1440"
+             value="<%= val('minDurationMinutes', sub ? toMinutes(sub.minDurationSeconds) : '') %>">
+      <% if (errors.minDurationMinutes) { %><div class="field-error"><%= errors.minDurationMinutes %></div><% } %>
+    </div>
+    <div class="field<%= err('maxDurationMinutes') %>" style="margin:0">
+      <label for="f-max">Longest episode (minutes)</label>
+      <input id="f-max" name="maxDurationMinutes" type="number" min="0" max="1440"
+             value="<%= val('maxDurationMinutes', sub ? toMinutes(sub.maxDurationSeconds) : '') %>">
+      <% if (errors.maxDurationMinutes) { %><div class="field-error"><%= errors.maxDurationMinutes %></div><% } %>
+    </div>
+  </div>
+
+  <div class="field<%= err('backfillCount') %>">
+    <label for="f-backfill">On the first check, fetch this many existing episodes</label>
+    <input id="f-backfill" name="backfillCount" type="number" min="0" max="100" style="max-width:120px"
+           value="<%= val('backfillCount', sub ? sub.backfillCount : 5) %>">
+    <% if (errors.backfillCount) { %>
+      <div class="field-error"><%= errors.backfillCount %></div>
+    <% } else { %>
+      <div class="hint">
+        The most recent ones that match your rules.
+        <% if (sub && sub.bootstrapped) { %>
+          Already done for this feed — from now on every new matching episode arrives.
+        <% } %>
+      </div>
+    <% } %>
+  </div>
+
+  <% if (it.reopened) { %>
+    <div class="callout callout-ok" role="status">
+      <%= it.reopened %> previously skipped
+      <%= it.reopened === 1 ? 'episode' : 'episodes' %> will be re-checked on the next look,
+      because your rules got less strict.
+    </div>
+  <% } %>
+
+  <div class="form-actions">
+    <button class="btn btn-primary btn-sm" type="submit"><%= sub ? 'Save rules' : 'Follow this feed' %></button>
+    <button class="btn btn-ghost btn-sm" type="submit"
+            formaction="/ui/shows/<%= encodeURIComponent(show.slug) %>/subscription/preview"
+            hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/subscription/preview"
+            hx-target="#subscription-preview" hx-swap="innerHTML">
+      Preview what would match
+    </button>
+    <% if (it.saved) { %><span class="saved-note" role="status">Saved</span><% } %>
+  </div>
+</form>

@@ -36,6 +36,20 @@ services:
       # ADMIN_PASSWORD: choose-your-own # if unset, one is generated and logged once
       # LOG_LEVEL: info
 
+      # Following remote podcast feeds. Off unless you switch it on, because it is
+      # the only thing that makes SelfPod fetch from the internet at all — with it
+      # off, SelfPod only ever talks to your own network. Seeds the setting on first
+      # run; after that the Settings page is what decides.
+      # SUBSCRIPTIONS_ENABLED: 1
+      # REMOTE_POLL_INTERVAL_SECONDS: 3600  # how often to check; 900–86400
+      # MAX_DOWNLOAD_SIZE_MB: 1024          # largest episode to fetch
+
+      # Only if you follow a feed hosted on your own network. Lists the IP addresses
+      # that may be fetched despite being private — exactly those, not their range —
+      # and leaves every other rule in force. Deliberately not settable from the UI:
+      # it weakens a guarantee, so changing it should mean editing this file.
+      # ALLOW_PRIVATE_FEED_HOSTS: 192.168.1.20
+
     volumes:
       # One volume, mounted once. Everything lives here: your audio, the cover
       # art, and SelfPod's database. Moving to another machine is copying this

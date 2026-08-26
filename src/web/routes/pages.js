@@ -1,4 +1,5 @@
-import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER, SHOW_STATUS } from '../../constants.js';
+import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
+import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
 import { bucketEdges, DEFAULT_RANGE, RANGES, resolveRange } from '../../lib/time-range.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
@@ -291,6 +292,39 @@ export default async function pageRoutes(fastify, services) {
         subscribeCodes: await subscribeQrCodes(presented.feedUrl),
         defaultSubscribeTarget: DEFAULT_SUBSCRIBE_TARGET,
         topbarActions: showActions(show.slug),
+      }),
+      APP_LAYOUT,
+    );
+  });
+
+  /* --------------------------------------------------------- subscription */
+
+  fastify.get('/shows/:slug/subscription', guarded, async (request, reply) => {
+    const show = shows.getBySlug(request.params.slug);
+    if (!show) throw notFound('That show does not exist.', 'show_not_found');
+
+    const subscription = services.subscriptions.getForShow(show.id);
+    const presented = subscription ? presentSubscription(subscription, services) : null;
+
+    return reply.view(
+      'pages/subscription.eta',
+      shell(request, {
+        title: `${show.title} — subscription`,
+        activeSlug: show.slug,
+        crumbs: [
+          { label: 'Dashboard', href: '/' },
+          { label: show.title, href: `/shows/${encodeURIComponent(show.slug)}` },
+          { label: 'Subscription' },
+        ],
+        show: presentShow(show),
+        subscription: presented,
+        featureEnabled: services.settings.subscriptionsEnabled(),
+        items: subscription
+          ? services.subscriptions
+              .items({ subscriptionId: subscription.id, limit: 100 })
+              .map((row) => presentItem(row, services))
+          : [],
+        filter: '',
       }),
       APP_LAYOUT,
     );
@@ -642,13 +676,15 @@ export default async function pageRoutes(fastify, services) {
     { key: TIMELINE_EVENT.EXPIRED, label: 'Expired' },
   ];
 
-  const TRIGGER_OPTIONS = [
-    { value: SCAN_TRIGGER.WATCHER, label: 'File change' },
-    { value: SCAN_TRIGGER.SCHEDULED, label: 'Scheduled' },
-    { value: SCAN_TRIGGER.MANUAL, label: 'Rescan button' },
-    { value: SCAN_TRIGGER.STARTUP, label: 'Startup' },
-    { value: SCAN_TRIGGER.UPLOAD, label: 'Upload' },
-  ];
+  /**
+   * Derived from SCAN_TRIGGER_LABELS so this dropdown cannot fall behind the set of
+   * triggers the activity log will actually store. See that constant for the two bugs
+   * a hand-written copy caused.
+   */
+  const TRIGGER_OPTIONS = Object.entries(SCAN_TRIGGER_LABELS).map(([value, label]) => ({
+    value,
+    label,
+  }));
 
   const OUTCOME_OPTIONS = [
     { key: 'problems', label: 'Problems' },
@@ -777,6 +813,7 @@ export default async function pageRoutes(fastify, services) {
           rescanIntervalSeconds: settings.rescanIntervalSeconds(),
           missingGraceSeconds: settings.missingGraceSeconds(),
           watcherEnabled: settings.watcherEnabled(),
+          subscriptionsEnabled: settings.subscriptionsEnabled(),
           sessionTtlHours: settings.sessionTtlHours(),
           adminUsername: settings.adminUsername(),
         },
@@ -838,6 +875,10 @@ function showActions(slug) {
     <a class="btn btn-ghost btn-sm" href="/shows/${safe}/upload">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 3v13M7 8l5-5 5 5"/></svg>
       Upload
+    </a>
+    <a class="btn btn-ghost btn-sm" href="/shows/${safe}/subscription">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.5"/></svg>
+      Follow a feed
     </a>`;
 }
 

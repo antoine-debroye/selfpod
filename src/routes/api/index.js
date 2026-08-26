@@ -7,6 +7,7 @@ import setupRoutes from './setup.js';
 import showRoutes from './shows.js';
 import statsRoutes from './stats.js';
 import statusRoutes from './status.js';
+import subscriptionRoutes from './subscriptions.js';
 
 /**
  * The JSON API (spec §14). Every route below requires the admin session except
@@ -28,5 +29,6 @@ export default async function apiRoutes(fastify, options) {
   await fastify.register(activityRoutes, services);
   await fastify.register(statsRoutes, services);
   await fastify.register(reachabilityRoutes, services);
+  await fastify.register(subscriptionRoutes, services);
   await fastify.register(settingsRoutes, services);
 }

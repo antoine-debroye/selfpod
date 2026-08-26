@@ -114,6 +114,30 @@
     </form>
   </div>
 
+  <div class="set-row">
+    <div class="info">
+      <div class="t">Follow podcast feeds</div>
+      <div class="d">
+        Lets SelfPod check a remote podcast feed and download the episodes matching rules you set,
+        into a show of your own. You choose the rules per show, on that show's page.
+        <br><strong>This is the only thing that makes SelfPod fetch from the internet.</strong>
+        With it off, SelfPod only ever talks to your own network — so it is off until you say
+        otherwise. It will only ever follow feeds on public addresses.
+      </div>
+    </div>
+    <form method="post" action="/ui/settings/subscriptions"
+          hx-post="/ui/settings/subscriptions" hx-target="closest .set-row" hx-swap="outerHTML">
+      <div class="toggle<%= s.subscriptionsEnabled ? ' on' : '' %>">
+        <input type="checkbox" id="subscriptions-enabled" name="subscriptionsEnabled" role="switch"
+               class="switch-input" value="1"<%= s.subscriptionsEnabled ? ' checked' : '' %>
+               onchange="this.form.requestSubmit()">
+        <label class="switch" for="subscriptions-enabled" aria-hidden="true"></label>
+        <span class="tl" data-toggle-label><%= s.subscriptionsEnabled ? 'On' : 'Off' %></span>
+      </div>
+      <noscript><button class="btn btn-ghost btn-sm" type="submit">Apply</button></noscript>
+    </form>
+  </div>
+
   <div class="set-row" style="border-bottom:none">
     <div class="info">
       <div class="t">Rescan everything now</div>

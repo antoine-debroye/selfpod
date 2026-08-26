@@ -4,7 +4,9 @@
     {
       "name": "selfpod-dev",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["src/index.js"],
+      "runtimeArgs": [
+        "src/index.js"
+      ],
       "port": 8099,
       "env": {
         "DATA_DIR": "./.devdata",
@@ -13,7 +15,9 @@
         "ADMIN_PASSWORD": "devpassword123",
         "TZ": "Europe/London",
         "LOG_LEVEL": "info",
-        "PRETTY_LOGS": "1"
+        "PRETTY_LOGS": "1",
+        "SUBSCRIPTIONS_ENABLED": "1",
+        "ALLOW_PRIVATE_FEED_HOSTS": "127.0.0.1"
       }
     }
   ]

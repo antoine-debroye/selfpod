@@ -21,6 +21,31 @@ export function redactUrl(url) {
   return url;
 }
 
+/**
+ * A remote feed's URL, reduced to scheme and host.
+ *
+ * `redactUrl` above only rewrites SelfPod's *own* inbound request paths, so it does
+ * nothing for an outbound address — and a subscription's feed URL is a credential in
+ * exactly the same sense a feed token is. Private and premium podcast feeds identify
+ * the listener with a token in the path or the query string; logging one in full puts
+ * a working subscription link into `docker logs`, the NAS log viewer, and any log
+ * shipper, for anyone who can read them.
+ *
+ * The host is kept because it is the part an operator needs in order to act on a log
+ * line at all. It is also what makes a sweep visible: every outbound request leaves a
+ * trail naming where it went.
+ */
+export function redactFeedUrl(url) {
+  if (typeof url !== 'string') return url;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}/***`;
+  } catch {
+    // Not parseable, so nothing can be assumed about which parts are sensitive.
+    return '***';
+  }
+}
+
 /** Serializers passed to Fastify's logger options. */
 export const loggerSerializers = {
   req(request) {

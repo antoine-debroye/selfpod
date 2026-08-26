@@ -18,6 +18,8 @@ import { createScanner } from '../../src/services/scanner.js';
 import { createSettings } from '../../src/services/settings.js';
 import { createReadiness } from '../../src/services/readiness.js';
 import { createStats } from '../../src/services/stats.js';
+import { createRemoteFeeds } from '../../src/services/remote-feeds.js';
+import { createSubscriptions } from '../../src/services/subscriptions.js';
 
 import { createShows } from '../../src/services/shows.js';
 import { createTimeline } from '../../src/services/timeline.js';
@@ -105,9 +107,15 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
     shows, episodes, covers, episodeArt, metadata, activity, health,
   });
 
+  const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
+  const remoteFeeds = createRemoteFeeds({
+    config, settings, subscriptions, shows, episodes, scanner,
+    metadata, activity, health, events, logger: silentLogger,
+  });
+
   return {
     config, db, events, settings, health, activity, covers, episodeArt, metadata,
-    shows, episodes, feeds, scanner, stats, timeline, readiness,
+    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds,
     dataDir,
 
     /** Copies a fixture into a show folder, optionally under a different name. */
@@ -125,6 +133,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
     },
 
     async cleanup() {
+      remoteFeeds.stop?.();
       shows.stop?.();
       settings.stop?.();
       feeds.stop?.();

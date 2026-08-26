@@ -39,27 +39,32 @@ const TIMEOUT_MS = 8000;
  *
  * Every check is logged with its target, so a sweep leaves a trail.
  */
-const RATE_LIMIT = { max: 6, windowMs: 60_000 };
-const recentChecks = [];
-
-function rateLimited() {
-  const cutoff = Date.now() - RATE_LIMIT.windowMs;
-  while (recentChecks.length && recentChecks[0] < cutoff) recentChecks.shift();
-  if (recentChecks.length >= RATE_LIMIT.max) return true;
-  recentChecks.push(Date.now());
-  return false;
-}
+/**
+ * Point 3 is enforced by the app's shared rate limiter rather than by a module-level
+ * array of timestamps, which is what used to live here. Two things improve by moving
+ * it: the refusal comes back in the app's own `{error:{message, code}}` shape instead
+ * of an ad-hoc body, and the counter is per app instance rather than per *process* —
+ * the old array was shared by every test file in a run, so one file's requests could
+ * silently rate-limit another's.
+ */
+const RATE_LIMIT = { max: 6, timeWindow: '1 minute' };
 
 export default async function reachabilityRoutes(fastify, { settings, logger }) {
-  fastify.post('/reachability', { preHandler: fastify.requireAdminApi }, async (request, reply) => {
-    if (rateLimited()) {
-      reply.status(429);
-      return {
-        checked: false,
-        reason: 'rate_limited',
-        message: 'That test has run several times in the last minute. Wait a moment and try again.',
-      };
-    }
+  /**
+   * Order matters here, and it is the opposite of the obvious one.
+   *
+   * Declaring the limit as route `config.rateLimit` puts it on the `onRequest` hook,
+   * which runs *before* authentication — so an anonymous flood spends the admin's
+   * budget and is answered 429 rather than 401. That is a denial of service on the
+   * operator's own ability to use the feature, mounted by someone who never signed
+   * in. Running the limiter as a preHandler *after* `requireAdminApi` means an
+   * unauthenticated request is rejected for what is actually wrong with it and costs
+   * nothing, and the budget is spent only by requests that could really make SelfPod
+   * reach out.
+   */
+  const options = { preHandler: [fastify.requireAdminApi, fastify.rateLimit(RATE_LIMIT)] };
+
+  fastify.post('/reachability', options, async (request, reply) => {
     const baseUrl = settings.publicBaseUrl();
     if (!baseUrl) {
       return {

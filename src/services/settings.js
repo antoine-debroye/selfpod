@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import {
   DEFAULT_MISSING_GRACE_SECONDS,
   PREVIOUS_BASE_URL_WINDOW_DAYS,
+  REMOTE_POLL_MAX_SECONDS,
+  REMOTE_POLL_MIN_SECONDS,
   RESCAN_INTERVAL_MAX_SECONDS,
   RESCAN_INTERVAL_MIN_SECONDS,
 } from '../constants.js';
@@ -37,6 +39,14 @@ export const SETTING_KEYS = Object.freeze({
   RESCAN_INTERVAL_SECONDS: 'rescan_interval_seconds',
   MISSING_GRACE_SECONDS: 'missing_grace_seconds',
   WATCHER_ENABLED: 'watcher_enabled',
+  /**
+   * Feed subscriptions (spec §18). Default off — see config.js for why that matters
+   * more than it looks: with this off, SelfPod's outbound behaviour is byte-for-byte
+   * what it was before the feature existed.
+   */
+  SUBSCRIPTIONS_ENABLED: 'subscriptions_enabled',
+  REMOTE_POLL_INTERVAL_SECONDS: 'remote_poll_interval_seconds',
+  REMOTE_MAX_DOWNLOAD_MB: 'remote_max_download_mb',
   SESSION_TTL_HOURS: 'session_ttl_hours',
   ADMIN_USERNAME: 'admin_username',
   ADMIN_PASSWORD_HASH: 'admin_password_hash',
@@ -69,7 +79,20 @@ const EXPORTED_KEYS = [
   SETTING_KEYS.MISSING_GRACE_SECONDS,
   SETTING_KEYS.WATCHER_ENABLED,
   SETTING_KEYS.SESSION_TTL_HOURS,
+  SETTING_KEYS.SUBSCRIPTIONS_ENABLED,
+  SETTING_KEYS.REMOTE_POLL_INTERVAL_SECONDS,
+  SETTING_KEYS.REMOTE_MAX_DOWNLOAD_MB,
 ];
+
+/**
+ * Subscriptions themselves are deliberately **not** exportable, here or in show.json.
+ *
+ * A subscription's feed URL is a credential in its own right: private and premium
+ * feeds carry a per-listener token in the path or the query string. That is the same
+ * reason shows.feed_token is left out of every export, and the reason redactFeedUrl
+ * exists for the log. The three keys above are ordinary configuration — how often to
+ * poll, how large a file to accept, and whether the feature is on at all.
+ */
 
 export function createSettings({ db, config, events, logger }) {
   const selectOne = db.prepare('SELECT value FROM settings WHERE key = ?');
@@ -209,6 +232,31 @@ export function createSettings({ db, config, events, logger }) {
         60,
         30 * 24 * 60 * 60,
       );
+    },
+
+    subscriptionsEnabled() {
+      // Falls back to the env seed, like every other setting here — not to a hardcoded
+      // false. Defaulting to false regardless meant SUBSCRIPTIONS_ENABLED=1 in the
+      // compose file did nothing at all: the container said the feature was on, the
+      // UI said it was off, and there was nothing to explain the difference.
+      return getBool(SETTING_KEYS.SUBSCRIPTIONS_ENABLED, config.subscriptionsEnabled === true);
+    },
+
+    remotePollIntervalSeconds() {
+      return clamp(
+        getInt(SETTING_KEYS.REMOTE_POLL_INTERVAL_SECONDS, config.remotePollIntervalSeconds),
+        REMOTE_POLL_MIN_SECONDS,
+        REMOTE_POLL_MAX_SECONDS,
+      );
+    },
+
+    remoteMaxDownloadBytes() {
+      const mb = clamp(
+        getInt(SETTING_KEYS.REMOTE_MAX_DOWNLOAD_MB, config.maxDownloadSizeMb),
+        1,
+        65536,
+      );
+      return mb * 1024 * 1024;
     },
 
     watcherEnabled() {

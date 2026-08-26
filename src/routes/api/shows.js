@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { stat, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
@@ -13,6 +13,7 @@ import {
 import { badRequest, conflict, notFound, payloadTooLarge, unprocessable } from '../../lib/errors.js';
 import { moveIntoPlace } from '../../lib/move.js';
 import { sanitiseUploadFilename } from '../../lib/slug.js';
+import { uniqueTarget } from '../../lib/unique-filename.js';
 import { newId } from '../../lib/tokens.js';
 
 export default async function showRoutes(fastify, services) {
@@ -275,25 +276,6 @@ export default async function showRoutes(fastify, services) {
       show: presentShow(shows.get(show.id), { includeEpisodes: true }),
     };
   });
-}
-
-/** Never silently overwrite an existing episode file: "name (2).mp3" instead. */
-async function uniqueTarget(dir, filename) {
-  const dot = filename.lastIndexOf('.');
-  const stem = dot > 0 ? filename.slice(0, dot) : filename;
-  const ext = dot > 0 ? filename.slice(dot) : '';
-  let candidate = filename;
-  let counter = 2;
-  for (;;) {
-    try {
-      await stat(join(dir, candidate));
-    } catch {
-      return candidate;
-    }
-    candidate = `${stem} (${counter})${ext}`;
-    counter += 1;
-    if (counter > 500) return `${stem}-${Date.now()}${ext}`;
-  }
 }
 
 function isTrue(value) {
