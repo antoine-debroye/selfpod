@@ -44,6 +44,39 @@ changes what your listeners see, it says so.
     check. There is a "Download again" button for when you change your mind.
   - Removing a subscription never touches the episodes it already downloaded.
 
+- **Cut the adverts out of your episodes.** SelfPod can find audio that repeats
+  across a show — the sponsor read that opens every episode, the bed under the
+  credits — and remove it from all of them. Set it per show, under **Adverts**.
+
+  **It does not know what an advert is, and never claims to.** A theme tune, a
+  sponsor read, a standing intro and a recurring stinger repeat in exactly the same
+  way, and nothing in the audio tells them apart. So SelfPod shows you what it found
+  — how long, how many episodes carry it, whereabouts it sits, and a player so you
+  can hear the segment on its own — and you decide. There is an automatic mode for
+  when you would rather not be asked each time, and even then it refuses on its own
+  to cut anything that always sits at the very start or the very end, because that is
+  where a theme and credits live.
+
+  - **Your files are never modified.** The trimmed copy lives with SelfPod's other
+    derived data and can be deleted whenever you like; the originals in your show
+    folders are exactly as you left them. Change your mind and the episodes go back.
+  - **Nothing is decoded or re-encoded.** What your subscribers download is
+    byte-identical to your original everywhere except a few milliseconds either side
+    of a join, so no quality is lost, and cutting an hour-long episode takes about a
+    thirtieth of a second. SelfPod ships no `ffmpeg` and does not need one.
+  - **Episodes are held back until the decision is settled**, rather than published
+    and swapped afterwards. Podcast apps download in pieces and resume, so changing an
+    episode's audio underneath a listener who is part-way through would hand them half
+    of one file and half of another, with nothing to notice. How many are waiting, and
+    why, is stated on the show's page.
+  - **Adverts a host inserts as it serves** are found by downloading one episode a
+    second time, a day later, and comparing — whatever changed cannot be the theme
+    tune. This is done sparingly on purpose: a second download counts again in the
+    publisher's listener figures, so it happens only for episodes whose audio shows
+    real signs of having been stitched together, and never by disguising SelfPod to
+    defeat a host's caching.
+  - `.mp3` only for now. Other formats are published untouched.
+
 ### Fixed
 
 - **A copy interrupted part-way could leave a file the scanner then complained about.**

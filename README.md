@@ -278,6 +278,58 @@ of it can be changed later in **Settings** without touching the container.
 
 ---
 
+## Cutting the adverts out
+
+SelfPod can find audio that repeats across a show's episodes and remove it from
+every one of them. Set it per show, under **Adverts** on the show's page.
+
+| Setting | What happens |
+|---|---|
+| **Nothing** *(default)* | Your episodes are published exactly as they arrive. SelfPod never reads them looking for repeats. |
+| **Show me what repeats, and wait** | New episodes are held out of your feed until you have decided about them. Nothing is removed that you did not ask for. |
+| **Remove repeats without asking** | SelfPod cuts what it is confident about and publishes. It still leaves anything that looks like a theme tune or credits for you to look at. |
+
+**It does not know what an advert is, and does not pretend to.** A theme tune, a
+sponsor read, a standing intro and a recurring stinger repeat in exactly the same
+way, and nothing in the audio separates them. So SelfPod tells you what it found —
+how long it is, how many episodes carry it, whereabouts it sits, and a player so
+you can hear it — and you decide. Automatic mode changes only whether you are asked
+first; it still refuses on its own to cut anything that is always at the very start
+or the very end, which is where a theme and credits live.
+
+**Your files are never touched.** The trimmed copy lives with SelfPod's other
+derived data and can be deleted at any time; the originals in your show folders are
+exactly as you left them. Change your mind about a segment and the episodes go back
+to how they were.
+
+**Nothing is decoded or re-encoded**, so what your subscribers download is
+byte-identical to your original everywhere except the few milliseconds either side
+of a join. That also means no quality is lost, and cutting an hour-long episode
+takes about a thirtieth of a second.
+
+**Episodes are held until the decision is settled**, rather than published and then
+swapped. Podcast apps download in pieces and resume, so replacing an episode's audio
+underneath a URL a listener is part-way through would hand them half of one file and
+half of another with nothing to notice. Held episodes are counted and explained on
+the show's page — a feed that quietly stops is the thing this app exists to prevent.
+
+### Adverts a host inserts as it serves
+
+Some podcasts insert adverts into the audio as it is downloaded, so the file is
+different every time. SelfPod can spot these by downloading one episode a second
+time, a day later, and comparing: whatever changed cannot be the theme tune, so it
+is an advert by construction.
+
+This is done sparingly and on purpose. A second download counts again in the
+publisher's listener figures, so SelfPod only does it for episodes whose audio shows
+positive signs of having been stitched together, never sooner than a day, and only a
+couple at a time. It will not disguise itself to defeat a host's caching — that
+would be interfering with the publisher's measurement, which is not SelfPod's to do.
+
+Only for `.mp3` at present. Other formats are published untouched.
+
+---
+
 ## When the feed no longer matches the folder
 
 **Rescan** (top of a show page) re-reads every file and re-hashes it, so it catches
@@ -365,6 +417,15 @@ it, which is a real change and is why it is opt-in. It is held to four rules:
 No unauthenticated request causes any outbound traffic, with or without the feature
 on. There is no shell execution, no `eval`, and no dynamic code loading anywhere in
 the app.
+
+**Reading the audio.** Removing adverts means SelfPod parses episode files, and a
+file downloaded from a followed feed is written by someone you do not control. That
+parsing is deliberately as small as it could be: it walks MP3 frame headers and
+hashes bytes. It decodes no audio, spawns no process and loads no media library —
+SelfPod ships no `ffmpeg`, which is a decision rather than an omission, since
+bundling one would put a full video-codec stack inside an image that is handed files
+chosen by strangers. The reader is bounded on frame count and refuses a file it
+cannot make sense of rather than hunting through it.
 
 If you have a feed on your own LAN that you genuinely want followed, name its address
 in `ALLOW_PRIVATE_FEED_HOSTS`. It exempts exactly the addresses you list — not their

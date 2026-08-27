@@ -46,6 +46,16 @@ built from") explains the reasoning behind each non-obvious decision.
   multi-tenant/multi-user. One admin account per instance.
 - Not a transcoding/normalization pipeline. Files are served as uploaded
   (format support means "serve correctly," not "convert").
+  - **Amended in 1.6.0.** SelfPod can remove approved stretches of audio
+    from an MP3 and serve the shortened copy (§19). This is not
+    transcoding and the distinction is not a quibble: nothing is decoded
+    and nothing is re-encoded, so what is served is byte-identical to the
+    original outside the cut. An MP3 is a sequence of self-contained
+    frames — which is why a podcast host can stitch an advert onto one
+    mid-response — and removing a stretch is removing frames and joining
+    what remains. The original is never modified; the copy lives with the
+    other derived caches and can be deleted for nothing but the CPU to
+    rebuild it.
 - Not a podcast *client* — no playback history, no listening, no library
   of other people's shows. This app produces feeds; listening happens in
   the user's existing podcast app.
@@ -974,6 +984,81 @@ warning. A subscription whose *address* is refused is a different case —
 it can never work as written, so it is stopped and reported rather than
 retried every fifteen minutes for ever.
 
+## 19. Removing adverts
+
+### 19.1 What SelfPod will and will not decide
+
+It finds audio a show repeats and audio that changes between two
+downloads of one episode. It never decides that either is an advert. A
+theme tune, a sponsor read, a standing intro and a recurring stinger all
+repeat identically, and nothing in the audio separates them — so
+everything found is offered, and the only thing automatic mode changes is
+whether the owner is asked first.
+
+### 19.2 Two detectors, one catalogue
+
+**Repetition across a show's episodes** finds what was cut in at
+production time. It needs no acoustic fingerprinting and no decoding: a
+segment repeated within a podcast arrives either by the producer dropping
+the same audio into an edit — same PCM, therefore the same encoded frames
+— or by post-encode concatenation, which is literally the same bytes.
+Hashing frame payloads is enough.
+
+**Comparing two downloads of one episode** finds what a host stitches in
+per request. It is the stronger signal, and the only one that identifies
+an advert rather than something that merely repeats: a theme tune is in
+both copies, so it cannot be what differs between them.
+
+### 19.3 The cost of looking twice, and why it is rationed
+
+A second download is a second IAB-countable listen, so it doubles the
+publisher's figures for an episode taken once. Hosts also cache the
+stitch per listener, keyed on requesting address and user agent, so two
+requests from one container seconds apart are the same listener by
+construction and would hit that cache. Defeating it would need a rotating
+user agent or egress address; that is deliberate evasion of the
+publisher's measurement and SelfPod will not do it.
+
+So a second download happens only when the first file carries a positive
+signal — a sample-rate or channel-mode change part-way through, or a Xing
+header disagreeing with the frames present — never sooner than a day, a
+couple per tick across all subscriptions, and charged to the same daily
+byte budget. The second copy is deleted; the file on the share is the one
+the owner has.
+
+### 19.4 Cutting
+
+Frames are removed and what remains is joined. The Xing header is
+rewritten — its frame count, byte count and seek table, the last of which
+otherwise maps percentages to offsets that no longer mean anything, which
+is the fault reported as "the scrubber is broken". The episode's own ID3
+tag survives untouched.
+
+Two costs are inherent to cutting on frame boundaries and are stated
+rather than hidden: the bit reservoir gives a soft artefact of about 26 ms
+at each join, and encoder delay adds a few tens of milliseconds there too.
+Both are identical under `ffmpeg -c copy`; avoiding either means
+re-encoding, which spends the quality of the whole file to fix a
+twentieth of a second. It is also why the trimmed duration is *measured*
+from the result rather than computed as "original minus what was cut".
+
+### 19.5 Publishing
+
+An episode is held out of the feed until its trim is settled. The
+alternative is to publish and swap the audio underneath, and this route
+serves byte ranges: a client holding the first half of the untrimmed file
+and asking for the rest would receive the second half of a shorter one and
+stitch together an episode that never existed, silently.
+
+The enclosure URL therefore carries a content version, and the trimmed
+file on disk is named after that same version, so the row in the database
+and the bytes it describes move together. A later re-cut is a different
+URL rather than different bytes at the same one.
+
+A trim that fails publishes the original and says so loudly. An advert
+that survives explains itself the moment it is heard; an episode that
+silently never appears does not.
+
 ## 17. Acceptance checklist
 
 Before considering this "done," verify each of these explicitly — every
@@ -1004,3 +1089,17 @@ one corresponds to a real failure from the manual prototype:
 - [ ] The entire setup, from `docker run` to a working feed with two
       shows, requires editing `docker-compose.yml` (or the `docker run`
       command) exactly once — never again when adding a third show.
+- [ ] A show with advert removal set to "show me what repeats" holds its
+      new episodes out of the feed, and the show page says how many are
+      waiting and why — not just that something is pending.
+- [ ] Approving a repeated segment publishes the episodes with that audio
+      gone, at a shorter `length`, a shorter `itunes:duration`, and an
+      enclosure URL that differs from the one served before the cut.
+- [ ] The audio either side of a cut downloads byte-identical to the
+      original, and a `Range` request for the second half of a trimmed
+      episode returns exactly the second half of what a whole-file `GET`
+      returns.
+- [ ] Rejecting a segment that was previously approved puts the audio
+      back, and the episode is served whole again.
+- [ ] Turning advert removal off for a show releases every episode it was
+      holding, in the same request — not on the next scheduled scan.

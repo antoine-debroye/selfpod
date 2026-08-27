@@ -577,6 +577,169 @@ case "$BLOCKED" in
     fail "a private address was not refused (${BLOCKED})" ;;
 esac
 
+step "18. A show set to review holds its episodes, and says how many"
+
+# The audio is generated rather than committed, for the same reason the unit tests
+# generate theirs: a stitched file *is* "these frames, then those frames", and three
+# episodes sharing one segment is the whole scenario. A checked-in blob would hide it.
+mkdir -p "${WORK}/data/shows/ad-club"
+python3 - "${WORK}/data/shows/ad-club" <<'PY'
+import sys, pathlib
+
+FRAME_BYTES = 417                      # MPEG-1 Layer III, 128 kbit/s, 44.1 kHz
+FRAME_MS = 1152 / 44100 * 1000         # 26.12 ms
+
+def frame(seed):
+    header = bytes([0xFF, 0xFB, (9 << 4) | (0 << 2), (1 << 6)])
+    payload = bytearray(FRAME_BYTES - 4)
+    x = (seed * 2654435761) & 0xFFFFFFFF
+    for i in range(len(payload)):
+        x = (x ^ (x << 13)) & 0xFFFFFFFF
+        x ^= x >> 17
+        x = (x ^ (x << 5)) & 0xFFFFFFFF
+        payload[i] = x & 0xFE          # never 0xFF, so no payload byte looks like a sync
+    return header + bytes(payload)
+
+def seconds(n):
+    return round(n * 1000 / FRAME_MS)
+
+def segment(start, count):
+    return b"".join(frame(start + i) for i in range(count))
+
+out = pathlib.Path(sys.argv[1])
+for n in range(3):
+    # Programme, the same 30-second sponsor read every episode carries, more programme.
+    (out / f"episode-{n + 1}.mp3").write_bytes(
+        segment(100_000 + n * 50_000, seconds(40))
+        + segment(2_000, seconds(30))
+        + segment(600_000 + n * 50_000, seconds(40))
+    )
+PY
+
+wait_for_scan 12
+AD_SHOW_ID="$(api "${BASE}/api/shows" | json '
+print(next(s["id"] for s in json.load(sys.stdin)["shows"] if s["slug"] == "ad-club"))')"
+
+api -X PATCH -H 'Content-Type: application/json' -d '{"mode":"review"}' \
+  "${BASE}/api/shows/${AD_SHOW_ID}/ad-trim" >/dev/null
+api -X POST "${BASE}/api/shows/${AD_SHOW_ID}/ad-detect" >/dev/null
+
+AD_STATE="$(api "${BASE}/api/shows/${AD_SHOW_ID}/ad-segments")"
+printf '%s' "$AD_STATE" | json '
+d = json.load(sys.stdin)
+sys.exit(0 if d["held"] == 3 and d["awaiting"] >= 1 else 1)' \
+  && pass "three episodes are held, with something to decide about" \
+  || fail "the show did not hold its episodes ($(printf '%s' "$AD_STATE" | head -c 120))"
+
+AD_FEED_TOKEN="$(api "${BASE}/api/shows/${AD_SHOW_ID}" | json '
+print(json.load(sys.stdin)["show"]["feedToken"])')"
+HELD_FEED="$(curl -s "${BASE}/feeds/ad-club/${AD_FEED_TOKEN}.xml")"
+# The positive control first: an error page has no <item> either, and would make the
+# check below pass without SelfPod having held anything back.
+printf '%s' "$HELD_FEED" | grep -q "<title>Ad Club</title>" \
+  && pass "the feed builds and is this show's" \
+  || fail "that is not the ad-club feed ($(printf '%s' "$HELD_FEED" | head -c 80))"
+printf '%s' "$HELD_FEED" | grep -q "<item>" \
+  && fail "a held episode was published anyway" \
+  || pass "and none of its episodes is in it yet"
+
+step "19. Approving a segment cuts the audio and shortens the feed"
+
+SEG_ID="$(printf '%s' "$AD_STATE" | json '
+d = json.load(sys.stdin)
+print(next(s["id"] for s in d["segments"] if s["status"] == "candidate"))')"
+
+# Everything the feed said before the cut, so the comparison is against real bytes
+# rather than against an expectation written down here.
+BEFORE_FEED="$(curl -s "${BASE}/feeds/ad-club/${AD_FEED_TOKEN}.xml")"
+api -X POST -H 'Content-Type: application/json' -d '{"status":"approved"}' \
+  "${BASE}/api/ad-segments/${SEG_ID}/decide" >/dev/null
+
+AFTER_FEED="$(curl -s "${BASE}/feeds/ad-club/${AD_FEED_TOKEN}.xml")"
+[ "$(printf '%s' "$AFTER_FEED" | grep -c '<item>')" = "3" ] \
+  && pass "all three episodes are published now the decision is settled" \
+  || fail "approving the segment did not release the episodes"
+
+# The feed genuinely changed. Without this the checks below could pass on a feed that
+# was already showing the untrimmed episodes for some unrelated reason.
+[ "$BEFORE_FEED" != "$AFTER_FEED" ] \
+  && pass "…and the feed is not what it was a moment ago" \
+  || fail "the feed did not change at all"
+
+printf '%s' "$AFTER_FEED" | grep -q 'url="[^"]*?v=[0-9a-f]\{12\}"' \
+  && pass "each enclosure URL carries a content version" \
+  || fail "the enclosure URL has no version, so replacing the bytes could corrupt a resumed download"
+
+# 110 seconds of audio less a 30-second sponsor read.
+printf '%s' "$AFTER_FEED" | json '
+# Split rather than match: this string travels through a shell double-quoted context
+# on its way to python, so a regex escape here is one backslash away from silently
+# matching nothing — which is exactly what it did the first time.
+body = sys.stdin.read()
+stated = [chunk.split("<")[0] for chunk in body.split("<itunes:duration>")[1:]]
+secs = [int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in (v.split(":") for v in stated)]
+if len(secs) != 3:
+    print(f"expected three durations, found {len(secs)}: {stated}")
+    sys.exit(1)
+wrong = [v for v in secs if abs(v - 80) > 2]
+if wrong:
+    print(f"published {wrong} seconds; 110 less a 30-second read is 80")
+sys.exit(1 if wrong else 0)' \
+  && pass "…and states 1:20 — the 30 seconds are gone from every episode" \
+  || fail "the published duration is not the trimmed one"
+
+step "20. What is served is the original audio, minus the cut"
+
+AD_EP_ID="$(api "${BASE}/api/shows/${AD_SHOW_ID}/episodes" | json '
+print(json.load(sys.stdin)["episodes"][0]["id"])')"
+AD_EP_FILE="$(api "${BASE}/api/shows/${AD_SHOW_ID}/episodes" | json '
+print(json.load(sys.stdin)["episodes"][0]["filename"])')"
+MEDIA="${BASE}/media/ad-club/${AD_FEED_TOKEN}/${AD_EP_ID}/${AD_EP_FILE}"
+
+curl -s -o "${WORK}/trimmed.mp3" "$MEDIA"
+curl -s -o "${WORK}/tail.mp3" -H 'Range: bytes=200000-' "$MEDIA"
+
+python3 - "${WORK}/trimmed.mp3" "${WORK}/tail.mp3" "${WORK}/data/shows/ad-club/${AD_EP_FILE}" <<'PY'
+import sys, pathlib
+served, tail, original = (pathlib.Path(p).read_bytes() for p in sys.argv[1:4])
+problems = []
+# The claim is not "similar" — it is the same bytes, because nothing was decoded.
+if served[:150_000] != original[:150_000]:
+    problems.append("the audio before the cut is not byte-identical to the original")
+if len(served) >= len(original):
+    problems.append("nothing was actually removed")
+# The failure this guards: a client holding the first half of one file and asking for
+# the rest gets the second half of a different one, and stitches them silently.
+if tail != served[200_000:]:
+    problems.append("a ranged read returned different audio from a whole read")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PY
+if [ $? -eq 0 ]; then
+  pass "byte-identical outside the cut, and range reads agree with whole reads"
+else
+  fail "the trimmed audio served does not match the original outside the cut"
+fi
+
+# The originals are the owner's. Whatever the trimming did, it did not do it to them.
+[ "$(python3 -c "
+import pathlib, sys
+d = pathlib.Path('${WORK}/data/shows/ad-club')
+print(len(sorted(p.name for p in d.iterdir() if p.suffix == '.mp3')))")" = "3" ] \
+  && pass "the three files on the share are untouched and still the only ones there" \
+  || fail "trimming changed what is in the show folder"
+
+step "21. Changing your mind puts the audio back"
+
+api -X POST -H 'Content-Type: application/json' -d '{"status":"rejected"}' \
+  "${BASE}/api/ad-segments/${SEG_ID}/decide" >/dev/null
+curl -s -o "${WORK}/restored.mp3" "$MEDIA"
+
+[ "$(wc -c < "${WORK}/restored.mp3")" = "$(wc -c < "${WORK}/data/shows/ad-club/${AD_EP_FILE}")" ] \
+  && pass "the episode is served whole again" \
+  || fail "rejecting the segment did not restore the audio"
+
 # ---------------------------------------------------------------------- report
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"
