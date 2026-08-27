@@ -231,9 +231,27 @@ docker rm -f "${NAME}-perm" >/dev/null 2>&1
 docker run -d --name "${NAME}-perm" -p "$((PORT + 1)):8080" \
   -v "${NAME}-locked:/locked" -e DATA_DIR=/locked -e PUID=1000 -e PGID=1000 \
   -e PUBLIC_BASE_URL="http://localhost:$((PORT + 1))" "$IMAGE" >/dev/null
-sleep 8
-docker logs "${NAME}-perm" 2>&1 | grep -qi 'CANNOT READ /locked as UID 1000' \
-  && pass "the container log names the exact path and UID" || fail "the log did not explain the permission problem"
+
+# Waited for, not slept through. A fixed sleep here is a guess about how long a
+# container takes to boot and write its first log line, and on a loaded machine the
+# guess is wrong — which failed this check twice in a row while the app was behaving
+# perfectly. A timing assumption that reports a fault in something else is worse than
+# no check at all.
+perm_log_explains() {
+  docker logs "${NAME}-perm" 2>&1 | grep -qi 'CANNOT READ /locked as UID 1000'
+}
+if wait_until 60 perm_log_explains; then
+  pass "the container log names the exact path and UID"
+else
+  fail "the log did not explain the permission problem"
+fi
+# And wait for it to be answering before asking it anything. The point of this step is
+# that a permission fault stays *explainable* — the container keeps serving so the
+# owner can read what went wrong — so "it had not finished starting" is not an answer
+# to any of the checks below.
+perm_http_up() { curl -sf "http://localhost:$((PORT + 1))/health" >/dev/null 2>&1; }
+wait_until 60 perm_http_up || fail "the degraded container never started answering at all"
+
 BODY="$(curl -s "http://localhost:$((PORT + 1))/")"
 printf '%s' "$BODY" | grep -qi "database" && printf '%s' "$BODY" | grep -q "1000" \
   && pass "the web UI explains it too — no SSH needed to diagnose" || fail "the web UI did not explain the problem"

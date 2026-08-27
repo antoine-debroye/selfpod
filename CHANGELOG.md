@@ -19,6 +19,15 @@ changes what your listeners see, it says so.
   this one again tomorrow, because it runs 22s longer than the 251s the feed states"*)
   and what came of it afterwards.
 
+### Fixed
+
+- **An acceptance check reported a fault in SelfPod when the real problem was a busy
+  machine.** It waited a fixed eight seconds for a container to boot and then asserted
+  on its log; under load that was not long enough, so it failed twice in a row while
+  the app behaved perfectly. It now waits for the thing it is checking, as the rest of
+  the suite does. Nothing in the app changed — but a check that cries wolf is worse
+  than no check, because the next real failure gets shrugged at.
+
 ## 1.6.2 — 2026-08-27
 
 ### Fixed
