@@ -47,6 +47,23 @@ wait_for_health() {
 # Waits for the watcher (or the fallback rescan) to notice a filesystem change.
 wait_for_scan() { sleep "${1:-9}"; }
 
+# Polls a condition once a second until it holds, or gives up after `seconds`.
+#
+# Whether a change reaches SelfPod through the watcher or only through the next
+# scheduled rescan depends on the mount: a Docker Desktop bind mount and an SMB
+# share each deliver some events and swallow others, which is the entire reason
+# the periodic rescan exists. Anything downstream of "SelfPod noticed" therefore
+# has to wait for the state the app reports, not for a duration someone guessed.
+wait_until() {
+  local deadline=$((SECONDS + $1))
+  shift
+  while ! "$@"; do
+    [ "$SECONDS" -ge "$deadline" ] && return 1
+    sleep 1
+  done
+  return 0
+}
+
 step "Starting ${IMAGE} with a fresh data directory"
 mkdir -p "${WORK}/data/shows/tape-club"
 docker run -d --name "$NAME" -p "${PORT}:8080" \
@@ -71,6 +88,13 @@ refresh_show() {
   SHOW_ID="$(printf '%s' "$body" | json 'd=json.load(sys.stdin); print(d["shows"][0]["id"] if d["shows"] else "")' 2>/dev/null)"
 }
 feed() { curl -s "${BASE}/feeds/tape-club/${TOKEN}.xml"; }
+feed_items() { feed | grep -c '<item>'; }
+feed_is_empty() { [ "$(feed_items)" = "0" ]; }
+episode_status() {
+  api "${BASE}/api/shows/${SHOW_ID}/episodes" \
+    | json 'd=json.load(sys.stdin); print(d["episodes"][0]["status"] if d["episodes"] else "")' 2>/dev/null
+}
+episode_is() { [ "$(episode_status)" = "$1" ]; }
 
 # --------------------------------------------------------------------------- 1
 step "1. Dropping an .m4a in appears in the feed with type=audio/x-m4a, no restart"
@@ -143,21 +167,50 @@ curl -s -o /dev/null -D- "${BASE}/media/tape-club/${TOKEN}/cover.jpg" | grep -qi
 # --------------------------------------------------------------------------- 7
 step "7. A vanished file stays in the feed, then drops after the grace period"
 rm -f "${WORK}/data/shows/tape-club/completely-different-name.m4a"
-wait_for_scan
-ITEMS="$(feed | grep -c '<item>')"
-[ "$ITEMS" = "1" ] && pass "a missing file does not immediately disappear from the feed" || fail "expected 1 item during grace, saw ${ITEMS}"
 
-docker exec "$NAME" node -e '
+# Wait for the episode to actually be marked missing rather than for a fixed few
+# seconds. On a mount that delivers no unlink event — a Docker Desktop bind mount,
+# and plenty of SMB shares — the deletion is noticed by the next scheduled rescan
+# instead, up to a whole interval later. A sleep here proved nothing: the episode
+# was still `active` when the grace period was backdated below, so that UPDATE
+# matched no rows and the feed was only still holding the item because nothing had
+# happened to it yet.
+if ! wait_until 180 episode_is missing; then
+  fail "the vanished file was never noticed at all (episode is '$(episode_status)')"
+else
+  ITEMS="$(feed_items)"
+  [ "$ITEMS" = "1" ] && pass "a missing file does not immediately disappear from the feed" || fail "expected 1 item during grace, saw ${ITEMS}"
+
+  # Shorten the grace period the way an owner would, through the API, and only then
+  # fake the clock — and only where the sweep reads it. SelfPod has no way to be told
+  # an episode has been missing for an hour, and waiting a real hour is not a test
+  # anyone would run.
+  GRACE_SET="$(api -X PATCH "${BASE}/api/settings" -H 'Content-Type: application/json' \
+    -d '{"missingGraceSeconds":60}' | grep -c 'missing_grace_seconds')"
+  BACKDATED="$(docker exec "$NAME" node -e '
 const D = require("better-sqlite3");
 const db = new D("/data/db.sqlite");
-db.prepare("UPDATE settings SET value=? WHERE key=?").run("60", "missing_grace_seconds");
-db.prepare("UPDATE episodes SET missing_since=? WHERE status=?")
+const result = db.prepare("UPDATE episodes SET missing_since=? WHERE status=?")
   .run(new Date(Date.now() - 3600e3).toISOString(), "missing");
-' >/dev/null 2>&1
-printf '  … waiting for the scheduled sweep\n'
-sleep 70
-ITEMS="$(feed | grep -c '<item>')"
-[ "$ITEMS" = "0" ] && pass "it dropped out of the feed once the grace period passed" || fail "expected 0 items after grace, saw ${ITEMS}"
+console.log(result.changes);
+' 2>&1 | tail -1)"
+
+  # Both halves of the set-up have to have taken, or the sweep is being waited on for
+  # a moment that never arrives and the failure would read as a bug in the sweep.
+  if [ "$GRACE_SET" != "1" ]; then
+    fail "the grace period could not be shortened through the API"
+  elif [ "$BACKDATED" != "1" ]; then
+    fail "could not backdate the missing mark (got '${BACKDATED}'), so the grace period was never reached"
+  else
+    # The sweep runs on a scheduler tick and nothing exposes it over HTTP, so this
+    # waits for the next tick — up to one rescan interval away — and returns the
+    # moment the feed drops rather than at some fixed time after it.
+    printf '  … waiting for the scheduled sweep\n'
+    wait_until 180 feed_is_empty \
+      && pass "it dropped out of the feed once the grace period passed" \
+      || fail "expected 0 items after grace, saw $(feed_items)"
+  fi
+fi
 
 # --------------------------------------------------------------------------- 8
 step "8. Adding more shows needs no change to the container configuration"
