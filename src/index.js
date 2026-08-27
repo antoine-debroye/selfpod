@@ -126,7 +126,7 @@ async function main() {
     metadata, activity, health, events, logger, adDetect,
   });
   const trimmer = createTrimmer({
-    db, config, events, logger, health, shows, episodes, adDetect, metadata,
+    config, events, logger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
     db, events, logger, health, shows, episodes, adDetect, trimmer, activity,
@@ -176,6 +176,10 @@ async function main() {
     .sweepStaging()
     .then(() => remoteFeeds.reconcile())
     .catch((err) => logger.warn({ err }, 'could not tidy up interrupted downloads'));
+
+  // The same idea for trims killed part-way: most of an episode under a temporary
+  // name that nothing else would ever come back for.
+  trimmer.sweepStaging().catch((err) => logger.warn({ err }, 'could not tidy up interrupted trims'));
 }
 
 function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, logger }) {

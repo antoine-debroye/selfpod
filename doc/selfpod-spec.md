@@ -998,11 +998,28 @@ whether the owner is asked first.
 ### 19.2 Two detectors, one catalogue
 
 **Repetition across a show's episodes** finds what was cut in at
-production time. It needs no acoustic fingerprinting and no decoding: a
-segment repeated within a podcast arrives either by the producer dropping
-the same audio into an edit — same PCM, therefore the same encoded frames
-— or by post-encode concatenation, which is literally the same bytes.
-Hashing frame payloads is enough.
+production time, and only where the repeat is *encoded* identically —
+audio concatenated after encoding, not audio re-encoded in place.
+
+The design assumed more than that, and the assumption was wrong. It held
+that a producer dropping the same audio into an edit yields the same PCM
+and therefore the same frames. It does not: the whole programme is
+normally mastered and encoded in one pass, so identical source audio is
+encoded afresh in every episode and the bytes differ. Measured on three
+real Planet Money episodes — same encoder, same bitrate, same sample rate
+— nine matching frames out of ninety thousand, longest identical run 1.6
+seconds. That is the ordinary case for a professionally produced show.
+
+What this detector does find is post-encode concatenation, which is real
+and common: ready-made audio dropped in as a file, and anything a host
+stitches at serve time. What it cannot find would need acoustic
+fingerprinting — hashing the *sound* rather than the bytes, robust to
+re-encoding — and that needs a decoder, which is the dependency this whole
+design exists without. The trade is stated rather than buried: no decoder
+means no ffmpeg, no video-codec attack surface, no GPL question, and cuts
+measured in milliseconds; the price is that this detector does not apply
+to professionally mastered shows. The UI says so in those words rather
+than reporting "nothing found yet" for ever.
 
 **Comparing two downloads of one episode** finds what a host stitches in
 per request. It is the stronger signal, and the only one that identifies

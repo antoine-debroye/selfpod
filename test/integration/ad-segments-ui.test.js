@@ -101,6 +101,41 @@ describe('the adverts page', () => {
   });
 });
 
+describe('a show whose episodes cannot be compared byte for byte', () => {
+  it('says it looked and found nothing, rather than "not yet" for ever', async () => {
+    // Comparing episodes finds audio that is *encoded* identically. A show mastered
+    // and encoded in one pass has its theme tune encoded afresh every episode — same
+    // sound, different bytes — and no number of further episodes will change that.
+    // Measured on three real Planet Money episodes: nine matching frames out of
+    // ninety thousand. Leaving someone on "nothing found yet" is a wait with no end.
+    const show = await makeShow({ mode: 'review', count: 0 });
+    for (let n = 0; n < 3; n += 1) {
+      await writeFile(join(showDir, `unique-${n}.mp3`), stitch(segment(100_000 + n * 400_000, framesFor(90))));
+    }
+    await server.scanner.scanAllNow('manual');
+    await server.adPipeline.processShow(show.id);
+
+    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+
+    assert.match(body, /compared 3 episodes and found no repeated audio/i);
+    assert.ok(!/nothing found yet/i.test(body), 'it told them to keep waiting');
+    // And it points at the detector that does still apply.
+    assert.match(body, /fetching one episode twice/i);
+  });
+
+  it('still says "not yet" when it genuinely has not looked at enough', async () => {
+    const show = await makeShow({ mode: 'review', count: 0 });
+    await writeFile(join(showDir, 'one.mp3'), stitch(segment(100_000, framesFor(90))));
+    await server.scanner.scanAllNow('manual');
+    await server.adPipeline.processShow(show.id);
+
+    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+
+    assert.match(body, /nothing found yet/i);
+    assert.ok(!/found no repeated audio/i.test(body));
+  });
+});
+
 describe('the show page', () => {
   it('says an episode is being held, where someone would go looking for it', async () => {
     // This is where you come when an episode has not appeared. Being told only on

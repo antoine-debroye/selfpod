@@ -1,7 +1,7 @@
 import { AD_TRIM_MODES, ITEM_DECISION, SCAN_TRIGGER, SEGMENT_STATUS, SHOW_STATUS } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseKeywords } from '../../lib/feed-filter.js';
-import { presentSegment } from '../../lib/present-segment.js';
+import { describeComparability, presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
@@ -58,6 +58,11 @@ export default async function fragmentRoutes(fastify, services) {
         segments: services.adDetect
           .listSegments(show.id)
           .map((row) => presentSegment(row, { episodes })),
+        ...describeComparability({
+          show,
+          episodes,
+          segments: services.adDetect.listSegments(show.id),
+        }),
       });
     }
 

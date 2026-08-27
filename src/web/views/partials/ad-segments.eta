@@ -37,6 +37,26 @@
         </div>
       <% } %>
     </div>
+  <% } else if (!segments.length && it.lookedAndFoundNothing) { %>
+    <%
+      /* "Looked and found nothing" is not "not yet", and saying the second when the
+         first is true leaves someone waiting for ever. See describeComparability. */
+    %>
+    <div class="callout" role="status">
+      <strong>SelfPod compared <%= it.comparableEpisodes %> episodes and found no repeated audio.</strong>
+      <p>
+        It compares the audio exactly, byte for byte. That finds a sponsor read the
+        producer drops in as a ready-made file — and it finds nothing at all in a show
+        that is mixed and encoded in one piece, because then the same theme tune comes
+        out as different audio data in every episode. Most professionally produced
+        podcasts are made that way, so this is a common and unremarkable answer.
+      </p>
+      <p class="muted">
+        Adverts that a podcast host inserts while it sends you the file are found a
+        different way, by fetching one episode twice and comparing — that still applies
+        to this show, and happens on its own.
+      </p>
+    </div>
   <% } else if (!segments.length) { %>
     <div class="empty">
       Nothing found yet. SelfPod compares episodes to each other, so it needs a few

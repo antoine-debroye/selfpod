@@ -76,9 +76,3 @@ export function frameToMs(index, { sampleRate, samplesPerFrame }) {
   if (!sampleRate || !samplesPerFrame) return 0;
   return Math.round((index * samplesPerFrame * 1000) / sampleRate);
 }
-
-/** The frame index at or before a given millisecond offset. */
-export function msToFrame(ms, { sampleRate, samplesPerFrame }) {
-  if (!sampleRate || !samplesPerFrame) return 0;
-  return Math.floor((ms * sampleRate) / (samplesPerFrame * 1000));
-}

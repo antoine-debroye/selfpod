@@ -1,5 +1,5 @@
 import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
-import { presentSegment } from '../../lib/present-segment.js';
+import { describeComparability, presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
 import { bucketEdges, DEFAULT_RANGE, RANGES, resolveRange } from '../../lib/time-range.js';
@@ -354,6 +354,11 @@ export default async function pageRoutes(fastify, services) {
         segments: services.adDetect
           .listSegments(show.id)
           .map((row) => presentSegment(row, { episodes })),
+        ...describeComparability({
+          show,
+          episodes,
+          segments: services.adDetect.listSegments(show.id),
+        }),
       }),
       APP_LAYOUT,
     );

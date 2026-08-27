@@ -289,6 +289,22 @@ every one of them. Set it per show, under **Adverts** on the show's page.
 | **Show me what repeats, and wait** | New episodes are held out of your feed until you have decided about them. Nothing is removed that you did not ask for. |
 | **Remove repeats without asking** | SelfPod cuts what it is confident about and publishes. It still leaves anything that looks like a theme tune or credits for you to look at. |
 
+**It compares audio exactly, byte for byte, and that decides which shows it can help
+with.** SelfPod does not decode your audio — that is what makes it fast and what keeps
+a video-codec library out of the container — so it finds repeated audio only where the
+repeated part is literally the same audio data. That happens when a producer drops a
+ready-made file into an edit, and it is what a podcast host does when it stitches an
+advert in as it sends you the episode. It does **not** happen in a show that is mixed
+and encoded in one piece: there the same theme tune comes out as different data every
+episode, and comparing finds nothing however many episodes you have.
+
+Most professionally produced podcasts are made that way. Measured on three real
+episodes of Planet Money: nine matching frames out of ninety thousand. So expect
+"compared 3 episodes and found no repeated audio" to be a common and unremarkable
+answer — SelfPod says exactly that rather than leaving you waiting. Adverts inserted
+by the host as it serves are found a different way, described below, and that route is
+unaffected.
+
 **It does not know what an advert is, and does not pretend to.** A theme tune, a
 sponsor read, a standing intro and a recurring stinger repeat in exactly the same
 way, and nothing in the audio separates them. So SelfPod tells you what it found —

@@ -225,6 +225,37 @@ describe('a VBRI header', () => {
   });
 });
 
+describe('an episode longer than SelfPod will read in one piece', () => {
+  it('is refused rather than quietly shortened', async () => {
+    // The failure this replaces was silent and total: the reader stopped at its cap,
+    // the cutter built the file from what it had, and the frame count, the measured
+    // duration and the bytes all agreed on an episode that was hours short. The
+    // listener found out when it stopped mid-sentence.
+    const { MAX_FRAMES, readFrames } = await import('../../src/lib/mp3-frames.js');
+    // Just past the cap, built once and reused — this is a large allocation.
+    const buffer = segment(1, MAX_FRAMES + 500);
+
+    const read = readFrames(buffer);
+    assert.equal(read.truncated, true, 'the reader did not notice it had stopped early');
+
+    assert.equal(
+      cutFrames(buffer, [{ startFrame: 10, endFrame: 20 }]),
+      null,
+      'it cut a file it had only partly read',
+    );
+  });
+
+  it('reads a file just under the cap in full', () => {
+    // The positive control: the refusal above must be about the cap and not about
+    // large files in general.
+    const buffer = segment(1, 1000);
+    const read = readFrames(buffer, { maxFrames: 1001 });
+
+    assert.equal(read.truncated, false);
+    assert.ok(cutFrames(buffer, [{ startFrame: 10, endFrame: 20 }]));
+  });
+});
+
 describe('cost', () => {
   it('cuts an episode-sized file in well under a second', () => {
     // The reason this is not a subprocess. An hour of audio is about 137,000 frames;

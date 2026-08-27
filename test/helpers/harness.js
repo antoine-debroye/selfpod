@@ -117,7 +117,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
   const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes });
   const trimmer = createTrimmer({
-    db, config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
+    config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
     db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity,

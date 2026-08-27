@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { TRIMMABLE_EXTENSIONS, TRIM_STATUS } from '../constants.js';
@@ -42,7 +42,7 @@ import { newId } from '../lib/tokens.js';
 /** Reasons a trim did not happen that are not faults. */
 const EXPECTED_OUTCOMES = new Set(['nothing_approved', 'unsupported_format', 'unknown_show']);
 
-export function createTrimmer({ db, config, events, logger, health, shows, episodes, adDetect, metadata }) {
+export function createTrimmer({ config, events, logger, health, shows, episodes, adDetect, metadata }) {
   function showDir(showId) {
     return join(config.trimmedDir, showId);
   }
@@ -100,6 +100,37 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
 
   const api = {
     pathFor,
+
+    /**
+     * Removes working files left behind by a trim that never finished.
+     *
+     * A trimmed copy is written under a dot-prefixed temporary name and renamed into
+     * place. Between those two steps the process can be killed — a NAS rebooting, a
+     * container update — and what is left is most of an episode under a name nothing
+     * will ever look for again. Nothing else would collect it: it is not in the
+     * database, not in a show folder, and not named after any episode.
+     *
+     * Six hours rather than immediately, so a sweep at boot cannot delete a file a
+     * trim already running is still writing.
+     */
+    async sweepStaging() {
+      const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+      let removed = 0;
+      const shows_ = await readdir(config.trimmedDir).catch(() => []);
+      for (const showId of shows_) {
+        const directory = join(config.trimmedDir, showId);
+        for (const name of await readdir(directory).catch(() => [])) {
+          if (!name.startsWith('.') || !name.endsWith('.tmp')) continue;
+          const path = join(directory, name);
+          const info = await stat(path).catch(() => null);
+          if (info && info.mtimeMs > cutoff) continue;
+          await rm(path, { force: true }).catch(() => {});
+          removed += 1;
+        }
+      }
+      if (removed) logger?.info({ removed }, 'cleaned up interrupted trims');
+      return { removed };
+    },
 
     /**
      * Produces the trimmed copy of one episode from its approved segments.
@@ -226,16 +257,6 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         else if (!EXPECTED_OUTCOMES.has(outcome.reason)) failed += 1;
       }
       return { trimmed, failed, considered: rows.length };
-    },
-
-    /** Every episode whose trimmed copy no longer matches the decisions. */
-    pending(showId) {
-      return db
-        .prepare(
-          `SELECT * FROM episodes
-            WHERE show_id = ? AND (trim_status = '${TRIM_STATUS.PENDING}' OR trim_status IS NULL)`,
-        )
-        .all(showId);
     },
 
   };

@@ -48,6 +48,15 @@ changes what your listeners see, it says so.
   across a show — the sponsor read that opens every episode, the bed under the
   credits — and remove it from all of them. Set it per show, under **Adverts**.
 
+  **Which shows this helps with, plainly.** SelfPod compares audio exactly rather
+  than decoding it, so comparing episodes finds a repeat only where it is literally the
+  same audio data: a ready-made file dropped into an edit, or an advert a host stitches
+  in as it serves. In a show mixed and encoded in one piece — which is most
+  professionally produced podcasts — the same theme tune comes out as different data
+  every episode and comparing finds nothing, however many episodes you have. SelfPod
+  says so in those words rather than leaving you waiting. Host-inserted adverts are
+  found a different way and are unaffected.
+
   **It does not know what an advert is, and never claims to.** A theme tune, a
   sponsor read, a standing intro and a recurring stinger repeat in exactly the same
   way, and nothing in the audio tells them apart. So SelfPod shows you what it found

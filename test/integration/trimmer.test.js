@@ -387,6 +387,53 @@ describe('when an episode or a show goes', () => {
   });
 });
 
+describe('a trim that never finished', () => {
+  it('leaves nothing behind after a sweep', async () => {
+    // The process can be killed between writing the copy and renaming it into place —
+    // a NAS rebooting, a container update. What is left is most of an episode under a
+    // name that is in no database, no show folder, and named after no episode.
+    const show = await makeShow();
+    const { utimes, writeFile: write, readdir } = await import('node:fs/promises');
+    const { mkdir } = await import('node:fs/promises');
+    const dir = join(app.config.trimmedDir, show.id);
+    await mkdir(dir, { recursive: true });
+    const orphan = join(dir, '.abandoned.tmp');
+    await write(orphan, Buffer.alloc(1024));
+    const old = new Date(Date.now() - 7 * 3600_000);
+    await utimes(orphan, old, old);
+
+    const result = await app.trimmer.sweepStaging();
+
+    assert.equal(result.removed, 1);
+    assert.deepEqual(await readdir(dir), []);
+  });
+
+  it('does not delete one a trim in progress is still writing', async () => {
+    const show = await makeShow();
+    const { mkdir, readdir, writeFile: write } = await import('node:fs/promises');
+    const dir = join(app.config.trimmedDir, show.id);
+    await mkdir(dir, { recursive: true });
+    await write(join(dir, '.in-flight.tmp'), Buffer.alloc(1024));
+
+    const result = await app.trimmer.sweepStaging();
+
+    assert.equal(result.removed, 0, 'it deleted a file something was still writing');
+    assert.deepEqual(await readdir(dir), ['.in-flight.tmp']);
+  });
+
+  it('leaves the finished copies alone', async () => {
+    const show = await makeShow();
+    await detectAndApprove(show);
+    await app.trimmer.trimShow(show.id);
+    const { readdir } = await import('node:fs/promises');
+    const before = await readdir(join(app.config.trimmedDir, show.id));
+
+    await app.trimmer.sweepStaging();
+
+    assert.deepEqual(await readdir(join(app.config.trimmedDir, show.id)), before);
+  });
+});
+
 describe('a format whose frames SelfPod cannot rejoin', () => {
   it('is left alone rather than guessed at', async () => {
     const show = await makeShow();
