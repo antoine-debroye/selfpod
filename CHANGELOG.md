@@ -7,6 +7,26 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.6.1 — 2026-08-27
+
+### Fixed
+
+- **Neither switch in Settings did anything.** Turning "Follow podcast feeds" on — or
+  "Live file detection" off — appeared to work and then sprang back, because the
+  setting was never saved. Both switches asked the browser to run a snippet of
+  JavaScript written into the page itself, and SelfPod deliberately tells browsers not
+  to run those: it is the rule that stops an injected script doing anything, and it is
+  worth keeping. The browser therefore refused, and refused *silently* — no error
+  anywhere, nothing in the log, no request made.
+
+  The consequence was worse than a stiff switch. "Follow podcast feeds" is off until
+  you turn it on, and it could not be turned on, so following a feed could not be set
+  up at all in 1.6.0 — the feature was unreachable from the moment it shipped.
+
+  Both switches now work, and a test refuses to let any page carry that kind of
+  in-page JavaScript again, since the security rule above is written down as something
+  the app relies on being true.
+
 ## 1.6.0 — 2026-08-27
 
 ### Added

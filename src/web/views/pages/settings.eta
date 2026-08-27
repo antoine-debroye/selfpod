@@ -104,7 +104,7 @@
           hx-post="/ui/settings/watcher" hx-target="closest .set-row" hx-swap="outerHTML">
       <div class="toggle<%= s.watcherEnabled ? ' on' : '' %>">
         <input type="checkbox" id="watcher-enabled" name="watcherEnabled" role="switch" class="switch-input"
-               value="1"<%= s.watcherEnabled ? ' checked' : '' %> onchange="this.form.requestSubmit()">
+               value="1"<%= s.watcherEnabled ? ' checked' : '' %> data-submit-on-change>
         <label class="switch" for="watcher-enabled" aria-hidden="true"></label>
         <span class="tl" data-toggle-label>
           <%= s.watcherEnabled ? (r.watcher && r.watcher.degraded ? 'Polling' : 'Active') : 'Off' %>
@@ -130,7 +130,7 @@
       <div class="toggle<%= s.subscriptionsEnabled ? ' on' : '' %>">
         <input type="checkbox" id="subscriptions-enabled" name="subscriptionsEnabled" role="switch"
                class="switch-input" value="1"<%= s.subscriptionsEnabled ? ' checked' : '' %>
-               onchange="this.form.requestSubmit()">
+               data-submit-on-change>
         <label class="switch" for="subscriptions-enabled" aria-hidden="true"></label>
         <span class="tl" data-toggle-label><%= s.subscriptionsEnabled ? 'On' : 'Off' %></span>
       </div>

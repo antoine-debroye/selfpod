@@ -178,6 +178,23 @@
     if (label && (label.textContent === 'Yes' || label.textContent === 'No')) {
       label.textContent = input.checked ? 'Yes' : 'No';
     }
+
+    /*
+     * A switch that saves as soon as it is flipped says so with an attribute, and the
+     * submitting happens here rather than in an `onchange` on the element.
+     *
+     * It used to be inline, and inline is unreachable: this app sends
+     * `script-src 'self'` with no `unsafe-inline`, so the browser refuses to run an
+     * `on*` attribute and refuses silently — no console error, no network request, a
+     * switch that animates and then springs back. Both settings toggles were dead in
+     * 1.6.0 for exactly this reason, which meant the feature whose master switch that
+     * is could not be turned on at all.
+     *
+     * The attribute is opt-in because not every switch should save on its own: the
+     * explicit-content one lives in a form with its own Save button, and submitting
+     * that form early would save half-finished edits to a show.
+     */
+    if (input.form && input.hasAttribute('data-submit-on-change')) input.form.requestSubmit();
   });
 
   /* ------------------------------------------------------------- clipboard */

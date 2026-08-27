@@ -14,6 +14,13 @@ import fp from 'fastify-plugin';
  * single line is what turns a hypothetical HTML-injection bug from "attacker runs
  * code in the admin's session" into "attacker renders some harmless markup".
  *
+ * That claim is load-bearing in both directions, and it was briefly untrue. Two
+ * toggles in Settings carried `onchange="…"` attributes, which this policy refuses to
+ * run — silently, with no console error and no request. The switches animated and
+ * sprang back, and because one of them was the master switch for following feeds, the
+ * feature could not be turned on at all. `test/unit/no-inline-scripts.test.js` now
+ * enforces the claim instead of trusting it.
+ *
  * Styles are the one concession: templates use inline `style` attributes for layout,
  * so `style-src` allows inline. Injected CSS is a far smaller problem than injected
  * script, and the alternative is rewriting every template for no security gain that
