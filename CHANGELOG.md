@@ -7,6 +7,32 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.6.2 — 2026-08-27
+
+### Fixed
+
+- **An advert stitched in as the episode is sent was invisible.** SelfPod decided
+  whether an episode was worth downloading a second time — the check that finds adverts
+  a host inserts on the way out — by reading the file's own structure: a change of
+  format part-way through, a header disagreeing with its contents, untidy joins. A host
+  that serves cleanly encoded audio shows none of that, so the file looks innocent and
+  the check never ran.
+
+  It now also compares the file against the length the feed claims for it. A publisher
+  states how long an episode runs and does not revise that number when an advert is
+  added on the way out, so audio past the stated length is audio the publisher did not
+  count. Found on a real show: five episodes declared between 1:14 and 4:11, each
+  arriving 21 to 23 seconds longer, with an advert on the end — and not one of the
+  older signals fired on any of them.
+
+- **A show could be told it had nothing repeated in it before anything had been
+  compared.** Reading a show means decoding every episode, which takes a while; the
+  adverts page counted the MP3 files in the folder instead of the episodes it had
+  actually listened to, so it announced "compared 5 episodes and found no repeated
+  audio" the moment a show was switched on. On a real show it said exactly that, and a
+  minute later three segments were sitting underneath the sentence denying they
+  existed. It now counts what it has heard.
+
 ## 1.6.1 — 2026-08-27
 
 ### Fixed

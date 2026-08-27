@@ -404,10 +404,12 @@ export function createRemoteFeeds({
    * fine, SelfPod simply will not be re-checking it, and an exception thrown for that
    * would throw away a file that is already on disk and already accepted.
    */
-  async function planRecheck(path, filename) {
+  async function planRecheck(path, filename, declaredDurationSeconds) {
     if (!filename.toLowerCase().endsWith('.mp3')) return {};
     try {
-      const signals = describeStitchSignals(frameProfile(await readFile(path)));
+      const signals = describeStitchSignals(frameProfile(await readFile(path)), {
+        declaredDurationSeconds,
+      });
       if (!signals.likely) return {};
       return {
         recheck_reason: signals.detail,
@@ -573,7 +575,7 @@ export function createRemoteFeeds({
       // one looks like it had adverts joined on rather than mixed in. It decides one
       // thing: whether to spend a second download on it in a day's time. See
       // lib/stitch-signals.js for why that bar is deliberately high.
-      const recheck = await planRecheck(staged, extension.filename);
+      const recheck = await planRecheck(staged, extension.filename, row.declared_duration_seconds);
 
       subscriptions.markItem(row.id, {
         identity_key: identityKey,

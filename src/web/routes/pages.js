@@ -358,6 +358,7 @@ export default async function pageRoutes(fastify, services) {
           show,
           episodes,
           segments: services.adDetect.listSegments(show.id),
+          fingerprinted: services.adDetect.countFingerprinted(show.id),
         }),
       }),
       APP_LAYOUT,

@@ -316,9 +316,28 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     return changed;
   }
 
+  const countFingerprints = db.prepare(
+    `SELECT COUNT(*) AS n
+       FROM episode_fingerprints f
+       JOIN episodes e ON e.id = f.episode_id
+      WHERE e.show_id = ?`,
+  );
+
   const api = {
     fingerprintEpisode,
     loadFingerprint,
+
+    /**
+     * How many of a show's episodes SelfPod has actually listened to.
+     *
+     * Not the same as how many MP3s are in the folder, and the difference is the whole
+     * point: reading a show decodes every episode, so for as long as that takes the two
+     * numbers disagree — and a page that used the second one told people their show had
+     * nothing repeated in it before anything had been compared.
+     */
+    countFingerprinted(showId) {
+      return countFingerprints.get(showId)?.n ?? 0;
+    },
 
     /** Fingerprints every episode of a show that needs it. */
     async fingerprintShow(showId, { force = false } = {}) {

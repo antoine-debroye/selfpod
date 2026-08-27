@@ -123,6 +123,30 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
     assert.match(body, /fetching one episode twice/i);
   });
 
+  it('does not announce a verdict before it has listened to anything', async () => {
+    // The bug this replaces was reported by the page itself. A real show was switched
+    // on, and while it was still decoding its episodes the page said "SelfPod compared
+    // 5 episodes and found no repeated audio". A minute later three segments were
+    // sitting underneath that sentence.
+    //
+    // It was counting MP3 files in the folder rather than episodes it had listened to,
+    // and those two numbers differ for exactly as long as the work takes.
+    const show = await makeShow({ mode: 'review', count: 0 });
+    for (let n = 0; n < 3; n += 1) {
+      await writeFile(join(showDir, `unread-${n}.mp3`), stitch(segment(100_000 + n * 400_000, framesFor(90))));
+    }
+    await server.scanner.scanAllNow('manual');
+    // Scanned, so the files are there — but nothing has been fingerprinted yet.
+
+    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+
+    assert.ok(
+      !/found no repeated audio/i.test(body),
+      'it declared a result before comparing anything',
+    );
+    assert.match(body, /nothing found yet/i);
+  });
+
   it('still says "not yet" when it genuinely has not looked at enough', async () => {
     const show = await makeShow({ mode: 'review', count: 0 });
     await writeFile(join(showDir, 'one.mp3'), stitch(segment(100_000, framesFor(90))));

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { AD_TRIM_MODES, SEGMENT_STATUS, TRIMMABLE_EXTENSIONS } from '../../constants.js';
+import { AD_TRIM_MODES, SEGMENT_STATUS } from '../../constants.js';
 import { resolveContained } from '../../lib/contained-path.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { cutFrames } from '../../lib/mp3-cut.js';
@@ -49,24 +49,19 @@ export default async function adSegmentRoutes(fastify, services) {
     const counts = episodes.counts(show.id);
 
     /*
-     * Whether SelfPod has looked properly and found nothing.
+     * Whether SelfPod has looked properly and found nothing — which is not "not yet".
      *
-     * This is not the same as "not yet", and telling them apart is the difference
-     * between a page that says "wait" for ever and one that answers. A show can simply
-     * have nothing its episodes share, and that answer arrives as soon as there are
-     * enough episodes to compare.
+     * Counted from episodes it has actually listened to. Counting the MP3 files in the
+     * folder instead meant the page announced a final answer the moment a show was
+     * switched on, before any of them had been read.
      */
-    const compared = episodes
-      .listByShow(show.id)
-      .filter((row) => TRIMMABLE_EXTENSIONS.includes(row.filename.slice(row.filename.lastIndexOf('.')).toLowerCase()));
-    const lookedAndFoundNothing =
-      segments.length === 0 && compared.length >= (show.ad_auto_min_episodes ?? 3);
+    const compared = adDetect.countFingerprinted(show.id);
 
     return {
       mode: show.ad_trim_mode ?? 'off',
       minEpisodes: show.ad_auto_min_episodes ?? 3,
-      comparableEpisodes: compared.length,
-      lookedAndFoundNothing,
+      comparableEpisodes: compared,
+      lookedAndFoundNothing: segments.length === 0 && compared >= (show.ad_auto_min_episodes ?? 3),
       // The number of episodes SelfPod is sitting on. Without this the page can say
       // "waiting" without ever saying what for, and a feed that quietly stopped is
       // the failure this whole app is built against.

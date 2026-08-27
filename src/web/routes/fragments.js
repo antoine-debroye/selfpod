@@ -62,6 +62,7 @@ export default async function fragmentRoutes(fastify, services) {
           show,
           episodes,
           segments: services.adDetect.listSegments(show.id),
+          fingerprinted: services.adDetect.countFingerprinted(show.id),
         }),
       });
     }

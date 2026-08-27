@@ -107,6 +107,35 @@ describe('deciding whether an episode is worth downloading twice', () => {
     assert.ok(wait > 23 * 3600_000, `only waiting ${Math.round(wait / 3600_000)}h`);
   });
 
+  it('marks one that arrives longer than the feed said it would be', async () => {
+    // The signal that found this in the wild, and the only one that fires on a host
+    // which serves cleanly encoded audio. The feed says how long the programme runs; an
+    // advert stitched in on the way out does not change that number, so audio past the
+    // stated length is audio the publisher did not count.
+    //
+    // The episode here is deliberately innocent in every other respect — one encode,
+    // one format, no header to disagree with — exactly as the real files were.
+    const plain = stitch(segment(10_000, framesFor(80)));
+    server.close();
+    server = createServer((req, res) => {
+      if (req.url.startsWith('/audio/')) {
+        audioRequests.push(req.url);
+        res.writeHead(200, { 'content-type': 'audio/mpeg' });
+        return res.end(plain);
+      }
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      // The feed claims a minute; the file is eighty seconds.
+      return res.end(rss().replace('<itunes:duration>4800</itunes:duration>', '<itunes:duration>60</itunes:duration>'));
+    });
+    await new Promise((resolve) => server.listen(Number(origin.split(':')[2]), '127.0.0.1', resolve));
+
+    const { item } = await take();
+
+    assert.equal(item.decision, 'downloaded');
+    assert.ok(item.recheck_after, 'an episode 20s longer than declared was not marked for a second look');
+    assert.match(item.recheck_reason, /longer than the 60s the feed states/);
+  });
+
   it('leaves an ordinary episode alone', async () => {
     // The case that has to be right: a second download is a second counted listen in
     // the publisher's figures for an episode taken once.

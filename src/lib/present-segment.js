@@ -114,13 +114,24 @@ function formatDuration(ms) {
  * someone in that position leaves them waiting for an answer that has already arrived,
  * which is the kind of silence this app exists to avoid.
  */
-export function describeComparability({ show, episodes, segments }) {
-  const comparable = episodes
-    .listByShow(show.id)
-    .filter((row) => row.filename.toLowerCase().endsWith('.mp3'));
+export function describeComparability({ show, episodes, segments, fingerprinted }) {
+  /*
+   * Counted from episodes SelfPod has actually *listened to*, not from MP3 files
+   * sitting in the folder.
+   *
+   * Those two numbers differ for as long as the work takes, and reading a show is not
+   * quick: it decodes every episode. Counting files meant the page announced "compared
+   * 5 episodes and found no repeated audio" the moment the show was switched on —
+   * before it had compared anything. On a real show it said exactly that, and a minute
+   * later there were three segments sitting underneath the sentence denying they
+   * existed.
+   *
+   * Stating a conclusion before doing the work is the failure this app is built
+   * against, so the count now comes from the fingerprint table.
+   */
+  const compared = fingerprinted ?? 0;
   return {
-    comparableEpisodes: comparable.length,
-    lookedAndFoundNothing:
-      segments.length === 0 && comparable.length >= (show.ad_auto_min_episodes ?? 3),
+    comparableEpisodes: compared,
+    lookedAndFoundNothing: segments.length === 0 && compared >= (show.ad_auto_min_episodes ?? 3),
   };
 }

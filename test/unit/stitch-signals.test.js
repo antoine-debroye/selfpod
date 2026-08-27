@@ -93,6 +93,50 @@ describe('what is not enough on its own', () => {
   });
 });
 
+describe('a file longer than the feed says it is', () => {
+  it('is worth a second look, even when nothing about the file itself looks odd', () => {
+    // The case that found this. Five episodes of a real show, each declared 1:14 to
+    // 4:11 by the feed and each arriving 21 to 23 seconds longer, with an advert on the
+    // end. Not one of the other signals fired on any of them — the host serves cleanly
+    // encoded audio with no format change, no Xing header and no untidy joins — so read
+    // on its own the file looks innocent. Only the publisher's own claim gives it away.
+    const clean = frameProfile(segment(10_000, 900)); // ~23.5s, no internal oddities
+    const declared = Math.round(clean.durationMs / 1000) - 22;
+
+    const blind = describeStitchSignals(clean);
+    assert.equal(blind.likely, false, 'the fixture should look innocent on its own');
+
+    const told = describeStitchSignals(clean, { declaredDurationSeconds: declared });
+
+    assert.equal(told.likely, true);
+    assert.ok(told.reasons.includes('longer_than_the_feed_says'));
+    assert.match(told.detail, /22s longer/);
+  });
+
+  it('ignores a difference small enough to be rounding', () => {
+    // A feed states whole seconds and an encoder pads. Neither is an advert, and
+    // treating them as one would spend a second download on every episode ever taken.
+    const profile = frameProfile(segment(10_000, 900));
+    const declared = Math.round(profile.durationMs / 1000) - 2;
+
+    assert.equal(describeStitchSignals(profile, { declaredDurationSeconds: declared }).likely, false);
+  });
+
+  it('is unbothered by a file shorter than the feed claims', () => {
+    // Publishers overstate lengths for dull reasons. Missing audio is not inserted
+    // audio, and there is nothing here for a second download to find.
+    const profile = frameProfile(segment(10_000, 900));
+    const declared = Math.round(profile.durationMs / 1000) + 120;
+
+    assert.equal(describeStitchSignals(profile, { declaredDurationSeconds: declared }).likely, false);
+  });
+
+  it('says nothing when the feed states no length at all', () => {
+    const profile = frameProfile(segment(10_000, 900));
+    assert.equal(describeStitchSignals(profile, { declaredDurationSeconds: null }).likely, false);
+  });
+});
+
 describe('a file it cannot read', () => {
   it('says no rather than guessing', () => {
     for (const profile of [null, undefined, { frameCount: 0 }]) {
