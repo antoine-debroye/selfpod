@@ -391,6 +391,30 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     const audio = publishedAudio(episode);
     if (!isSafeFilename(audio.filename)) throw notFound('No episode here.', 'not_found');
 
+    /*
+     * The version in the URL has to be *checked*, or it is decoration.
+     *
+     * This route answers byte ranges. A client that fetched the first half of an
+     * episode, and asks for the rest after the audio behind it has been replaced,
+     * would otherwise be handed the second half of a different file and would join
+     * the two into an episode that never existed — with the right total length, no
+     * error, and nothing to notice. Refusing is the only safe answer: a download that
+     * fails is a download the app retries.
+     *
+     * The *absence* of `v` is itself a claim — "the untrimmed one" — which is what
+     * lets an episode that has never been trimmed keep the URL it has always had,
+     * while still being refused once it has been cut. Adding a version to every
+     * episode instead would hand every existing subscriber a new enclosure for audio
+     * that had not changed, and some apps re-download on that alone.
+     */
+    const asked = request.query?.v ?? null;
+    if (asked !== (audio.version ?? null)) {
+      throw notFound(
+        'That version of this episode is no longer the one being published.',
+        'stale_version',
+      );
+    }
+
     const sourceDir = audio.isTrimmed
       ? join(config.trimmedDir, episode.show_id)
       : shows.dirFor(show);

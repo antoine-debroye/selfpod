@@ -185,6 +185,55 @@ describe('while the work is still running', () => {
     assert.equal(midRun.includes('<item>'), false, 'the show was published mid-run');
   });
 
+  it('never publishes an episode with an undecided segment still in it', async () => {
+    // The hazard, stated exactly: while the trimmer works through a show, a listener's
+    // app is polling. If an episode is released the moment its own audio is cut, it
+    // goes out while other segments that belong in it are still undecided — and once
+    // the app has downloaded it, the hold has bought nothing at all.
+    const show = await makeShow({ mode: 'review', count: 3 });
+    await writeFile(
+      join(showDir, 'extra.mp3'),
+      stitch(
+        segment(400_000, framesFor(30)),
+        segment(2_000, framesFor(40)),   // the read every episode shares
+        segment(500_000, framesFor(30)),
+        segment(9_000, framesFor(35)),   // a second one, in this episode and one other
+      ),
+    );
+    await writeFile(
+      join(showDir, 'extra-2.mp3'),
+      stitch(segment(410_000, framesFor(30)), segment(9_000, framesFor(35)), segment(510_000, framesFor(30))),
+    );
+    await server.scanner.scanAllNow('manual');
+    await server.adPipeline.processShow(show.id);
+
+    // Approve only the segment every episode shares; the other stays undecided.
+    const shared = server.adDetect
+      .listSegments(show.id)
+      .find((row) => row.episode_count >= 4);
+    assert.ok(shared, 'the fixture did not produce a segment shared by every episode');
+    server.adDetect.decide(shared.id, SEGMENT_STATUS.APPROVED);
+
+    // A listener polling throughout the run, as an app on a schedule would be.
+    const seen = [];
+    const trimEpisode = server.trimmer.trimEpisode.bind(server.trimmer);
+    server.trimmer.trimEpisode = async (episode) => {
+      seen.push((await feedBody(show)).match(/<item>/g)?.length ?? 0);
+      return trimEpisode(episode);
+    };
+
+    await server.adPipeline.processShow(show.id);
+
+    assert.ok(seen.length >= 2, 'the run did not trim enough episodes to prove anything');
+    const undecided = server.adDetect.listSegments(show.id).filter((row) => row.status === 'candidate');
+    assert.ok(undecided.length > 0, 'the fixture left nothing undecided');
+    assert.deepEqual(
+      [...new Set(seen)],
+      [0],
+      `an episode was published mid-run with an undecided segment still in it: ${seen.join(', ')}`,
+    );
+  });
+
   it('publishes an episode that needs nothing without waiting for the ones that do', async () => {
     // On a long backfill the cutting queue can be minutes deep. An episode with
     // nothing to remove should not sit behind it.
@@ -208,6 +257,49 @@ describe('while the work is still running', () => {
       midRun.filter(([name]) => name !== 'one-off.mp3').every(([, hold]) => hold !== null),
       'the episodes that do need cutting were released before their cut existed',
     );
+  });
+});
+
+describe('a show SelfPod cannot read', () => {
+  it('publishes it rather than waiting for something that cannot happen', async () => {
+    // Turning the feature on for a show of .m4a files must not empty its feed. Only
+    // MP3 frames can be walked and rejoined today, so no number of further episodes
+    // would ever let SelfPod compare them — and "waiting for more episodes" would not
+    // merely be unhelpful, it would be false.
+    const show = await makeShow({ mode: 'review', count: 0 });
+    // Distinct files, because SelfPod identifies an episode by its content: three
+    // byte-identical copies are one episode, and the test would prove nothing.
+    const { readFile, writeFile: write } = await import('node:fs/promises');
+    const { FIXTURE_DIR } = await import('../helpers/harness.js');
+    const base = await readFile(join(FIXTURE_DIR, 'sample.m4a'));
+    for (let n = 0; n < 3; n += 1) {
+      await write(join(showDir, `talk-${n}.m4a`), Buffer.concat([base, Buffer.alloc(64 + n, n + 1)]));
+    }
+    await server.scanner.scanAllNow('manual');
+
+    await server.adPipeline.processShow(show.id);
+
+    assert.deepEqual(holds(show), [null, null, null], 'a show it cannot read was held for ever');
+    assert.equal((await feedBody(show)).match(/<item>/g).length, 3);
+  });
+
+  it('says so, rather than doing nothing quietly', async () => {
+    // The owner has switched on a feature that is doing nothing. Nothing else on the
+    // page would tell them, and silence here is how "I turned on advert removal and no
+    // adverts were removed" becomes unanswerable.
+    const show = await makeShow({ mode: 'review', count: 0 });
+    const { copyFile } = await import('node:fs/promises');
+    const { FIXTURE_DIR } = await import('../helpers/harness.js');
+    await copyFile(join(FIXTURE_DIR, 'sample.m4a'), join(showDir, 'talk.m4a'));
+    await server.scanner.scanAllNow('manual');
+
+    await server.adPipeline.processShow(show.id);
+
+    const said = server.health.list().find((row) => row.key === `ad_trim_unsupported_${show.id}`);
+    assert.ok(said, 'a show it cannot read was passed over in silence');
+    assert.match(said.detail, /MP3/);
+    // Informational, not a fault: nothing is broken, it simply does not apply.
+    assert.equal(said.level, 'info');
   });
 });
 
@@ -371,9 +463,11 @@ describe('what the trimmed audio actually is', () => {
     await server.adPipeline.processShow(show.id);
     const episode = server.episodes.listByShow(show.id).at(-1);
 
+    // At the URL the feed is advertising, version and all — the media route refuses a
+    // version that is not the one being published.
     const response = await server.app.inject({
       method: 'GET',
-      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}`,
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}?v=${episode.trimmed_etag}`,
     });
     const served = response.rawPayload;
     const original = episodeBytes(0);

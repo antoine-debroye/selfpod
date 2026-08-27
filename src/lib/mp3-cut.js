@@ -45,8 +45,13 @@ import { id3v2Size, readFrames, readXing } from './mp3-frames.js';
  * @returns {{buffer: Buffer, framesKept: number, framesRemoved: number, durationMs: number} | null}
  */
 export function cutFrames(buffer, ranges) {
-  const { frames } = readFrames(buffer);
+  const { frames, truncated } = readFrames(buffer);
   if (!frames.length) return null;
+  // A file too long to have been read whole cannot be cut. Building the result from a
+  // truncated frame list would drop everything past the cap — and would say nothing,
+  // because the frame count, the measured duration and the bytes would all agree with
+  // each other on a file that is hours short.
+  if (truncated) return null;
 
   const xing = readXing(buffer, frames[0]);
   const firstAudio = xing ? 1 : 0;
@@ -98,7 +103,7 @@ export function cutFrames(buffer, ranges) {
   }
   parts.push(buffer.subarray(runStart, runEnd));
 
-  if (xing) {
+  if (xing?.kind !== 'vbri' && xing) {
     // Rewritten rather than dropped. Without a correct Xing header a variable-bitrate
     // file reports the wrong length — every podcast app would show the original's
     // duration for a file that is minutes shorter — and seeking lands in the wrong
@@ -106,6 +111,11 @@ export function cutFrames(buffer, ranges) {
     const header = rewriteXing(buffer, frames[0], kept, keptBytes);
     parts.splice(tagBytes > 0 ? 1 : 0, 0, header);
   }
+  // A VBRI header is dropped instead of rewritten. Its seek table is a different shape
+  // and cannot be rebuilt from what is known here, and carrying the original forward
+  // would leave a table describing a file that no longer exists — the same broken
+  // scrubber the Xing rewrite exists to prevent. Without any header a player seeks by
+  // estimating from the bitrate, which is approximate rather than wrong.
 
   return {
     buffer: Buffer.concat(parts),

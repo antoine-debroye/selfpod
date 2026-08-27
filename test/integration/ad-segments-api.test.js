@@ -200,6 +200,37 @@ describe('hearing the segment before deciding', () => {
   });
 });
 
+describe('a file on the share that is not what it says it is', () => {
+  it('is not read through, any more than the other routes read through one', async () => {
+    // `/data/shows` is normally a writable SMB share: anyone who can drop a file there
+    // can drop a symlink there. Every other file-reading route in this app resolves
+    // and proves containment before opening anything, and this one returns a slice of
+    // whatever it opens — at frame offsets the author of the audio chose.
+    const { rm, symlink, writeFile: write } = await import('node:fs/promises');
+    const show = await makeShow();
+    await server.adPipeline.processShow(show.id);
+    const [found] = server.adDetect.listSegments(show.id);
+    const episode = server.episodes.get(found.occurrences[0].episode_id);
+
+    // Somewhere outside the share, holding something readable as audio.
+    const outside = join(server.dataDir, 'not-yours.mp3');
+    await write(outside, await originalOf(episode));
+
+    const onShare = join(showDir, episode.filename);
+    await rm(onShare);
+    await symlink(outside, onShare);
+
+    const sample = await server.get(`/api/ad-segments/${found.id}/sample.mp3`);
+    const control = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}`,
+    });
+
+    assert.equal(control.statusCode, 404, 'the control route stopped refusing symlinks');
+    assert.equal(sample.statusCode, 404, 'the segment sample was read through a symlink');
+  });
+});
+
 describe('turning the feature on and off', () => {
   it('releases the held episodes in the same request that switches it off', async () => {
     // Not on the next tick. Waiting five minutes to see whether a setting worked is

@@ -41,6 +41,13 @@ const BITRATES_V1_L3 = [null, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 22
 const BITRATES_V2_L3 = [null, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, null];
 const BITRATES_V1_L2 = [null, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, null];
 const BITRATES_V1_L1 = [null, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, null];
+// MPEG-2/2.5 Layer I has a table of its own (ISO 13818-3). Falling through to the
+// Layer III table reads index 9 as 80 kbit/s where the standard says 144, which makes
+// every frame length in such a file wrong and desynchronises the parser a few frames
+// in. No podcast is MPEG-2 Layer I; a wrong table is still a wrong table.
+const BITRATES_V2_L1 = [null, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, null];
+// MPEG-2/2.5 Layers II and III share one table.
+const BITRATES_V2_L2 = BITRATES_V2_L3;
 
 const SAMPLE_RATES = Object.freeze({
   1: [44100, 48000, 32000, null],
@@ -101,8 +108,8 @@ export function readFrameHeader(buffer, offset) {
 
   let bitrate;
   if (layer === 3) bitrate = version === 1 ? BITRATES_V1_L3[bitrateIndex] : BITRATES_V2_L3[bitrateIndex];
-  else if (layer === 2) bitrate = version === 1 ? BITRATES_V1_L2[bitrateIndex] : BITRATES_V2_L3[bitrateIndex];
-  else bitrate = version === 1 ? BITRATES_V1_L1[bitrateIndex] : BITRATES_V2_L3[bitrateIndex];
+  else if (layer === 2) bitrate = version === 1 ? BITRATES_V1_L2[bitrateIndex] : BITRATES_V2_L2[bitrateIndex];
+  else bitrate = version === 1 ? BITRATES_V1_L1[bitrateIndex] : BITRATES_V2_L1[bitrateIndex];
   if (!bitrate) return null;
 
   const padding = (buffer[offset + 2] >> 1) & 0x01;
@@ -153,8 +160,24 @@ function hashFrame(buffer, offset, length) {
  * Real podcast MP3s carry ID3v1 footers, APE tags, and occasionally junk between
  * frames, and a reader that stops at the first surprise reports half a file as the
  * whole of it — which for a diff means "everything after here is an advert".
+ *
+ * ## The frame cap, and why hitting it is an error rather than a limit
+ *
+ * There has to be one: a frame object costs about 98 bytes, so an unbounded read of a
+ * deliberately vast file is an unbounded allocation on a machine with two gigabytes.
+ * 700,000 frames is a little over five hours at 44.1 kHz, which is past any podcast
+ * and about 69 MB of frame objects — small beside the quarter of a gigabyte the file
+ * itself already occupies.
+ *
+ * `truncated` is the important part. A caller that treats a short list as the whole
+ * file will build a cut episode out of it and drop everything past the cap, silently:
+ * the reported frame count, the measured duration and the bytes all agree, and the
+ * listener finds out when the episode stops mid-sentence. So callers must refuse a
+ * truncated read rather than work with it, and this flag is how they can.
  */
-export function readFrames(buffer, { maxFrames = 400_000 } = {}) {
+export const MAX_FRAMES = 700_000;
+
+export function readFrames(buffer, { maxFrames = MAX_FRAMES } = {}) {
   const frames = [];
   const hashes = [];
   let offset = id3v2Size(buffer);
@@ -182,7 +205,7 @@ export function readFrames(buffer, { maxFrames = 400_000 } = {}) {
     offset += frame.length;
   }
 
-  return { frames, hashes, resyncs };
+  return { frames, hashes, resyncs, truncated: frames.length >= maxFrames };
 }
 
 /** Whether the first frame carries a Xing or Info header, and what it claims. */
@@ -202,7 +225,34 @@ export function readXing(buffer, firstFrame) {
   if (at + 12 > buffer.length) return null;
 
   const tag = buffer.toString('latin1', at, at + 4);
-  if (tag !== 'Xing' && tag !== 'Info') return null;
+  if (tag !== 'Xing' && tag !== 'Info') {
+    /*
+     * Fraunhofer's VBRI is the other way of saying the same thing, and it sits at a
+     * fixed offset of 32 bytes after the header rather than after the side info.
+     *
+     * Recognising it matters for one reason above the rest: a VBRI header carries its
+     * own seek table, and if this returns null for one, `cutFrames` treats the header
+     * frame as audio and leaves the table in place, pointing at offsets that no longer
+     * mean anything. That is exactly the broken-scrubber failure the Xing rewrite
+     * exists to prevent, arriving through the door next to it.
+     *
+     * The counts are read but the table is not rewritten: instead the header is
+     * dropped from the cut file, because a VBRI table cannot be rebuilt from the same
+     * information a Xing one can. A file with no header seeks approximately; a file
+     * with a wrong one seeks wrongly, which is worse.
+     */
+    const vbriAt = firstFrame.offset + 4 + 32;
+    if (vbriAt + 26 <= buffer.length && buffer.toString('latin1', vbriAt, vbriAt + 4) === 'VBRI') {
+      return {
+        kind: 'vbri',
+        vbr: true,
+        frameCount: buffer.readUInt32BE(vbriAt + 14) || null,
+        byteCount: buffer.readUInt32BE(vbriAt + 10) || null,
+        tocOffset: null,
+      };
+    }
+    return null;
+  }
 
   const flags = buffer.readUInt32BE(at + 4);
   let cursor = at + 8;
@@ -232,7 +282,7 @@ export function readXing(buffer, firstFrame) {
  * disagreeing.
  */
 export function frameProfile(buffer) {
-  const { frames, hashes, resyncs } = readFrames(buffer);
+  const { frames, hashes, resyncs, truncated } = readFrames(buffer);
   if (!frames.length) return null;
 
   const xing = readXing(buffer, frames[0]);
@@ -240,30 +290,44 @@ export function frameProfile(buffer) {
   const audioFrames = xing ? frames.slice(1) : frames;
   const audioHashes = xing ? hashes.slice(1) : hashes;
 
+  /*
+   * A VBR file changes bitrate constantly and legitimately, so a bitrate change there
+   * says nothing at all. Only sample rate and channel mode remain meaningful.
+   *
+   * Decided *before* the walk rather than filtered after it, which is not tidying. A
+   * variable-bitrate file makes nearly every frame a bitrate change, so building an
+   * entry for each one and discarding them afterwards allocated a hundred and
+   * thirty-odd thousand objects an hour — and each entry called `frameIndexToMs`,
+   * which walks from frame zero, making the whole thing quadratic. An hour of VBR took
+   * eight and a half seconds of blocked event loop to report no discontinuities at
+   * all; the benchmark in this file's own docstring missed it because the episode it
+   * used was constant bitrate.
+   */
+  const variableBitrate = xing?.vbr === true || countDistinct(audioFrames, 'bitrate') > 3;
+
   const discontinuities = [];
+  // Accumulated as the walk goes, for the same reason: asking for the time at frame N
+  // costs N steps, and asking once per frame costs N².
+  let elapsedMs = 0;
   for (let i = 1; i < audioFrames.length; i += 1) {
     const previous = audioFrames[i - 1];
     const current = audioFrames[i];
+    elapsedMs += (previous.samplesPerFrame / previous.sampleRate) * 1000;
+
     const changes = [];
-    if (previous.bitrate !== current.bitrate) changes.push('bitrate');
+    if (!variableBitrate && previous.bitrate !== current.bitrate) changes.push('bitrate');
     if (previous.sampleRate !== current.sampleRate) changes.push('sampleRate');
     if (previous.channelMode !== current.channelMode) changes.push('channelMode');
     if (!changes.length) continue;
     discontinuities.push({
       frameIndex: i,
-      atMs: frameIndexToMs(audioFrames, i),
+      atMs: Math.round(elapsedMs),
       changes,
       from: { bitrate: previous.bitrate, channelMode: previous.channelMode },
       to: { bitrate: current.bitrate, channelMode: current.channelMode },
     });
   }
-
-  // A VBR file changes bitrate constantly and legitimately, so a bitrate change there
-  // says nothing at all. Only sample rate and channel mode remain meaningful.
-  const variableBitrate = xing?.vbr === true || countDistinct(audioFrames, 'bitrate') > 3;
-  const meaningful = variableBitrate
-    ? discontinuities.filter((entry) => entry.changes.some((c) => c !== 'bitrate'))
-    : discontinuities;
+  const meaningful = discontinuities;
 
   return {
     frames: audioFrames,
@@ -281,6 +345,9 @@ export function frameProfile(buffer) {
         : null,
     discontinuities: meaningful,
     resyncs,
+    // Passed on rather than hidden: everything downstream has to refuse a file it has
+    // only seen part of.
+    truncated,
   };
 }
 

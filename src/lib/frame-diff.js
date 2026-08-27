@@ -35,80 +35,99 @@
 const MIN_RUN_FRAMES = 40;
 
 /**
- * A ceiling on the diff's search depth.
+ * How many identical frames in a row are enough to call two positions the same audio.
  *
- * The algorithm below is O(N·D) where D is the number of differing frames. For two
- * copies of one episode D is small — the adverts — and it is fast. For two *different*
- * episodes D approaches N and the work approaches N², which for 137,000 frames is not
- * something to discover in production. Past this, give up and say so: "these two files
- * are not the same episode" is a true and useful answer.
+ * Each frame hash is 32 bits over the frame's own payload, so even a handful of
+ * consecutive matches is already conclusive — thirty-two is far past the point where a
+ * coincidence is conceivable, and short enough to anchor on the last snatch of
+ * programme between two adverts.
  */
-const MAX_EDIT_DISTANCE = 4000;
+const ANCHOR_FRAMES = 32;
 
 /**
- * Myers' diff, returning the common subsequence as matched index pairs.
+ * How many places a repeated frame is tried before moving on.
  *
- * Returns null when the two sequences differ by more than the cap, which the caller
- * must treat as "not comparable" rather than as "everything differs".
+ * A near-silent or tonal frame can occur thousands of times in an episode. Trying
+ * every occurrence as a starting point is the difference between linear and quadratic.
+ */
+const MAX_SEED_OCCURRENCES = 8;
+
+/**
+ * How much of the shorter file has to be shared before the two are the same episode.
+ *
+ * Below this they are not two stitches of one programme — the publisher has replaced
+ * the audio, or the wrong file came back — and the honest answer is "these are not
+ * comparable" rather than a cut list that removes most of an episode.
+ */
+const MIN_COMMON_FRACTION = 0.5;
+
+/**
+ * Matched index pairs between two frame-hash sequences.
+ *
+ * This is not Myers' diff, and the reason is worth writing down because Myers is the
+ * obvious choice and was the first thing here. Myers costs O(N·D) time and, as written
+ * with a trace, O(D²) space, where D is the number of differing frames — so it needs a
+ * ceiling on D, and that ceiling turns into a ceiling on how many adverts an episode
+ * may contain. At four thousand it was about fifty-two seconds of advert per copy.
+ * Thirty seconds pre-roll, a minute mid-roll and thirty seconds post-roll is an
+ * entirely ordinary load and exceeds it — so the one signal SelfPod has that can tell
+ * an advert from a theme tune was switched off for most ad-supported shows, and the
+ * failure was reported to the owner as "the publisher replaced the audio".
+ *
+ * Anchoring instead has no such ceiling. Two copies of one episode share long stretches
+ * of byte-identical programme; find those, and what lies between them is the adverts.
+ * It is linear in space and, with the seed cap below, effectively linear in time.
  */
 function commonSubsequence(a, b) {
-  const n = a.length;
-  const m = b.length;
-  const max = Math.min(MAX_EDIT_DISTANCE, n + m);
-  // v[k] is the furthest x reached on diagonal k. Offset so k can be negative.
-  const offset = max;
-  const v = new Int32Array(2 * max + 2);
-  const trace = [];
-
-  for (let d = 0; d <= max; d += 1) {
-    trace.push(v.slice());
-    for (let k = -d; k <= d; k += 2) {
-      let x;
-      if (k === -d || (k !== d && v[k - 1 + offset] < v[k + 1 + offset])) {
-        x = v[k + 1 + offset];
-      } else {
-        x = v[k - 1 + offset] + 1;
-      }
-      let y = x - k;
-      while (x < n && y < m && a[x] === b[y]) {
-        x += 1;
-        y += 1;
-      }
-      v[k + offset] = x;
-      if (x >= n && y >= m) return backtrack(trace, a, b, d, offset);
+  // Where each frame hash occurs in the second copy.
+  const positions = new Map();
+  for (let i = 0; i < b.length; i += 1) {
+    const at = positions.get(b[i]);
+    if (at) {
+      if (at.length < MAX_SEED_OCCURRENCES) at.push(i);
+    } else {
+      positions.set(b[i], [i]);
     }
   }
-  return null;
-}
 
-/** Walks the recorded states backwards to recover which indices matched. */
-function backtrack(trace, a, b, d, offset) {
   const matches = [];
-  let x = a.length;
-  let y = b.length;
+  let ai = 0;
+  let bi = 0;
 
-  for (let step = d; step > 0; step -= 1) {
-    const v = trace[step];
-    const k = x - y;
-    const previousK =
-      k === -step || (k !== step && v[k - 1 + offset] < v[k + 1 + offset]) ? k + 1 : k - 1;
-    const previousX = v[previousK + offset];
-    const previousY = previousX - previousK;
+  while (ai < a.length) {
+    const candidates = positions.get(a[ai]);
+    let bestStart = -1;
+    let bestLength = 0;
 
-    while (x > previousX && y > previousY) {
-      x -= 1;
-      y -= 1;
-      matches.push([x, y]);
+    if (candidates) {
+      for (const candidate of candidates) {
+        // Anchors have to advance through both copies, or the "common" audio would be
+        // allowed to appear in a different order in each.
+        if (candidate < bi) continue;
+        let length = 0;
+        while (
+          ai + length < a.length &&
+          candidate + length < b.length &&
+          a[ai + length] === b[candidate + length]
+        ) {
+          length += 1;
+        }
+        if (length > bestLength) {
+          bestLength = length;
+          bestStart = candidate;
+        }
+      }
     }
-    x = previousX;
-    y = previousY;
+
+    if (bestLength >= ANCHOR_FRAMES) {
+      for (let k = 0; k < bestLength; k += 1) matches.push([ai + k, bestStart + k]);
+      ai += bestLength;
+      bi = bestStart + bestLength;
+      continue;
+    }
+    ai += 1;
   }
-  while (x > 0 && y > 0) {
-    x -= 1;
-    y -= 1;
-    matches.push([x, y]);
-  }
-  matches.reverse();
+
   return matches;
 }
 
@@ -135,8 +154,10 @@ export function diffFrames(a, b, { minRunFrames = MIN_RUN_FRAMES } = {}) {
   }
 
   const matches = commonSubsequence(a, b);
-  if (!matches) {
-    return { comparable: false, identical: false, onlyInA: [], onlyInB: [], commonFrames: 0 };
+  // Two files that share almost nothing are not two stitches of one episode. Reporting
+  // the difference would produce a cut list covering most of the programme.
+  if (matches.length < Math.min(a.length, b.length) * MIN_COMMON_FRACTION) {
+    return { comparable: false, identical: false, onlyInA: [], onlyInB: [], commonFrames: matches.length };
   }
 
   const onlyInA = gapsBetween(matches.map((pair) => pair[0]), a.length, minRunFrames);

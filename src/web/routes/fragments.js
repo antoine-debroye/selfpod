@@ -6,6 +6,7 @@ import { presentItem, presentSubscription } from '../../lib/present-subscription
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
 import { isValidCategory, isValidSubcategory } from '../lib/apple-categories.js';
+import { DECIDE_LIMIT, DETECT_LIMIT } from '../../routes/api/ad-segments.js';
 import { MIN_PASSWORD_LENGTH } from '../../routes/api/setup.js';
 import { subscribeQrCodes } from '../lib/qr.js';
 import { DEFAULT_SUBSCRIBE_TARGET } from '../lib/subscribe-links.js';
@@ -89,7 +90,9 @@ export default async function fragmentRoutes(fastify, services) {
       return renderSegments(reply, updated);
     });
 
-    scoped.post('/ui/shows/:slug/ad-detect', async (request, reply) => {
+    // The same caps as the JSON routes, and for the same reason: these run the
+    // identical work. A limit on one URL and not the other is not a limit.
+    scoped.post('/ui/shows/:slug/ad-detect', { preHandler: [fastify.rateLimit(DETECT_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       if (!show.ad_trim_mode || show.ad_trim_mode === 'off') {
         return isHtmx(request)
@@ -103,7 +106,7 @@ export default async function fragmentRoutes(fastify, services) {
       return renderSegments(reply, shows.get(show.id));
     });
 
-    scoped.post('/ui/shows/:slug/ad-segments/:segmentId', async (request, reply) => {
+    scoped.post('/ui/shows/:slug/ad-segments/:segmentId', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const status = request.body?.status;
       if (status !== SEGMENT_STATUS.APPROVED && status !== SEGMENT_STATUS.REJECTED) {

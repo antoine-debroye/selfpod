@@ -105,14 +105,23 @@ describe('fingerprinting an episode', () => {
   });
 
   it('forgets the fingerprint when the episode goes', async () => {
+    // Through the delete the owner actually performs, not through a helper. Collecting
+    // derived files used to be a method nothing called — the row went with the cascade
+    // and the file stayed on the share for ever.
     const show = await makeEpisodes(1);
     const [episode] = app.episodes.listByShow(show.id);
     await app.adDetect.fingerprintEpisode(episode);
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 1);
 
-    await app.adDetect.forgetEpisode(episode);
+    await app.episodes.deleteWithFile(episode.id);
 
     const stored = await readdir(join(app.config.fingerprintDir, show.id)).catch(() => []);
     assert.deepEqual(stored, [], 'derived data must not outlive what it describes');
+    assert.equal(
+      app.db.prepare('SELECT COUNT(*) AS n FROM episode_fingerprints').get().n,
+      0,
+      'the row outlived the episode',
+    );
   });
 });
 

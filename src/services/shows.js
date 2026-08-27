@@ -23,7 +23,7 @@ import {
  * control if they like (spec §5, §7.1). The feed token is deliberately excluded
  * from it — that value is a credential.
  */
-export function createShows({ db, config, events, logger, settings, episodeArt }) {
+export function createShows({ db, config, events, logger, settings, episodeArt, derivedAudio }) {
   const selectById = db.prepare('SELECT * FROM shows WHERE id = ?');
   const selectBySlug = db.prepare('SELECT * FROM shows WHERE slug = ?');
   const selectAll = db.prepare('SELECT * FROM shows ORDER BY title COLLATE NOCASE ASC');
@@ -335,6 +335,9 @@ export function createShows({ db, config, events, logger, settings, episodeArt }
       // The episode rows go with the cascade; their cached artwork does not, and it
       // lives outside the database where nothing else would ever collect it.
       episodeArt?.forgetShow(id);
+      // Awaited for the same reason as an episode's: a deleted show that leaves tens
+      // of gigabytes of trimmed copies behind is a support burden with no clue in it.
+      await derivedAudio?.forgetShow(id);
 
       // When the folder stays, remember that its removal was deliberate. Without
       // this, the next scan re-adopts the folder with a new id, a new feed token

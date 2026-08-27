@@ -1,4 +1,4 @@
-import { AD_TRIM_MODES, SCAN_TRIGGER, SEGMENT_STATUS } from '../constants.js';
+import { AD_TRIM_MODES, SCAN_TRIGGER, SEGMENT_STATUS, TRIMMABLE_EXTENSIONS } from '../constants.js';
 import { EVENTS } from '../lib/events.js';
 import { resolvePublishHold } from '../lib/publish-hold.js';
 
@@ -19,7 +19,7 @@ import { resolvePublishHold } from '../lib/publish-hold.js';
  * Serialising costs wall-clock time nobody is waiting on: the work happens behind a
  * publish hold, so the only observable difference is when an episode appears.
  */
-export function createAdPipeline({ db, events, logger, shows, episodes, adDetect, trimmer, activity }) {
+export function createAdPipeline({ db, events, logger, health, shows, episodes, adDetect, trimmer, activity }) {
   let chain = Promise.resolve();
   let active = null;
 
@@ -67,18 +67,26 @@ export function createAdPipeline({ db, events, logger, shows, episodes, adDetect
    * need nothing is released as soon as that is known instead of waiting behind the
    * trimming of episodes that do.
    */
+  function isTrimmable(episode) {
+    const at = episode.filename.lastIndexOf('.');
+    return at >= 0 && TRIMMABLE_EXTENSIONS.includes(episode.filename.slice(at).toLowerCase());
+  }
+
   function settleHolds(show) {
     const corpusSize = countFingerprinted.get(show.id)?.n ?? 0;
     let released = 0;
     let held = 0;
+    let untrimmable = 0;
 
     for (const episode of episodes.listByShow(show.id)) {
+      if (!isTrimmable(episode)) untrimmable += 1;
       const wanted = resolvePublishHold({
         mode: show.ad_trim_mode,
         corpusSize,
         minEpisodes: show.ad_auto_min_episodes ?? 3,
         undecidedSegments: countUndecided.get(episode.id)?.n ?? 0,
         trimStatus: episode.trim_status,
+        canBeTrimmed: isTrimmable(episode),
       });
       if (wanted === (episode.publish_hold ?? null)) {
         if (wanted) held += 1;
@@ -88,6 +96,26 @@ export function createAdPipeline({ db, events, logger, shows, episodes, adDetect
       if (wanted) held += 1;
       else released += 1;
     }
+    /*
+     * A show SelfPod cannot read at all is worth saying out loud.
+     *
+     * The episodes are published — holding them would be waiting for something that
+     * cannot happen — but the owner has switched on a feature that is doing nothing,
+     * and nothing else on the page would tell them. Silence here is how "I turned on
+     * advert removal and no adverts were removed" becomes unanswerable.
+     */
+    const key = `ad_trim_unsupported_${show.id}`;
+    if (untrimmable && !corpusSize) {
+      health?.set(key, {
+        level: 'info',
+        message: `SelfPod cannot remove adverts from “${show.title}”.`,
+        detail:
+          'It can only read the audio of MP3 episodes, and this show has none. The episodes are published exactly as they arrive.',
+      });
+    } else {
+      health?.clear(key);
+    }
+
     return { released, held, corpusSize };
   }
 

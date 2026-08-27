@@ -35,8 +35,21 @@ export function resolvePublishHold({
   minEpisodes,
   undecidedSegments = 0,
   trimStatus = null,
+  canBeTrimmed = true,
 }) {
   if (mode !== 'review' && mode !== 'auto') return null;
+
+  /*
+   * An episode SelfPod cannot read is never going to be trimmed, so holding it is
+   * waiting for something that cannot happen. Only MP3 frames can be walked and
+   * rejoined today; an AAC or Opus episode publishes as it always has.
+   *
+   * Getting this wrong is quiet and total: turning the feature on for a show of .m4a
+   * files would empty its feed, permanently, while the page said "waiting for more
+   * episodes to compare" — a sentence that is not merely unhelpful but false, because
+   * more episodes would not have helped.
+   */
+  if (!canBeTrimmed) return null;
 
   // Nothing can be detected in a show SelfPod has barely seen, and publishing now
   // would mean re-cutting the first few episodes once it can. The UI shows this as a

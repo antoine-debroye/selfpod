@@ -9,6 +9,7 @@ import { createEventBus } from '../../src/lib/events.js';
 import { createActivity } from '../../src/services/activity.js';
 import { bootstrap } from '../../src/services/bootstrap.js';
 import { createCovers } from '../../src/services/covers.js';
+import { createDerivedAudio } from '../../src/services/derived-audio.js';
 import { createEpisodeArt } from '../../src/services/episode-art.js';
 import { createEpisodes } from '../../src/services/episodes.js';
 import { createFeeds } from '../../src/services/feed.js';
@@ -66,8 +67,9 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
   const covers = createCovers({ config, logger: silentLogger });
   const episodeArt = createEpisodeArt({ config, covers, logger: silentLogger });
   const metadata = createMetadata({ logger: silentLogger });
-  const shows = createShows({ db, config, events, logger: silentLogger, settings, episodeArt });
-  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger, episodeArt });
+  const derivedAudio = createDerivedAudio({ config, logger: silentLogger });
+  const shows = createShows({ db, config, events, logger: silentLogger, settings, episodeArt, derivedAudio });
+  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger, episodeArt, derivedAudio });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger: silentLogger });
   const scanner = createScanner({
     db, config, settings, events, logger: silentLogger,
@@ -81,7 +83,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
     db, config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
-    db, events, logger: silentLogger, shows, episodes, adDetect, trimmer, activity,
+    db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity,
   });
   // The real service, not a stub: the routes drive it, and it never schedules
   // anything itself — the scheduler owns the timer — so nothing fires unless a test

@@ -204,15 +204,24 @@ describe('producing the trimmed copy', () => {
     assert.equal(app.episodes.get(episode.id).trimmed_duration_seconds, null);
   });
 
-  it('publishes the episode as soon as the copy exists', async () => {
+  it('does not publish the episode by itself', async () => {
+    // Cutting one episode's audio does not mean the show is settled. Releasing it here
+    // would publish it while segments that also belong in it are still undecided, and
+    // a listener polling during the run would take it with those adverts in — after
+    // which the hold has bought nothing, because the app has the file.
     const show = await makeShow();
     await detectAndApprove(show);
     const [episode] = app.episodes.listByShow(show.id);
     app.episodes.setSystemFields(episode.id, { publish_hold: 'awaiting_review' });
 
-    await app.trimmer.trimEpisode(app.episodes.get(episode.id));
+    const result = await app.trimmer.trimEpisode(app.episodes.get(episode.id));
 
-    assert.equal(app.episodes.get(episode.id).publish_hold, null);
+    assert.equal(result.trimmed, true, 'the cut itself should still have happened');
+    assert.equal(
+      app.episodes.get(episode.id).publish_hold,
+      'awaiting_review',
+      'the trimmer decided on its own that an episode was ready to publish',
+    );
   });
 });
 
@@ -279,6 +288,8 @@ describe('when a trim cannot be done', () => {
     // The file the trimmer would read is gone from under it.
     await rm(join(showDir, episode.filename));
     const result = await app.trimmer.trimEpisode(app.episodes.get(episode.id));
+    // Settling is the pipeline's job; a failed cut must not leave the episode stuck.
+    app.adPipeline.settle(show.id);
 
     assert.equal(result.trimmed, false);
     const updated = app.episodes.get(episode.id);
@@ -340,6 +351,39 @@ describe('when a trim cannot be done', () => {
     assert.equal(result.reason, 'unwritable');
     const left = await readdir(join(app.config.trimmedDir, show.id));
     assert.deepEqual(left, [name], `staging was left behind: ${left.join(', ')}`);
+  });
+});
+
+describe('when an episode or a show goes', () => {
+  it('takes the derived audio with it', async () => {
+    // A trimmed copy is very nearly the size of the episode. Left behind, a deleted
+    // two-hundred-episode show is tens of gigabytes on a NAS with no row anywhere that
+    // could name them, and the operator's only clue is a volume that never empties.
+    const show = await makeShow();
+    await detectAndApprove(show);
+    await app.trimmer.trimShow(show.id);
+    await app.adDetect.fingerprintShow(show.id);
+    const { readdir } = await import('node:fs/promises');
+    assert.equal((await readdir(join(app.config.trimmedDir, show.id))).length, 3);
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 3);
+
+    const [episode] = app.episodes.listByShow(show.id);
+    await app.episodes.deleteWithFile(episode.id);
+
+    assert.equal(
+      (await readdir(join(app.config.trimmedDir, show.id))).length,
+      2,
+      'a deleted episode left its trimmed copy behind',
+    );
+    assert.equal((await readdir(join(app.config.fingerprintDir, show.id))).length, 2);
+
+    await app.shows.remove(show.id, { deleteFiles: false });
+
+    await assert.rejects(
+      () => readdir(join(app.config.trimmedDir, show.id)),
+      'a deleted show left its trimmed copies behind',
+    );
+    await assert.rejects(() => readdir(join(app.config.fingerprintDir, show.id)));
   });
 });
 

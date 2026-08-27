@@ -53,12 +53,19 @@ async function approveEverything(show) {
 const feed = (show) =>
   server.app.inject({ method: 'GET', url: `/feeds/${show.slug}/${show.feed_token}.xml` });
 
-const media = (show, episode, { query = '', range } = {}) =>
-  server.app.inject({
+/**
+ * Fetches an episode the way a podcast app would: at the URL the feed is currently
+ * advertising, version and all. Pass `query` to ask for something else on purpose.
+ */
+const media = (show, episode, { query = null, range } = {}) => {
+  const version = server.episodes.get(episode.id)?.trimmed_etag;
+  const search = query ?? (version ? `?v=${version}` : '');
+  return server.app.inject({
     method: 'GET',
-    url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}${query}`,
+    url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}${search}`,
     headers: range ? { range } : {},
   });
+};
 
 describe('holding an episode back until its trim is decided', () => {
   it('keeps a held episode out of the feed entirely', async () => {
@@ -102,9 +109,11 @@ describe('holding an episode back until its trim is decided', () => {
     server.episodes.setSystemFields(episode.id, { publish_hold: 'awaiting_review' });
     assert.ok(!(await feed(show)).body.includes(episode.id));
 
-    await server.trimmer.trimEpisode(server.episodes.get(episode.id));
+    // Through the pipeline, because settling the holds is its job and not the
+    // trimmer's — cutting one episode does not mean the show is decided.
+    await server.adPipeline.processShow(show.id);
 
-    assert.ok((await feed(show)).body.includes(episode.id), 'trimming did not release the episode');
+    assert.ok((await feed(show)).body.includes(episode.id), 'the trim did not release the episode');
   });
 });
 
@@ -309,6 +318,53 @@ describe('serving the trimmed bytes', () => {
       [server.episodes.get(episode.id).trimmed_filename],
       'superseded cuts are piling up on the share',
     );
+  });
+
+  it('refuses a URL whose version is no longer what is published', async () => {
+    // The failure this exists for: a client holding the first half of one cut asks for
+    // the rest after the audio has been replaced, and joins the second half of a
+    // different file onto it — right total length, no error, nothing to notice. A
+    // download that fails is a download the app retries; a download that silently
+    // splices two files is an episode nobody can explain.
+    const show = await makeShow();
+    await server.adDetect.fingerprintShow(show.id);
+    await server.adDetect.detectForShow(show.id);
+    const [one, two] = server.adDetect.listSegments(show.id);
+    assert.ok(two, 'the fixture should offer two segments');
+    server.adDetect.decide(one.id, SEGMENT_STATUS.APPROVED);
+
+    const [episode] = server.episodes.listByShow(show.id);
+    await server.trimmer.trimEpisode(episode);
+    const first = server.episodes.get(episode.id).trimmed_etag;
+
+    // The version is real while it is current.
+    assert.equal((await media(show, episode, { query: `?v=${first}` })).statusCode, 200);
+
+    // Re-cut: same URL path, different audio, different version.
+    server.adDetect.decide(two.id, SEGMENT_STATUS.APPROVED);
+    await server.trimmer.trimEpisode(server.episodes.get(episode.id));
+    const second = server.episodes.get(episode.id).trimmed_etag;
+    assert.notEqual(second, first, 'the fixture did not actually re-cut');
+
+    const stale = await media(show, episode, { query: `?v=${first}`, range: 'bytes=1000-' });
+    assert.equal(stale.statusCode, 404, 'a superseded version was served the new audio');
+    assert.equal((await media(show, episode, { query: `?v=${second}` })).statusCode, 200);
+  });
+
+  it('refuses a trimmed episode asked for without any version', async () => {
+    // The first trim is the case a version alone cannot fix: the URL a client already
+    // has carries no version at all, because the episode had never been cut. The
+    // *absence* of a version has to be a claim in its own right — "the untrimmed one"
+    // — or that client resumes straight into a splice.
+    const show = await makeShow();
+    const [episode] = server.episodes.listByShow(show.id);
+    assert.equal((await media(show, episode, { query: '' })).statusCode, 200, 'untrimmed is fine');
+
+    await approveEverything(show);
+    await server.trimmer.trimEpisode(server.episodes.get(episode.id));
+
+    const resumed = await media(show, episode, { query: '', range: 'bytes=1000-' });
+    assert.equal(resumed.statusCode, 404, 'a client resumed an untrimmed download into trimmed bytes');
   });
 
   it('stops telling clients to cache while a re-trim is outstanding', async () => {

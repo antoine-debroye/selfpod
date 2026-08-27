@@ -292,13 +292,41 @@ function median(values) {
  * theme tune on episode three. That is not a corner case; it is the guaranteed first
  * behaviour of automatic mode on any show with a theme.
  */
+/**
+ * The longest a difference between two downloads may be and still be cut unasked.
+ *
+ * Generous — a two-and-a-half minute break exists — but finite, because the content
+ * of a diff segment is chosen by whoever serves the audio.
+ */
+const DIFF_MAX_SECONDS = 150;
+
 export function safeToApproveAutomatically(
   segment,
   { episodeDurations, minEpisodes = 3, source = 'corpus' } = {},
 ) {
-  // A segment found by diffing two downloads of one episode is safe by construction:
-  // a theme tune is in both copies, so it can never be what differs between them.
-  if (source === 'diff') return { safe: true, reason: null };
+  /*
+   * A segment found by diffing two downloads of one episode is safe by construction:
+   * a theme tune is in both copies, so it can never be what differs between them. The
+   * position guards below are therefore not applied to it — an advert stitched at the
+   * very start is still an advert, and refusing it because a theme tune also lives
+   * there would give up the one signal that can tell them apart.
+   *
+   * The *length* guard still applies, and for a reason the position guards do not
+   * share: what differs between two downloads is decided by whoever serves them. Ten
+   * minutes of difference is not an advert — it is the publisher having replaced the
+   * programme, or a comparison that has gone wrong — and cutting it unattended would
+   * take ten minutes of audio out of an episode nobody looked at. The Myers diff's
+   * own edit-distance bound happens to cap this near a hundred seconds today, which is
+   * exactly why the rule is written down here instead: that bound is a performance
+   * limit and will be tuned by someone who is not thinking about this.
+   */
+  if (source === 'diff') {
+    const diffSeconds = segment.durationMs ? segment.durationMs / 1000 : null;
+    if (diffSeconds !== null && diffSeconds > DIFF_MAX_SECONDS) {
+      return { safe: false, reason: 'too_long_to_be_an_advert' };
+    }
+    return { safe: true, reason: null };
+  }
 
   if (segment.episodeCount < minEpisodes) {
     return { safe: false, reason: 'seen_too_few_times' };

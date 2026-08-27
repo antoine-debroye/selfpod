@@ -1,5 +1,5 @@
-import { createWriteStream, readFileSync } from 'node:fs';
-import { readdir, stat, unlink, utimes } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { readFile, readdir, stat, unlink, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
@@ -15,6 +15,7 @@ import {
 import { nowIso } from '../lib/dates.js';
 import { badRequest, describeFsError } from '../lib/errors.js';
 import { checkDuration, evaluateItem } from '../lib/feed-filter.js';
+import { resolveContained } from '../lib/contained-path.js';
 import { computeIdentityKey } from '../lib/identity.js';
 import { moveIntoPlace } from '../lib/move.js';
 import { remoteEpisodeFilename } from '../lib/remote-filename.js';
@@ -393,6 +394,31 @@ export function createRemoteFeeds({
   const AUDIO_TYPES = new Set([...Object.values(AUDIO_MIME_TYPES), 'application/octet-stream']);
 
   /**
+   * Whether to look at this episode again in a day, and why.
+   *
+   * Reads the file that was just downloaded — SelfPod's own staging file, never a
+   * path anyone else chose — and reads it asynchronously, because it is a whole
+   * episode and a synchronous read blocks every request in flight behind it.
+   *
+   * Never the network. A failure here must not cost the download: the episode is
+   * fine, SelfPod simply will not be re-checking it, and an exception thrown for that
+   * would throw away a file that is already on disk and already accepted.
+   */
+  async function planRecheck(path, filename) {
+    if (!filename.toLowerCase().endsWith('.mp3')) return {};
+    try {
+      const signals = describeStitchSignals(frameProfile(await readFile(path)));
+      if (!signals.likely) return {};
+      return {
+        recheck_reason: signals.detail,
+        recheck_after: new Date(Date.now() + RECHECK_DELAY_MS).toISOString(),
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Fetches one matched item and leaves it staged, or records why it was refused.
    *
    * Staged **inside the show folder**, not in /data/.tmp, and that is deliberate. On
@@ -407,28 +433,6 @@ export function createRemoteFeeds({
    *
    * @returns {{ staged: string, filename: string, item: object } | null}
    */
-  /**
-   * Whether to look at this episode again in a day, and why.
-   *
-   * Reads the file that was just downloaded, never the network. A failure here must
-   * not cost the download: the episode is fine, SelfPod simply will not be re-checking
-   * it, and an exception thrown for that would throw away a file that is already on
-   * disk and already accepted.
-   */
-  function planRecheck(path, filename) {
-    if (!filename.toLowerCase().endsWith('.mp3')) return {};
-    try {
-      const signals = describeStitchSignals(frameProfile(readFileSync(path)));
-      if (!signals.likely) return {};
-      return {
-        recheck_reason: signals.detail,
-        recheck_after: new Date(Date.now() + RECHECK_DELAY_MS).toISOString(),
-      };
-    } catch {
-      return {};
-    }
-  }
-
   async function downloadOne(subscription, show, row, stagedKeys = new Map()) {
     const showDir = shows.dirFor(show);
     const staged = join(showDir, `${STAGING_PREFIX}${newId()}`);
@@ -569,7 +573,7 @@ export function createRemoteFeeds({
       // one looks like it had adverts joined on rather than mixed in. It decides one
       // thing: whether to spend a second download on it in a day's time. See
       // lib/stitch-signals.js for why that bar is deliberately high.
-      const recheck = planRecheck(staged, extension.filename);
+      const recheck = await planRecheck(staged, extension.filename);
 
       subscriptions.markItem(row.id, {
         identity_key: identityKey,
@@ -789,8 +793,16 @@ export function createRemoteFeeds({
       }
       actualBytes = response.bytes;
 
-      const original = frameProfile(readFileSync(join(shows.dirFor(show), episode.filename)));
-      const second = frameProfile(readFileSync(staged));
+      // Contained for the same reason the serving routes are — the show folder is a
+      // writable share — and read asynchronously, because these are two whole episodes
+      // and a synchronous read of them blocks every in-flight range request behind it.
+      const onShare = await resolveContained(shows.dirFor(show), episode.filename);
+      if (!onShare.path) {
+        subscriptions.markItem(item.id, { rechecked_at: nowIso(), recheck_outcome: 'episode_gone' });
+        return { outcome: 'episode_gone' };
+      }
+      const original = frameProfile(await readFile(onShare.path));
+      const second = frameProfile(await readFile(staged));
       if (!original || !second) {
         outcome = 'unreadable';
       } else {

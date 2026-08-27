@@ -5,10 +5,19 @@ import { join } from 'node:path';
 import { TRIMMABLE_EXTENSIONS, TRIM_STATUS } from '../constants.js';
 import { EVENTS } from '../lib/events.js';
 import { cutFrames } from '../lib/mp3-cut.js';
+import { frameProfile } from '../lib/mp3-frames.js';
 import { newId } from '../lib/tokens.js';
 
 /**
  * Writing the trimmed copy of an episode (spec §19.6).
+ *
+ * Nothing here touches `publish_hold`. Whether an episode is ready to go out is
+ * `resolvePublishHold`'s answer and the pipeline settles it once the whole show has
+ * been through — and the difference is not bookkeeping. Clearing the hold as each
+ * episode is cut publishes it the moment its own audio is ready, while segments that
+ * would also have been cut out of it are still sitting undecided. A listener polling
+ * during a run would take that episode, adverts and all, and once an app has
+ * downloaded an episode the hold has bought nothing.
  *
  * The original is never touched. What the owner dropped on their share, or what a
  * subscription downloaded, stays exactly as it arrived — the trimmed copy lives under
@@ -30,6 +39,9 @@ import { newId } from '../lib/tokens.js';
  * one file and half of another — which is the hazard that made holding the default in
  * the first place.
  */
+/** Reasons a trim did not happen that are not faults. */
+const EXPECTED_OUTCOMES = new Set(['nothing_approved', 'unsupported_format', 'unknown_show']);
+
 export function createTrimmer({ db, config, events, logger, health, shows, episodes, adDetect, metadata }) {
   function showDir(showId) {
     return join(config.trimmedDir, showId);
@@ -55,15 +67,19 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
    */
   async function discard(episode) {
     const path = pathFor(episode);
-    if (path) await rm(path, { force: true }).catch(() => {});
-    return episodes.setSystemFields(episode.id, {
+    // The row first, the file second — the same order `trimEpisode` uses, and for the
+    // same reason. Deleting first leaves a window in which the row names a file that
+    // is not there, and in that window the feed advertises a length for bytes the
+    // media route answers 404 for.
+    const updated = episodes.setSystemFields(episode.id, {
       trim_status: null,
       trimmed_filename: null,
       trimmed_bytes: null,
       trimmed_duration_seconds: null,
       trimmed_etag: null,
-      publish_hold: null,
     });
+    if (path) await rm(path, { force: true }).catch(() => {});
+    return updated;
   }
 
   function fail(episode, reason, detail) {
@@ -76,7 +92,6 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
     return {
       episode: episodes.setSystemFields(episode.id, {
         trim_status: TRIM_STATUS.FAILED,
-        publish_hold: null,
       }),
       trimmed: false,
       reason,
@@ -117,8 +132,18 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
 
       const result = cutFrames(buffer, cuts);
       if (!result) {
-        // cutFrames refuses rather than producing a zero-length file, so this is a cut
-        // list that covers the whole episode — a bug upstream, not a bad recording.
+        // `cutFrames` refuses rather than returning something wrong, and there are two
+        // ways to get here. Saying which matters: one is a bug upstream, the other is
+        // a file SelfPod is not willing to cut, and only the second is the owner's to
+        // act on.
+        const profile = frameProfile(buffer);
+        if (profile?.truncated) {
+          return fail(
+            episode,
+            'too_long',
+            'This episode is longer than SelfPod will read in one piece (about five hours).',
+          );
+        }
         return fail(
           episode,
           'nothing_left',
@@ -160,7 +185,6 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         trimmed_bytes: bytes,
         trimmed_duration_seconds: measured.durationSeconds ?? null,
         trimmed_etag: version,
-        publish_hold: null,
       });
 
       // Only now, with nothing pointing at it any more.
@@ -195,7 +219,11 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         if (!force && episode.trim_status === TRIM_STATUS.TRIMMED) continue;
         const outcome = await api.trimEpisode(force ? { ...episode, trim_status: null } : episode);
         if (outcome.trimmed) trimmed += 1;
-        else if (outcome.reason && outcome.reason !== 'nothing_approved') failed += 1;
+        // Only genuine failures count. "Nothing was approved" and "SelfPod cannot read
+        // this format" are both ordinary answers, and counting them would put a
+        // warning in the activity log — and therefore the episode under "Problems",
+        // permanently — for a show where nothing is wrong.
+        else if (!EXPECTED_OUTCOMES.has(outcome.reason)) failed += 1;
       }
       return { trimmed, failed, considered: rows.length };
     },
@@ -210,16 +238,6 @@ export function createTrimmer({ db, config, events, logger, health, shows, episo
         .all(showId);
     },
 
-    /** Drops the derived copy when the episode goes. */
-    async forgetEpisode(episode) {
-      const path = pathFor(episode);
-      if (path) await rm(path, { force: true }).catch(() => {});
-    },
-
-    /** Drops a whole show's derived copies. Orphans on a NAS are a support burden. */
-    async forgetShow(showId) {
-      await rm(showDir(showId), { recursive: true, force: true }).catch(() => {});
-    },
   };
 
   return api;

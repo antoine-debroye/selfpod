@@ -9,6 +9,7 @@ import { createEventBus } from '../../src/lib/events.js';
 import { createActivity } from '../../src/services/activity.js';
 import { bootstrap } from '../../src/services/bootstrap.js';
 import { createCovers } from '../../src/services/covers.js';
+import { createDerivedAudio } from '../../src/services/derived-audio.js';
 import { createEpisodeArt } from '../../src/services/episode-art.js';
 import { createEpisodes } from '../../src/services/episodes.js';
 import { createFeeds } from '../../src/services/feed.js';
@@ -101,8 +102,9 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   const covers = createCovers({ config, logger: silentLogger });
   const episodeArt = createEpisodeArt({ config, covers, logger: silentLogger });
   const metadata = createMetadata({ logger: silentLogger });
-  const shows = createShows({ db, config, events, logger: silentLogger, settings, episodeArt });
-  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger, episodeArt });
+  const derivedAudio = createDerivedAudio({ config, logger: silentLogger });
+  const shows = createShows({ db, config, events, logger: silentLogger, settings, episodeArt, derivedAudio });
+  const episodes = createEpisodes({ db, config, events, shows, logger: silentLogger, episodeArt, derivedAudio });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger: silentLogger });
   const stats = createStats({ db, logger: silentLogger });
   const readiness = createReadiness({ covers });
@@ -118,7 +120,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
     db, config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
-    db, events, logger: silentLogger, shows, episodes, adDetect, trimmer, activity,
+    db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity,
   });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,

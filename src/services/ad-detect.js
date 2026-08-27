@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -102,6 +102,10 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
 
     const profile = frameProfile(bytes);
     if (!profile) return { skipped: 'no_frames' };
+    // Only part of the file was read, so a fingerprint of it would describe an episode
+    // that stops hours before this one does — and would then be compared against other
+    // episodes as though it were whole.
+    if (profile.truncated) return { skipped: 'too_long' };
 
     const samplesPerFrame = profile.frames[0]?.samplesPerFrame ?? 1152;
     const encoded = encodeFingerprint({
@@ -308,10 +312,17 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     /**
      * Looks for repetition across a show's episodes and updates the catalogue.
      *
-     * Episodes are loaded one at a time and their hashes handed straight to the
-     * search, rather than the whole corpus being assembled first: five hundred
-     * episodes is several hundred megabytes of hashes, and there is no reason for all
-     * of it to be resident at once.
+     * The whole corpus is resident while this runs — one Uint32Array of frame hashes
+     * per episode, about 550 kB for an hour — so a five-hundred-episode show is a few
+     * hundred megabytes. That is a real cost on the hardware this targets and it is
+     * stated here rather than described as something it is not: an earlier version of
+     * this comment claimed episodes were streamed one at a time, which they never were.
+     *
+     * The search is also quadratic in episode count, because a segment present in
+     * every episode is extended against every other. Measured at 137,000 frames an
+     * episode: five episodes 0.3 s, twenty 4.3 s, forty 16.5 s — synchronously, on a
+     * box that is also serving audio. It runs behind a publish hold and on one chain,
+     * so nobody is waiting on it, but a large library will feel it.
      */
     async detectForShow(showId, { minEpisodes = null } = {}) {
       const show = shows.getOrThrow(showId);
@@ -493,11 +504,6 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       return merged;
     },
 
-    /** Removes an episode's derived fingerprint, for when the episode itself goes. */
-    async forgetEpisode(episode) {
-      db.prepare('DELETE FROM episode_fingerprints WHERE episode_id = ?').run(episode.id);
-      await rm(fingerprintPath(episode.show_id, episode.id), { force: true }).catch(() => {});
-    },
   };
 
   return api;

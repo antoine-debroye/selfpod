@@ -14,7 +14,7 @@ import { EVENTS } from '../lib/events.js';
  *  - a `removed` episode stays removed even though its file is still on disk,
  *    so "remove from feed only" is not silently undone by the next rescan.
  */
-export function createEpisodes({ db, config, events, shows, logger, episodeArt }) {
+export function createEpisodes({ db, config, events, shows, logger, episodeArt, derivedAudio }) {
   const selectById = db.prepare('SELECT * FROM episodes WHERE id = ?');
   const selectByIdentity = db.prepare(
     'SELECT * FROM episodes WHERE show_id = ? AND identity_key = ?',
@@ -333,6 +333,10 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
 
       deleteEpisode.run(id);
       episodeArt?.forget(episode.show_id, id);
+      // Awaited: this is a delete the owner asked for and is waiting on, and a
+      // fire-and-forget cleanup that quietly fails leaves a full-size copy of an
+      // episode they believe is gone.
+      await derivedAudio?.forget(episode.show_id, id);
       logger?.warn({ id, path }, 'deleted episode and its audio file');
       events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
       return { filename: episode.filename, showId: episode.show_id };
@@ -343,6 +347,7 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
       const episode = api.getOrThrow(id);
       deleteEpisode.run(id);
       episodeArt?.forget(episode.show_id, id);
+      void derivedAudio?.forget(episode.show_id, id);
       events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
       return episode;
     },
@@ -372,6 +377,7 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt }
       // episodes under brand-new ids, so anything left here could never be reached
       // again by any row — it would simply be an orphan for the life of the install.
       episodeArt?.forgetShow(showId);
+      void derivedAudio?.forgetShow(showId);
       events?.emit(EVENTS.SHOW_CHANGED, { showId });
       logger?.warn(
         { showId, forgotten: rows.length },

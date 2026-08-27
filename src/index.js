@@ -11,6 +11,7 @@ import { createEventBus } from './lib/events.js';
 import { createActivity } from './services/activity.js';
 import { bootstrap } from './services/bootstrap.js';
 import { createCovers } from './services/covers.js';
+import { createDerivedAudio } from './services/derived-audio.js';
 import { createEpisodeArt } from './services/episode-art.js';
 import { createEpisodes } from './services/episodes.js';
 import { createFeeds } from './services/feed.js';
@@ -109,8 +110,9 @@ async function main() {
   const covers = createCovers({ config, logger });
   const episodeArt = createEpisodeArt({ config, covers, logger });
   const metadata = createMetadata({ logger });
-  const shows = createShows({ db, config, events, logger, settings, episodeArt });
-  const episodes = createEpisodes({ db, config, events, shows, logger, episodeArt });
+  const derivedAudio = createDerivedAudio({ config, logger });
+  const shows = createShows({ db, config, events, logger, settings, episodeArt, derivedAudio });
+  const episodes = createEpisodes({ db, config, events, shows, logger, episodeArt, derivedAudio });
   const feeds = createFeeds({ config, settings, events, shows, episodes, logger });
   const scanner = createScanner({
     db, config, settings, events, logger,
@@ -127,7 +129,7 @@ async function main() {
     db, config, events, logger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
-    db, events, logger, shows, episodes, adDetect, trimmer, activity,
+    db, events, logger, health, shows, episodes, adDetect, trimmer, activity,
   });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });

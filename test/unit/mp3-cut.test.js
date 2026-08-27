@@ -196,6 +196,35 @@ describe('the Xing header', () => {
   });
 });
 
+describe('a VBRI header', () => {
+  /** Fraunhofer's variable-bitrate header: fixed offset 32, its own seek table. */
+  function withVbri(audioFrames) {
+    const header = Buffer.from(frame(1));
+    const at = 4 + 32;
+    header.write('VBRI', at, 'latin1');
+    header.writeUInt32BE(999_999, at + 10); // a byte count that is wrong on purpose
+    header.writeUInt32BE(888_888, at + 14); // and a frame count
+    return stitch(header, segment(10_000, audioFrames));
+  }
+
+  it('is not counted as audio', () => {
+    // Treating it as frame zero would shift every cut by a frame and let a cut
+    // starting at zero delete the header.
+    const result = cutFrames(withVbri(500), [{ startFrame: 0, endFrame: 100 }]);
+    assert.equal(result.framesKept, 400);
+  });
+
+  it('is dropped rather than carried forward describing a file that no longer exists', () => {
+    // Its seek table is a different shape from Xing's and cannot be rebuilt here.
+    // Keeping the original would leave a table pointing at offsets that have moved —
+    // the broken scrubber the Xing rewrite exists to prevent, through the next door.
+    const result = cutFrames(withVbri(1000), [{ startFrame: 100, endFrame: 400 }]);
+
+    assert.ok(!result.buffer.includes(Buffer.from('VBRI', 'latin1')), 'a stale VBRI table survived');
+    assert.equal(frameProfile(result.buffer).frameCount, 700);
+  });
+});
+
 describe('cost', () => {
   it('cuts an episode-sized file in well under a second', () => {
     // The reason this is not a subprocess. An hour of audio is about 137,000 frames;
