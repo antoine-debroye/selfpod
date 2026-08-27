@@ -7,6 +7,18 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.6.3 — 2026-08-27
+
+### Added
+
+- **The episode list now says when SelfPod means to fetch an episode a second time,
+  and why.** That second fetch is how adverts inserted at serve time are found — what
+  differs between two downloads of one episode cannot be the theme tune — but it also
+  spends your bandwidth and counts again in the publisher's listener figures. It was
+  happening silently. Each affected episode now says so before it happens (*"will fetch
+  this one again tomorrow, because it runs 22s longer than the 251s the feed states"*)
+  and what came of it afterwards.
+
 ## 1.6.2 — 2026-08-27
 
 ### Fixed

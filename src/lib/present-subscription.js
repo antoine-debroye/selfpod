@@ -59,6 +59,16 @@ export function presentItem(row, { episodes }) {
     publishedAt: row.pub_date,
     durationSeconds: row.declared_duration_seconds,
     decision: row.decision,
+    /*
+     * Whether SelfPod means to fetch this episode a second time, and why.
+     *
+     * Surfaced because the ledger's whole job is to answer "what happened to that
+     * episode", and this is something SelfPod does on the owner's behalf without being
+     * asked — it spends their bandwidth and costs the publisher a second counted
+     * listen. Doing that silently is the one thing the page is meant not to do.
+     */
+    lookAgain: row.recheck_after && !row.rechecked_at ? row.recheck_reason : null,
+    lookedAgain: row.rechecked_at ? row.recheck_outcome : null,
     reason: row.reject_reason,
     detail: row.reject_detail,
     filename: row.filename,

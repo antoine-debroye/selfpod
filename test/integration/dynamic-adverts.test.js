@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { SEGMENT_SOURCES, SEGMENT_STATUS } from '../../src/constants.js';
 import { SETTING_KEYS } from '../../src/services/settings.js';
+import { presentItem } from '../../src/lib/present-subscription.js';
 import { createTestInstance } from '../helpers/harness.js';
 import { FRAME_MS, segment, stitch } from '../helpers/mp3.js';
 
@@ -156,6 +157,40 @@ describe('deciding whether an episode is worth downloading twice', () => {
 
     assert.equal(item.decision, 'downloaded');
     assert.equal(item.recheck_after, null, 'a plainly-encoded episode was queued for a second download');
+  });
+});
+
+describe('what the ledger says about a second download', () => {
+  it('says one is coming, and why, before it happens', async () => {
+    // A second fetch spends the owner's bandwidth and costs the publisher a counted
+    // listen. Doing that without saying so is the one thing this page exists not to do.
+    const { subscription, item } = await take();
+    assert.ok(item.recheck_after, 'the fixture should have been marked for a second look');
+
+    const presented = app.subscriptions
+      .items({ subscriptionId: subscription.id })
+      .map((row) => presentItem(row, { episodes: app.episodes }))
+      .find((row) => row.id === item.id);
+
+    assert.ok(presented.lookAgain, 'the ledger cannot see that a second fetch is planned');
+    assert.match(presented.lookAgain, /channelMode|longer than/);
+    assert.equal(presented.lookedAgain, null, 'it has not happened yet');
+  });
+
+  it('says what it learned once it has happened', async () => {
+    const { subscription, item } = await take();
+    makeDue(item.id);
+    advert = 777_000;
+
+    await app.remoteFeeds.recheckDue();
+
+    const presented = app.subscriptions
+      .items({ subscriptionId: subscription.id })
+      .map((row) => presentItem(row, { episodes: app.episodes }))
+      .find((row) => row.id === item.id);
+
+    assert.equal(presented.lookedAgain, 'differs');
+    assert.equal(presented.lookAgain, null, 'it should no longer be described as pending');
   });
 });
 

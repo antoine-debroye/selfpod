@@ -60,6 +60,34 @@
                 <div class="muted">…but the file is no longer on your share.</div>
               <% } %>
               <% if (entry.detail) { %><div class="muted"><%= entry.detail %></div><% } %>
+              <%
+                /* A second fetch is not free — it costs the publisher a counted listen
+                   — so it is stated rather than done quietly. */
+              %>
+              <% if (entry.lookAgain) { %>
+                <div class="muted">
+                  SelfPod will fetch this one again tomorrow and compare the two, because
+                  <%= entry.lookAgain.charAt(0).toLowerCase() + entry.lookAgain.slice(1) %>
+                  Whatever differs between two downloads of one episode cannot be the
+                  theme tune, so it is an advert.
+                </div>
+              <% } %>
+              <% if (entry.lookedAgain) { %>
+                <div class="muted">
+                  <% if (entry.lookedAgain === 'differs') { %>
+                    Fetched a second time, and the two copies differed — the difference is
+                    catalogued as an advert.
+                  <% } else if (entry.lookedAgain === 'identical') { %>
+                    Fetched a second time; both copies were the same, so nothing is inserted
+                    when this is served.
+                  <% } else if (entry.lookedAgain === 'differs_elsewhere') { %>
+                    Fetched a second time. The two differed, but only by audio the other copy
+                    had — there is nothing in your file to remove.
+                  <% } else { %>
+                    Tried to fetch this a second time and could not.
+                  <% } %>
+                </div>
+              <% } %>
             </td>
             <td>
               <% if (entry.decision !== 'rejected_blocked' && entry.decision !== 'downloaded') { %>
