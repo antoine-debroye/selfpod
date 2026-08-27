@@ -452,7 +452,13 @@ export function remoteAudioExtension(contentType) {
  * expensive — the whole corpus is re-read — so it belongs to a release, not to a
  * refactor.
  */
-export const FINGERPRINT_VERSION = 1;
+/**
+ * 2: sub-fingerprints of the decoded sound, rather than hashes of the encoded bytes.
+ *
+ * Bumping this invalidates every stored fingerprint, which is the point — the two are
+ * not comparable and mixing them would produce matches that mean nothing.
+ */
+export const FINGERPRINT_VERSION = 2;
 
 export const AD_TRIM_MODES = Object.freeze(['off', 'review', 'auto']);
 
@@ -486,7 +492,14 @@ export const PUBLISH_HOLDS = Object.freeze({
   TRIMMING: 'trimming',
 });
 
-/** Formats whose frames can be read without decoding. Others are not fingerprinted. */
+/**
+ * Formats SelfPod can decode to compare the sound of. Others are not fingerprinted.
+ *
+ * MP3 alone, because that is the one decoder in the image. Adding AAC or Opus means
+ * another decoder, which is a real decision about size and attack surface rather than a
+ * line in this list — and an episode in an unsupported format is published untouched
+ * and said so, never held waiting for a comparison that cannot happen.
+ */
 export const FINGERPRINTABLE_EXTENSIONS = Object.freeze(['.mp3']);
 
 /**

@@ -45,16 +45,14 @@
     <div class="callout" role="status">
       <strong>SelfPod compared <%= it.comparableEpisodes %> episodes and found no repeated audio.</strong>
       <p>
-        It compares the audio exactly, byte for byte. That finds a sponsor read the
-        producer drops in as a ready-made file — and it finds nothing at all in a show
-        that is mixed and encoded in one piece, because then the same theme tune comes
-        out as different audio data in every episode. Most professionally produced
-        podcasts are made that way, so this is a common and unremarkable answer.
+        It listens for anything these episodes have in common — a theme tune, a bed
+        under the credits, the same sponsor read week after week — and there was
+        nothing lasting more than a few seconds. Plenty of shows are like that.
       </p>
       <p class="muted">
-        Adverts that a podcast host inserts while it sends you the file are found a
-        different way, by fetching one episode twice and comparing — that still applies
-        to this show, and happens on its own.
+        Adverts that a podcast host inserts while it sends you the file are a separate
+        matter, found by fetching one episode twice and comparing. That happens on its
+        own and is not affected by this.
       </p>
     </div>
   <% } else if (!segments.length) { %>

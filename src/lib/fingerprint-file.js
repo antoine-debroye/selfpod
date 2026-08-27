@@ -1,7 +1,7 @@
 import { FINGERPRINT_VERSION } from '../constants.js';
 
 /**
- * The on-disk form of an episode's frame fingerprint (spec §19.4).
+ * The on-disk form of an episode's acoustic fingerprint (spec §19.4).
  *
  * Four bytes a frame and a small header, which for an hour-long episode is about
  * 550 kB. That is why these live under `/data/.fp` rather than in SQLite: a library of
@@ -12,9 +12,16 @@ import { FINGERPRINT_VERSION } from '../constants.js';
  *
  * Frame timings are not stored, because they do not need to be. Samples-per-frame is
  * fixed by the MPEG version and layer, and neither changes within a file — a variable
- * *bitrate* file still has frames of constant duration, which is what makes an index
- * convertible to a millisecond by arithmetic rather than by a stored table. Storing
- * them would roughly double the file to record something already known.
+ * *bitrate* file still has frames of constant duration, which is what makes a
+ * millisecond convertible to a frame index by arithmetic rather than by a stored table.
+ * Storing them would roughly double the file to record something already known.
+ *
+ * What the four bytes hold changed in version 2. They used to be a hash of each MP3
+ * frame's bytes, which found only audio that had been copied rather than re-encoded —
+ * so on a professionally mastered show it found nothing at all. They are now
+ * Haitsma–Kalker sub-fingerprints of the decoded sound, one every 11.6ms. The file is
+ * the same shape and about the same size; the version guards the change, and an older
+ * file is simply recomputed.
  */
 
 const MAGIC = 0x53504650; // "SPFP"
@@ -75,4 +82,17 @@ export function decodeFingerprint(buffer) {
 export function frameToMs(index, { sampleRate, samplesPerFrame }) {
   if (!sampleRate || !samplesPerFrame) return 0;
   return Math.round((index * samplesPerFrame * 1000) / sampleRate);
+}
+
+/**
+ * The frame index at or before a given millisecond offset.
+ *
+ * The bridge between the two units this feature works in. The search reasons in
+ * sub-fingerprints of 11.6ms because that is the resolution sound can be compared at;
+ * a cut is made of MP3 frames of 26.1ms because that is what audio can be removed at.
+ * Everything that crosses between them comes through here.
+ */
+export function msToFrame(ms, { sampleRate, samplesPerFrame }) {
+  if (!sampleRate || !samplesPerFrame) return 0;
+  return Math.floor((ms * sampleRate) / (samplesPerFrame * 1000));
 }

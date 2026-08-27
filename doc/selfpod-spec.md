@@ -998,28 +998,48 @@ whether the owner is asked first.
 ### 19.2 Two detectors, one catalogue
 
 **Repetition across a show's episodes** finds what was cut in at
-production time, and only where the repeat is *encoded* identically —
-audio concatenated after encoding, not audio re-encoded in place.
+production time, by comparing what the episodes *sound* like.
 
-The design assumed more than that, and the assumption was wrong. It held
-that a producer dropping the same audio into an edit yields the same PCM
-and therefore the same frames. It does not: the whole programme is
-normally mastered and encoded in one pass, so identical source audio is
-encoded afresh in every episode and the bytes differ. Measured on three
-real Planet Money episodes — same encoder, same bitrate, same sample rate
-— nine matching frames out of ninety thousand, longest identical run 1.6
-seconds. That is the ordinary case for a professionally produced show.
+The first design compared MP3 frames byte for byte, on the belief that
+a producer dropping the same audio into an edit yields the same encoded
+frames. That was wrong, and the measurement is worth keeping. A programme
+is normally mastered and encoded in one pass, so identical source audio
+is encoded afresh in every episode: three real Planet Money episodes,
+same encoder, same 128 kbit/s, same 44.1 kHz, had **nine matching frames
+out of ninety thousand**. Two of them open with audio correlating at
+r = 0.988 and share eighteen frames before diverging. Byte matching found
+nothing, and no number of further episodes would have changed that.
 
-What this detector does find is post-encode concatenation, which is real
-and common: ready-made audio dropped in as a file, and anything a host
-stitches at serve time. What it cannot find would need acoustic
-fingerprinting — hashing the *sound* rather than the bytes, robust to
-re-encoding — and that needs a decoder, which is the dependency this whole
-design exists without. The trade is stated rather than buried: no decoder
-means no ffmpeg, no video-codec attack surface, no GPL question, and cuts
-measured in milliseconds; the price is that this detector does not apply
-to professionally mastered shows. The UI says so in those words rather
-than reporting "nothing found yet" for ever.
+So SelfPod decodes a low-rate mono copy — 5512 Hz, which is all the
+fingerprint reads — and uses Haitsma–Kalker sub-fingerprints: the energy
+in 33 logarithmic bands between 300 Hz and 2 kHz, emitted as one bit per
+band pair for whether that pair's difference rose or fell since the
+previous frame. Thirty-two bits every 11.6 ms.
+
+The bit is the sign of a *difference of differences*, never an energy,
+and that is what makes it work. Multiplying every band by the same factor
+— which is what loudness normalisation does, and it is the first thing an
+advert network applies — moves no sign at all. Re-encoding at a different
+bitrate moves few. On the episodes above: 0.08 of bits wrong for the same
+audio against 0.435 for different audio.
+
+**What it costs.** A decoder in the image. It is an MP3 decoder and
+nothing else, about eighty kilobytes of WebAssembly, in-process in a
+sandbox rather than a subprocess, and LGPL-2.1 — recorded in
+THIRD-PARTY-LICENSES.md with the image label saying so. That is a real
+obligation and a small one; bundling ffmpeg would have been a real
+obligation and a large one, along with a video-codec stack in an image
+that is fed files chosen by strangers. Decoding runs at roughly a
+thousand times real time and fingerprinting at two hundred, so an
+hour-long episode is a few seconds on a desktop — once per episode,
+behind a publish hold.
+
+**What it does not give.** Frame-exact boundaries. Each sub-fingerprint
+describes a 372 ms analysis window, so an edge is placed to a fraction of
+a second rather than to the frame. The error is corrected for and then
+deliberately biased outwards: a fraction of a second of programme lost at
+the edge of an advert goes unnoticed, and a fraction of a second of
+advert left behind is what somebody writes in about.
 
 **Comparing two downloads of one episode** finds what a host stitches in
 per request. It is the stronger signal, and the only one that identifies

@@ -13,9 +13,12 @@ import {
 import { nowIso } from '../lib/dates.js';
 import { notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
-import { decodeFingerprint, encodeFingerprint, frameToMs } from '../lib/fingerprint-file.js';
+import { decodeFingerprint, encodeFingerprint, msToFrame } from '../lib/fingerprint-file.js';
+import { createFingerprinter } from '../lib/acoustic-fingerprint.js';
+import { decodeToMono } from '../lib/decode-audio.js';
 import { frameProfile } from '../lib/mp3-frames.js';
-import { findRepeatedSegments, safeToApproveAutomatically } from '../lib/repeated-segments.js';
+import { findRepeatedAudio } from '../lib/repeated-audio.js';
+import { safeToApproveAutomatically } from '../lib/auto-approve.js';
 import { newId } from '../lib/tokens.js';
 
 /**
@@ -107,9 +110,28 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     // episodes as though it were whole.
     if (profile.truncated) return { skipped: 'too_long' };
 
+    /*
+     * Decoded, and fingerprinted by what it sounds like.
+     *
+     * This is the expensive line in the whole feature and it is spent deliberately.
+     * Comparing the encoded bytes was free and found nothing on a professionally
+     * produced show, because such a show is mastered and encoded in one pass and its
+     * theme tune comes out as different data every episode. Measured on three real
+     * Planet Money episodes: nine matching frames out of ninety thousand.
+     *
+     * Decoding runs at about a thousand times real time and the fingerprint at about
+     * two hundred, so an hour-long episode is a few seconds here on a desktop and
+     * perhaps a minute on a NAS — once per episode, behind a publish hold, on the one
+     * chain that already serialises this kind of work.
+     */
+    const fingerprinter = createFingerprinter();
+    const decoded = await decodeToMono(bytes, profile.frames, (samples) => fingerprinter.push(samples));
+    const subFingerprints = fingerprinter.finish();
+    if (!subFingerprints.length) return { skipped: 'too_short_to_fingerprint' };
+
     const samplesPerFrame = profile.frames[0]?.samplesPerFrame ?? 1152;
     const encoded = encodeFingerprint({
-      hashes: profile.hashes,
+      hashes: subFingerprints,
       sampleRate: profile.sampleRate,
       samplesPerFrame,
       durationMs: profile.durationMs,
@@ -133,6 +155,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     return {
       frameCount: profile.frameCount,
       durationMs: profile.durationMs,
+      subFingerprints: subFingerprints.length,
+      decodeErrors: decoded.errors,
       discontinuities: profile.discontinuities.length,
     };
   }
@@ -340,7 +364,10 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       if (corpus.length < 2) return { segments: 0, skipped: 'not_enough_episodes' };
 
       const timingFor = Object.fromEntries(corpus.map((entry) => [entry.id, entry.timing]));
-      const found = findRepeatedSegments(corpus, { minEpisodes: Math.min(threshold, 2) });
+      const found = findRepeatedAudio(
+        corpus.map((entry) => ({ id: entry.id, fingerprint: entry.hashes })),
+        { minEpisodes: Math.min(threshold, 2) },
+      );
 
       let recorded = 0;
       // Counted apart from `recorded`, because "found three things" and "found three
@@ -349,12 +376,27 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       // telling anyone about.
       let fresh = 0;
       for (const segment of found) {
-        const occurrences = segment.occurrences.map((occurrence) => ({
-          ...occurrence,
-          startMs: frameToMs(occurrence.start, timingFor[occurrence.episodeId] ?? {}),
-          endMs: frameToMs(occurrence.end, timingFor[occurrence.episodeId] ?? {}),
-        }));
-        const durationMs = frameToMs(segment.frames, timingFor[occurrences[0].episodeId] ?? {});
+        /*
+         * The search works in sub-fingerprints, which are 11.6ms of sound. A cut is
+         * made of MP3 frames, which are 26.1ms of audio. So each occurrence is
+         * converted here, once, and both units are stored: frames because that is what
+         * the trimmer removes, milliseconds because that is what a person is shown.
+         *
+         * Rounding outwards on purpose. A cut that starts a frame late leaves the first
+         * moment of an advert audible, which is the failure a listener notices; a cut
+         * that starts a frame early takes 26ms of silence before it, which nobody does.
+         */
+        const occurrences = segment.occurrences.map((occurrence) => {
+          const timing = timingFor[occurrence.episodeId] ?? {};
+          return {
+            episodeId: occurrence.episodeId,
+            start: msToFrame(occurrence.startMs, timing),
+            end: msToFrame(occurrence.endMs, timing) + 1,
+            startMs: occurrence.startMs,
+            endMs: occurrence.endMs,
+          };
+        });
+        const durationMs = segment.durationMs;
 
         const verdict = safeToApproveAutomatically(
           { ...segment, durationMs, occurrences },

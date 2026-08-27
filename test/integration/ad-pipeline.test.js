@@ -473,10 +473,14 @@ describe('what the trimmed audio actually is', () => {
     const original = episodeBytes(0);
 
     assert.equal(response.statusCode, 200);
-    assert.equal(
-      frameProfile(served).frameCount,
-      frameProfile(original).frameCount - framesFor(40),
-      'the wrong amount of audio came out',
+    // Within half a second, not to the frame. Segments are now found by what the audio
+    // *sounds* like, and each sub-fingerprint describes a 372ms window — so a boundary
+    // is placed to a fraction of a second rather than exactly. The error is deliberately
+    // biased towards removing a little programme rather than leaving a little advert.
+    const removed = (frameProfile(original).frameCount - frameProfile(served).frameCount) * (FRAME_MS / 1000);
+    assert.ok(
+      removed >= 40 && removed < 40.8,
+      `expected the 40s read gone with a little margin, ${removed.toFixed(2)}s went`,
     );
     // The programme before the advert is untouched, byte for byte.
     assert.equal(

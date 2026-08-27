@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { SEGMENT_STATUS } from '../../src/constants.js';
-import { createTestInstance } from '../helpers/harness.js';
+import { FIXTURE_DIR, createTestInstance } from '../helpers/harness.js';
 import { FRAME_MS, segment, stitch } from '../helpers/mp3.js';
 
 const framesFor = (seconds) => Math.round((seconds * 1000) / FRAME_MS);
@@ -122,6 +122,48 @@ describe('fingerprinting an episode', () => {
       0,
       'the row outlived the episode',
     );
+  });
+});
+
+describe('a theme tune that was re-encoded, not copied', () => {
+  it('is found even though the copies share almost no bytes', async () => {
+    // The case the whole detector exists for, and the one no synthesised fixture can
+    // show. Each episode carries the same six-second theme around programme of its own,
+    // and the third episode's copy of it is encoded at a different bitrate — so the
+    // three copies share almost no bytes at all.
+    //
+    // SelfPod's first attempt compared MP3 frames exactly and found nothing here, which
+    // is also what it found on three real Planet Money episodes: nine matching frames
+    // out of ninety thousand.
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    const show = await makeEpisodes(0);
+    const dir = join(app.config.showsDir, 'tape-club');
+    const programme = ['a', 'b', 'c'].map((n) => readFileSync(join(FIXTURE_DIR, `prog-${n}.mp3`)));
+    const theme = (n) => readFileSync(join(FIXTURE_DIR, n === 2 ? 'theme-80k.mp3' : 'theme-48k.mp3'));
+    for (let n = 0; n < 3; n += 1) {
+      writeFileSync(join(dir, `part-${n}.mp3`), Buffer.concat([programme[n], theme(n), programme[(n + 1) % 3]]));
+    }
+    await app.scanner.scanAllNow('manual');
+    setMode(app.shows.get(show.id), 'review', { minEpisodes: 2 });
+
+    await app.adDetect.fingerprintShow(show.id);
+    await app.adDetect.detectForShow(show.id);
+
+    const [found] = app.adDetect.listSegments(show.id);
+    assert.ok(found, 'a theme in all three episodes was not found');
+    assert.equal(found.episode_count, 3);
+    assert.ok(
+      found.duration_ms / 1000 > 5 && found.duration_ms / 1000 < 8,
+      `a six-second theme was measured as ${(found.duration_ms / 1000).toFixed(1)}s`,
+    );
+    // And it is the theme, not the programme: each occurrence starts about four
+    // seconds in, which is where each episode's own programme ends.
+    for (const occurrence of found.occurrences) {
+      assert.ok(
+        Math.abs(occurrence.start_ms / 1000 - 4) < 1.5,
+        `an occurrence started at ${(occurrence.start_ms / 1000).toFixed(1)}s, not around 4s`,
+      );
+    }
   });
 });
 

@@ -758,6 +758,50 @@ curl -s -o "${WORK}/restored.mp3" \
   && pass "the episode is served whole again" \
   || fail "rejecting the segment did not restore the audio"
 
+step "22. Repeated audio is found even when it was re-encoded, not copied"
+
+# The case the whole detector exists for, and the one a synthetic fixture cannot show.
+# Each episode carries the same six-second theme, but a *differently encoded* copy of
+# it — 48 kbit/s in two of them and 80 in the third — around programme of its own. The
+# three copies of the theme share almost no bytes, so nothing that compares bytes finds
+# anything here at all.
+mkdir -p "${WORK}/data/shows/re-encoded"
+# Programme of its own in each episode, so the theme is genuinely the only thing they
+# share — and the third episode's copy of the theme is encoded at a different bitrate.
+cat "${FIXTURES}/prog-a.mp3" "${FIXTURES}/theme-48k.mp3" "${FIXTURES}/prog-b.mp3" \
+  > "${WORK}/data/shows/re-encoded/part-1.mp3"
+cat "${FIXTURES}/prog-b.mp3" "${FIXTURES}/theme-48k.mp3" "${FIXTURES}/prog-c.mp3" \
+  > "${WORK}/data/shows/re-encoded/part-2.mp3"
+cat "${FIXTURES}/prog-c.mp3" "${FIXTURES}/theme-80k.mp3" "${FIXTURES}/prog-a.mp3" \
+  > "${WORK}/data/shows/re-encoded/part-3.mp3"
+
+wait_for_scan 12
+RE_SHOW_ID="$(api "${BASE}/api/shows" | json '
+print(next(s["id"] for s in json.load(sys.stdin)["shows"] if s["slug"] == "re-encoded"))')"
+api -X PATCH -H 'Content-Type: application/json' -d '{"mode":"review","minEpisodes":2}' \
+  "${BASE}/api/shows/${RE_SHOW_ID}/ad-trim" >/dev/null
+api -X POST "${BASE}/api/shows/${RE_SHOW_ID}/ad-detect" >/dev/null
+
+api "${BASE}/api/shows/${RE_SHOW_ID}/ad-segments" | json '
+# No escaped quotes anywhere: this string travels through a shell double-quoted
+# context on its way to python, and a backslash here is how the last two checks in
+# this file silently stopped testing anything.
+d = json.load(sys.stdin)
+segs = d["segments"]
+found = [s for s in segs if s["durationSeconds"] >= 4]
+if not found:
+    print("nothing found; " + str(len(segs)) + " segments, held=" + str(d["held"]))
+    sys.exit(1)
+best = max(found, key=lambda s: s["episodeCount"])
+if best["episodeCount"] < 3:
+    print("the theme was found in only " + str(best["episodeCount"]) + " episodes")
+    sys.exit(1)
+if not (4.5 <= best["durationSeconds"] <= 8.0):
+    print("a six-second theme was measured as " + str(best["durationSeconds"]) + "s")
+    sys.exit(1)
+' && pass "a re-encoded theme is found in all three episodes, at about the right length" \
+  || fail "re-encoded repeated audio was not found"
+
 # ---------------------------------------------------------------------- report
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"

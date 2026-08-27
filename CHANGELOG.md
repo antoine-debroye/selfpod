@@ -48,14 +48,17 @@ changes what your listeners see, it says so.
   across a show — the sponsor read that opens every episode, the bed under the
   credits — and remove it from all of them. Set it per show, under **Adverts**.
 
-  **Which shows this helps with, plainly.** SelfPod compares audio exactly rather
-  than decoding it, so comparing episodes finds a repeat only where it is literally the
-  same audio data: a ready-made file dropped into an edit, or an advert a host stitches
-  in as it serves. In a show mixed and encoded in one piece — which is most
-  professionally produced podcasts — the same theme tune comes out as different data
-  every episode and comparing finds nothing, however many episodes you have. SelfPod
-  says so in those words rather than leaving you waiting. Host-inserted adverts are
-  found a different way and are unaffected.
+  **How it recognises audio.** SelfPod decodes a low-quality copy of each episode and
+  fingerprints the sound rather than the bytes, so it finds a theme tune or a sponsor
+  read even though every episode's copy of it was encoded separately and shares almost
+  no data with the others. That is the normal case: a podcast is mixed and encoded in
+  one pass. It survives a change of bitrate and a change of volume.
+
+  This adds one dependency, an MP3 decoder of about eighty kilobytes that runs
+  in-process in a WebAssembly sandbox. It is LGPL-2.1 rather than MIT like the rest of
+  SelfPod, so the image label now says so and `THIRD-PARTY-LICENSES.md` records what
+  that obliges. It is emphatically not ffmpeg: no GPL, no video decoders, no subprocess,
+  and eighty kilobytes rather than eighty megabytes.
 
   **It does not know what an advert is, and never claims to.** A theme tune, a
   sponsor read, a standing intro and a recurring stinger repeat in exactly the same

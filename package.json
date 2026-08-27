@@ -1,7 +1,7 @@
 {
   "name": "selfpod",
   "version": "1.5.0",
-  "description": "SelfPod — a self-hosted podcast server. Drop a file in a folder; it's an episode.",
+  "description": "SelfPod \u2014 a self-hosted podcast server. Drop a file in a folder; it's an episode.",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -32,6 +32,7 @@
     "fastify": "5.11.3",
     "fastify-plugin": "6.0.0",
     "htmlparser2": "12.0.0",
+    "mpg123-decoder": "1.0.3",
     "music-metadata": "11.14.0",
     "pino": "10.3.1",
     "qrcode": "1.5.4",

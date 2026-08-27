@@ -52,15 +52,9 @@ export default async function adSegmentRoutes(fastify, services) {
      * Whether SelfPod has looked properly and found nothing.
      *
      * This is not the same as "not yet", and telling them apart is the difference
-     * between a page that says "wait" for ever and one that explains itself. Comparing
-     * episodes finds audio that is *encoded* identically, which happens when a producer
-     * concatenates pre-encoded pieces. A show mastered and encoded in one pass has its
-     * theme tune encoded afresh every episode — the same sound, different bytes — and
-     * no amount of further episodes will change that.
-     *
-     * Measured on three real Planet Money episodes: nine matching frames out of ninety
-     * thousand, and the longest identical run 1.6 seconds. This is the ordinary case
-     * for a professionally produced show, not an edge case.
+     * between a page that says "wait" for ever and one that answers. A show can simply
+     * have nothing its episodes share, and that answer arrives as soon as there are
+     * enough episodes to compare.
      */
     const compared = episodes
       .listByShow(show.id)

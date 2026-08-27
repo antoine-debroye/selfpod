@@ -75,4 +75,7 @@ ENTRYPOINT ["/app/docker/entrypoint.sh"]
 LABEL org.opencontainers.image.title="SelfPod" \
       org.opencontainers.image.description="Self-hosted podcast server for private feeds. Drop a file in a folder; it's an episode." \
       org.opencontainers.image.source="https://github.com/antoine-debroye/selfpod" \
-      org.opencontainers.image.licenses="MIT"
+      # MIT, but the image also contains an LGPL-2.1 MP3 decoder (mpg123, via
+      # mpg123-decoder) so that SelfPod can compare what two episodes sound like.
+      # THIRD-PARTY-LICENSES.md says what that obliges and how it is met.
+      org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later"
