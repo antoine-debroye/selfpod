@@ -7,6 +7,18 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.6.4 — 2026-08-27
+
+### Fixed
+
+- **"Download again" did nothing until the feed happened to change.** Asking for a
+  deleted episode back queues it for the next check, and a check of a feed that has not
+  changed is answered "nothing new" — at which point SelfPod stopped, leaving the
+  episode queued. On a show that publishes daily you would have got it within the hour;
+  on a quiet one it could wait days, with the button appearing to do nothing and saying
+  nothing about it. "No new episodes" is not the same as "nothing to do", and the same
+  applies to a download that failed and was waiting for another attempt.
+
 ## 1.6.3 — 2026-08-27
 
 ### Added

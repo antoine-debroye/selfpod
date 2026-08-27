@@ -250,7 +250,25 @@ export function createRemoteFeeds({
         nextPollAt: nextPollAt(subscription),
       });
       reportHealth(subscription, { status: 'not_modified' });
-      return { status: 'not_modified', added: 0, rejected: 0 };
+
+      /*
+       * A 304 means "no new items". It does not mean "nothing to do".
+       *
+       * An episode can be waiting to be fetched without the feed having changed at
+       * all: the owner pressed "Download again" on one they had deleted, or a download
+       * failed and was queued for another attempt. Returning here left those waiting
+       * for the publisher to post something else — days, on a quiet show — with the
+       * button appearing to do nothing and saying nothing, which is the failure this
+       * whole ledger exists to prevent.
+       */
+      const pending = await downloadMatched(subscriptions.get(subscription.id), show);
+      return {
+        status: 'not_modified',
+        added: 0,
+        rejected: 0,
+        downloaded: pending.downloaded,
+        refused: pending.refused,
+      };
     }
 
     let feed;

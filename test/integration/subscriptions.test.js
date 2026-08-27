@@ -110,6 +110,45 @@ async function showFolderContents() {
   return readdir(join(app.config.showsDir, 'tape-club'));
 }
 
+describe('an episode queued by hand', () => {
+  it('is fetched even when the feed itself has not changed', async () => {
+    // "Download again" queues an item and the next poll is meant to collect it. But a
+    // feed that has not changed answers 304, and the poller used to stop right there —
+    // so the queued item sat waiting for the publisher to post something else, which
+    // on a quiet show is days. The button appeared to do nothing and said nothing.
+    //
+    // A 304 means "no new items". It does not mean "nothing to do".
+    feedBody = rss([item({ guid: 'a', title: 'An interview with someone', minutes: 40 })]);
+    const subscription = subscribe({ backfillCount: 10 });
+
+    await app.remoteFeeds.pollNow(subscription.id);
+    const [downloaded] = app.subscriptions.items({ subscriptionId: subscription.id });
+    assert.equal(downloaded.decision, ITEM_DECISION.DOWNLOADED, 'the fixture never downloaded');
+
+    // Delete it the way an owner would, then ask for it back.
+    const episode = app.episodes.get(downloaded.episode_id);
+    await app.episodes.deleteWithFile(episode.id);
+    app.subscriptions.markItem(downloaded.id, {
+      decision: ITEM_DECISION.MATCHED,
+      episode_id: null,
+      filename: null,
+      identity_key: null,
+    });
+
+    // The feed is unchanged, so this poll is answered 304.
+    const result = await app.remoteFeeds.pollNow(subscription.id);
+    assert.equal(result.status, 'not_modified', 'the fixture should have been answered 304');
+
+    const after = app.subscriptions.getItem(downloaded.id);
+    assert.equal(
+      after.decision,
+      ITEM_DECISION.DOWNLOADED,
+      'an episode asked for by hand was left queued because the feed had not changed',
+    );
+    assert.ok((await showFolderContents()).some((name) => name.endsWith('.mp3')), 'no audio came back');
+  });
+});
+
 describe('polling records a decision for every item', () => {
   it('matches what passes the rules and refuses the rest, with a reason', async () => {
     feedBody = rss([
