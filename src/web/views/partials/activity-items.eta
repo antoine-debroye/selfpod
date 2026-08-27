@@ -11,14 +11,26 @@
       <small><%= it.helpers.formatDate(entry.startedAt) %></small>
     </div>
     <div class="body">
+      <%
+        /* An advert check is not a scan and its counts are not files. Sharing the row
+           would have it read "adverts scan — 3 files found, 2 added", which is three
+           wrong words in one line: it did not scan, they are episodes, and nothing was
+           added. The counters underneath are the same columns; only the wording moves. */
+        const adverts = entry.trigger === 'adverts';
+      %>
       <b><%= entry.showTitle || 'All shows' %></b> ·
-      <%= entry.trigger %> scan<%
+      <%= adverts ? 'advert check' : `${entry.trigger} scan` %><%
       %><% if (entry.finishedAt) { %> — <%
-        %><%= entry.filesFound === null ? 0 : entry.filesFound %> file<%= entry.filesFound === 1 ? '' : 's' %> found<%
-        %><% if (entry.added) { %>, <%= entry.added %> added<% } %><%
-        %><% if (entry.updated) { %>, <%= entry.updated %> updated<% } %><%
-        %><% if (entry.missing) { %>, <%= entry.missing %> missing<% } %><%
-        %><% if (entry.removed) { %>, <%= entry.removed %> dropped<% } %>.<%
+        %><% if (adverts) { %><%
+          %><%= entry.filesFound === null ? 0 : entry.filesFound %> episode<%= entry.filesFound === 1 ? '' : 's' %> examined<%
+          %><% if (entry.updated) { %>, <%= entry.updated %> trimmed<% } %>.<%
+        %><% } else { %><%
+          %><%= entry.filesFound === null ? 0 : entry.filesFound %> file<%= entry.filesFound === 1 ? '' : 's' %> found<%
+          %><% if (entry.added) { %>, <%= entry.added %> added<% } %><%
+          %><% if (entry.updated) { %>, <%= entry.updated %> updated<% } %><%
+          %><% if (entry.missing) { %>, <%= entry.missing %> missing<% } %><%
+          %><% if (entry.removed) { %>, <%= entry.removed %> dropped<% } %>.<%
+        %><% } %><%
       %><% } else { %> — still running…<% } %>
       <% if (entry.note) { %><span class="log-item__note"><%= entry.note %></span><% } %>
 

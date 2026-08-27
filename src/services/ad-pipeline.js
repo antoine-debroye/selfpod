@@ -1,4 +1,4 @@
-import { AD_TRIM_MODES, SEGMENT_STATUS } from '../constants.js';
+import { AD_TRIM_MODES, SCAN_TRIGGER, SEGMENT_STATUS } from '../constants.js';
 import { EVENTS } from '../lib/events.js';
 import { resolvePublishHold } from '../lib/publish-hold.js';
 
@@ -19,7 +19,7 @@ import { resolvePublishHold } from '../lib/publish-hold.js';
  * Serialising costs wall-clock time nobody is waiting on: the work happens behind a
  * publish hold, so the only observable difference is when an episode appears.
  */
-export function createAdPipeline({ db, events, logger, shows, episodes, adDetect, trimmer }) {
+export function createAdPipeline({ db, events, logger, shows, episodes, adDetect, trimmer, activity }) {
   let chain = Promise.resolve();
   let active = null;
 
@@ -91,6 +91,53 @@ export function createAdPipeline({ db, events, logger, shows, episodes, adDetect
     return { released, held, corpusSize };
   }
 
+  /**
+   * Writes a line in the activity log — but only when there is something to say.
+   *
+   * This runs on every scheduled tick for every show that has the feature on, and
+   * nearly all of those runs find exactly what they found last time. Recording them
+   * would put a few hundred rows a day per show into the log people go to when
+   * something has gone wrong, which is the fastest way to make that log useless.
+   *
+   * The counters are the scan_log's own columns, so the wording has to be chosen with
+   * care: `removed` renders as "dropped", a word this app already uses for an episode
+   * leaving a feed, and `added` would claim episodes appeared. Only `updated` — an
+   * episode whose audio changed — is true here. A warning is likewise reserved for a
+   * genuine anomaly, because one warning files the row under "Problems" for ever, and
+   * finding nothing to cut is the ordinary state of a healthy show.
+   */
+  function recordActivity(show, counts) {
+    if (!activity) return;
+    if (!counts.found && !counts.trimmed && !counts.failed && !counts.released) return;
+
+    const parts = [];
+    if (counts.found) parts.push(`${counts.found} repeated ${counts.found === 1 ? 'segment' : 'segments'} found`);
+    if (counts.trimmed) {
+      parts.push(`${counts.trimmed} ${counts.trimmed === 1 ? 'episode' : 'episodes'} trimmed`);
+    }
+    if (counts.released) {
+      parts.push(`${counts.released} published`);
+    }
+    if (counts.held) parts.push(`${counts.held} still waiting on a decision`);
+
+    const id = activity.start({ showId: show.id, trigger: SCAN_TRIGGER.ADVERTS });
+    activity.finish(id, {
+      filesFound: counts.examined,
+      updated: counts.trimmed,
+      note: `${show.title} — ${parts.join(', ')}.`,
+      warnings: counts.failed
+        ? [
+            {
+              file: null,
+              message: `SelfPod could not remove the approved adverts from ${counts.failed} ${
+                counts.failed === 1 ? 'episode' : 'episodes'
+              }. They are published as they arrived, adverts included.`,
+            },
+          ]
+        : [],
+    });
+  }
+
   const api = {
     /**
      * Everything a show needs, in order: fingerprint, detect, cut, publish.
@@ -128,6 +175,16 @@ export function createAdPipeline({ db, events, logger, shows, episodes, adDetect
 
         const trimmed = await trimmer.trimShow(showId);
         const holds = settleHolds(show);
+
+        recordActivity(show, {
+          examined: fingerprinted?.fingerprinted ?? 0,
+          corpus: holds.corpusSize,
+          found: detected?.newSegments ?? 0,
+          trimmed: trimmed.trimmed,
+          failed: trimmed.failed,
+          held: holds.held,
+          released: holds.released,
+        });
 
         logger?.info(
           {

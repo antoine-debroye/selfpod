@@ -130,6 +130,8 @@ export const SCAN_TRIGGER = Object.freeze({
    * these rows are recorded and then unfilterable.
    */
   SUBSCRIPTION: 'subscription',
+  /** Looking through a show's episodes for repeated audio, and cutting what was approved. */
+  ADVERTS: 'adverts',
 });
 
 /**
@@ -150,6 +152,7 @@ export const SCAN_TRIGGER_LABELS = Object.freeze({
   startup: 'Startup',
   upload: 'Upload',
   subscription: 'Subscription',
+  adverts: 'Advert check',
 });
 
 /** Bounds for the fallback rescan interval, per spec §6.2: 1 minute – 6 hours. */

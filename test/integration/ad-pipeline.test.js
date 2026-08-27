@@ -318,6 +318,53 @@ describe('when an approved segment moves', () => {
   });
 });
 
+describe('what the activity log says about it', () => {
+  it('records a check that actually did something, in episodes not files', async () => {
+    const show = await makeShow({ mode: 'auto', count: 3 });
+
+    await server.adPipeline.processShow(show.id);
+
+    const [entry] = server.activity.list({ showId: show.id }).filter((row) => row.trigger === 'adverts');
+    assert.ok(entry, 'an advert check that trimmed three episodes was not recorded');
+    assert.equal(entry.updated, 3, 'the episodes whose audio changed');
+    assert.equal(entry.added, 0, 'nothing was added');
+    // `removed` renders as "dropped", a word this app already uses for an episode
+    // leaving a feed. A healthy advert check must never produce that sentence.
+    assert.equal(entry.removed, 0);
+    assert.match(entry.note, /trimmed/);
+    assert.deepEqual(entry.warnings, [], 'a healthy check was filed under Problems');
+  });
+
+  it('says nothing at all when there was nothing to say', async () => {
+    // This runs on every scheduled tick for every show that has the feature on, and
+    // nearly every run finds what it found last time. Recording those would put
+    // hundreds of rows a day into the log people open when something is wrong.
+    const show = await makeShow({ mode: 'auto', count: 3 });
+    await server.adPipeline.processShow(show.id);
+    const before = server.activity.list({ showId: show.id }).length;
+
+    await server.adPipeline.processShow(show.id);
+    await server.adPipeline.processShow(show.id);
+
+    assert.equal(server.activity.list({ showId: show.id }).length, before, 'two idle runs filled the log');
+  });
+
+  it('reads as an advert check rather than a scan', async () => {
+    // Sharing the scan row's wording would render "adverts scan — 3 files found,
+    // 3 added": three wrong words in one line.
+    const show = await makeShow({ mode: 'auto', count: 3 });
+    await server.adPipeline.processShow(show.id);
+    await server.login();
+
+    const response = await server.get('/activity');
+    assert.equal(response.statusCode, 200, 'the activity page did not render');
+    const body = response.body;
+
+    assert.match(body, /advert check — 3 episodes examined, 3 trimmed/);
+    assert.ok(!/adverts scan/.test(body), 'it called itself a scan');
+  });
+});
+
 describe('what the trimmed audio actually is', () => {
   it('is the programme, with the sponsor read gone from the middle', async () => {
     const show = await makeShow({ mode: 'auto', count: 3 });

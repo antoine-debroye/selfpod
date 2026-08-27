@@ -332,6 +332,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       const found = findRepeatedSegments(corpus, { minEpisodes: Math.min(threshold, 2) });
 
       let recorded = 0;
+      // Counted apart from `recorded`, because "found three things" and "found three
+      // things you have already been shown" are different sentences. Detection runs on
+      // every tick and re-finds the same audio every time; only what is new is worth
+      // telling anyone about.
+      let fresh = 0;
       for (const segment of found) {
         const occurrences = segment.occurrences.map((occurrence) => ({
           ...occurrence,
@@ -346,7 +351,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
         );
         const auto = show.ad_trim_mode === 'auto' && verdict.safe;
 
-        upsertSegment(show.id, {
+        const stored = upsertSegment(show.id, {
           signature: segment.signature,
           source: SEGMENT_SOURCES.CORPUS,
           durationMs,
@@ -358,11 +363,12 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
           holdReason: verdict.safe ? null : verdict.reason,
         });
         recorded += 1;
+        if (stored.isNew) fresh += 1;
       }
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
-      logger?.info({ showId: show.id, segments: recorded }, 'looked for repeated audio');
-      return { segments: recorded, episodes: corpus.length };
+      logger?.info({ showId: show.id, segments: recorded, fresh }, 'looked for repeated audio');
+      return { segments: recorded, newSegments: fresh, episodes: corpus.length };
     },
 
     /**

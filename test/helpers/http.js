@@ -81,7 +81,7 @@ export async function createTestServer({ env = {}, completeSetup = true } = {}) 
     db, config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
-    db, events, logger: silentLogger, shows, episodes, adDetect, trimmer,
+    db, events, logger: silentLogger, shows, episodes, adDetect, trimmer, activity,
   });
   // The real service, not a stub: the routes drive it, and it never schedules
   // anything itself — the scheduler owns the timer — so nothing fires unless a test

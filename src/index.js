@@ -127,7 +127,7 @@ async function main() {
     db, config, events, logger, health, shows, episodes, adDetect, metadata,
   });
   const adPipeline = createAdPipeline({
-    db, events, logger, shows, episodes, adDetect, trimmer,
+    db, events, logger, shows, episodes, adDetect, trimmer, activity,
   });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
