@@ -7,7 +7,7 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
-## 1.6.0 — unreleased
+## 1.6.0 — 2026-08-27
 
 ### Added
 
