@@ -1055,6 +1055,14 @@ file on disk is named after that same version, so the row in the database
 and the bytes it describes move together. A later re-cut is a different
 URL rather than different bytes at the same one.
 
+The version has to be **checked** on the way in, or it is decoration: a
+route that resolves from the episode id alone serves whatever is current
+whichever version was asked for, which is the hazard again with a longer
+URL. The absence of a version is a claim in its own right — "the untrimmed
+one" — which is what lets an episode that has never been cut keep the URL
+it has always had, and still be refused once it has been. A refusal is the
+right answer here: a download that fails is one the app retries.
+
 A trim that fails publishes the original and says so loudly. An advert
 that survives explains itself the moment it is heard; an episode that
 silently never appears does not.
