@@ -248,6 +248,203 @@ describe('the ledger on the page', () => {
     assert.ok(!response.body.includes('Bonus content'), 'the filter must actually filter');
   });
 
+  /**
+   * A ledger with more rows than one page.
+   *
+   * Written straight into the service rather than served from the sentinel feed: the
+   * question under test is what the page does with 120 rows, not whether the poller
+   * can produce them, and a 120-item feed would make every other assertion in this
+   * file slower for nothing.
+   */
+  function fillLedger(subscriptionId, count) {
+    for (let i = 0; i < count; i += 1) {
+      const item = server.subscriptions.upsertItem(subscriptionId, {
+        guid: `filler-${i}`,
+        guidSource: 'guid',
+        title: `Filler episode ${i}`,
+        pubDate: new Date(Date.UTC(2024, 0, 1 + i)).toISOString(),
+      });
+      server.subscriptions.markItem(item.id, {
+        decision: 'skipped_backfill',
+        reject_reason: 'backfill_limit',
+        reject_detail: 'Older than the 5 most recent matching episodes.',
+      });
+    }
+  }
+
+  it('searches the ledger by title', async () => {
+    await post('/ui/shows/tape-club/subscription', {
+      feedUrl: `${origin}/feed.xml`,
+      backfillCount: '10',
+    });
+    const subscription = server.subscriptions.getForShow(show.id);
+    await server.remoteFeeds.pollNow(subscription.id);
+
+    const response = await server.get('/shows/tape-club/subscription?q=bonus', { authed: true });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Bonus content/);
+    /* Rows, not a substring of the whole page: "An interview" also appears inside the
+       other row's tooltip, which is the ledger explaining itself rather than the
+       filter leaking. */
+    const rows = response.body.match(/class="ledger-what"/g) ?? [];
+    assert.equal(rows.length, 1, 'the search must actually narrow the table');
+    // The same filter, submitted the way a browser without JavaScript submits it.
+    assert.match(response.body, /name="q"[^>]*value="bonus"/, 'and the box still holds what was typed');
+  });
+
+  it('says how much of the ledger it is showing, and can show the rest', async () => {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
+    const subscription = server.subscriptions.getForShow(show.id);
+    fillLedger(subscription.id, 120);
+
+    const page = await server.get('/shows/tape-club/subscription', { authed: true });
+    assert.match(page.body, /50 of 120 shown/, 'a truncated table must say so');
+
+    const older = await server.get(
+      `/ui/subscriptions/${subscription.id}/items/rows?offset=50`,
+      { authed: true },
+    );
+    assert.equal(older.statusCode, 200);
+    assert.match(older.body, /100 of 120 shown/);
+    assert.ok(older.body.trimStart().startsWith('<tr'), 'a tbody swap may contain nothing but rows');
+  });
+
+  it('keeps the filter when one episode is fetched by hand', async () => {
+    await post('/ui/shows/tape-club/subscription', {
+      feedUrl: `${origin}/feed.xml`,
+      excludeKeywords: 'bonus',
+      backfillCount: '10',
+    });
+    const subscription = server.subscriptions.getForShow(show.id);
+    await server.remoteFeeds.pollNow(subscription.id);
+    const refused = server.subscriptions
+      .items({ subscriptionId: subscription.id, decision: 'rejected_declared' })[0];
+
+    const response = await post(
+      `/ui/subscriptions/${subscription.id}/items/${refused.id}/redownload?decision=rejected_declared`,
+      {},
+    );
+
+    assert.equal(response.statusCode, 303);
+    assert.equal(
+      response.headers.location,
+      '/shows/tape-club/subscription?decision=rejected_declared',
+      'a no-JS fetch must come back to the view it was started from',
+    );
+  });
+
+  it('narrows the ledger to what was published in a window', async () => {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
+    const subscription = server.subscriptions.getForShow(show.id);
+    /* One item published this morning and one two years ago, so "last 7 days" has
+       exactly one right answer whenever this test happens to run. */
+    const recent = server.subscriptions.upsertItem(subscription.id, {
+      guid: 'fresh',
+      guidSource: 'guid',
+      title: 'Published today',
+      pubDate: new Date().toISOString(),
+    });
+    server.subscriptions.upsertItem(subscription.id, {
+      guid: 'ancient',
+      guidSource: 'guid',
+      title: 'Published long ago',
+      pubDate: new Date(Date.now() - 730 * 24 * 3600 * 1000).toISOString(),
+    });
+    assert.ok(recent);
+
+    const response = await server.get('/shows/tape-club/subscription?published=7d', { authed: true });
+
+    assert.match(response.body, /Published today/);
+    assert.ok(!response.body.includes('Published long ago'), 'the window must exclude what falls outside it');
+
+    // An unknown key must not quietly become the stats default of thirty days.
+    const nonsense = await server.get('/shows/tape-club/subscription?published=banana', { authed: true });
+    assert.match(nonsense.body, /Published long ago/);
+  });
+
+  it('queues everything that was ticked, without JavaScript', async () => {
+    await post('/ui/shows/tape-club/subscription', {
+      feedUrl: `${origin}/feed.xml`,
+      excludeKeywords: 'bonus',
+      backfillCount: '10',
+    });
+    const subscription = server.subscriptions.getForShow(show.id);
+    await server.remoteFeeds.pollNow(subscription.id);
+    const ledger = server.subscriptions.items({ subscriptionId: subscription.id });
+    const ids = ledger.map((row) => row.id);
+
+    const response = await post(
+      `/ui/subscriptions/${subscription.id}/items/redownload`,
+      // Repeated fields, exactly as a browser posts a column of checkboxes.
+      ids.map((id) => ['itemIds', String(id)]),
+    );
+
+    assert.equal(response.statusCode, 303);
+    for (const id of ids) {
+      assert.equal(server.subscriptions.getItem(id).decision, 'matched', `item ${id} is queued`);
+    }
+  });
+
+  it('says so rather than pretending, when nothing was ticked', async () => {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
+    const subscription = server.subscriptions.getForShow(show.id);
+
+    // Asked the way htmx asks, so the answer is the re-rendered card and the message
+    // it carries rather than a redirect whose flash this test cannot read.
+    const response = await post(`/ui/subscriptions/${subscription.id}/items/redownload`, {}, htmx);
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Nothing was selected/, 'an empty selection must say so');
+    assert.match(response.body, /id="subscription-items"/, 'and the table comes back with it');
+  });
+
+  it('refuses a ticked episode whose audio is on a private address', async () => {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
+    const subscription = server.subscriptions.getForShow(show.id);
+    const item = server.subscriptions.upsertItem(subscription.id, {
+      guid: 'blocked',
+      guidSource: 'guid',
+      title: 'On the LAN',
+      pubDate: new Date().toISOString(),
+    });
+    server.subscriptions.markItem(item.id, {
+      decision: 'rejected_blocked',
+      reject_reason: 'private_address',
+      reject_detail: 'Its audio is on a private address.',
+    });
+
+    await post(`/ui/subscriptions/${subscription.id}/items/redownload`, {
+      itemIds: String(item.id),
+    });
+
+    assert.equal(
+      server.subscriptions.getItem(item.id).decision,
+      'rejected_blocked',
+      'a bulk action must not reach an address the guard refused',
+    );
+  });
+
+  it('offers no tick box for an episode it will never fetch', async () => {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
+    const subscription = server.subscriptions.getForShow(show.id);
+    const item = server.subscriptions.upsertItem(subscription.id, {
+      guid: 'blocked',
+      guidSource: 'guid',
+      title: 'On the LAN',
+      pubDate: new Date().toISOString(),
+    });
+    server.subscriptions.markItem(item.id, { decision: 'rejected_blocked' });
+
+    const response = await server.get('/shows/tape-club/subscription', { authed: true });
+
+    assert.ok(
+      !response.body.includes(`value="${item.id}" data-select-item`),
+      'a checkbox for an episode the bulk action would drop is a lie',
+    );
+    assert.match(response.body, /data-select-all/, 'but the page does offer select-all');
+  });
+
   it('pauses and resumes', async () => {
     await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml` });
     const subscription = server.subscriptions.getForShow(show.id);

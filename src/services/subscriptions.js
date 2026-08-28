@@ -505,9 +505,16 @@ export function createSubscriptions({ db, config, events, logger }) {
         .all({ now, limit });
     },
 
-    items({ subscriptionId, decision = null, limit = 50, offset = 0 } = {}) {
+    /**
+     * The ledger's WHERE clause, built once for both the rows and their count.
+     *
+     * A pager that counts a different set from the one it pages through is a pager
+     * that says "40 of 3 shown", so the two callers share this rather than each
+     * assembling their own conditions.
+     */
+    itemWhere({ subscriptionId, decision = null, search = null, from = null, to = null }) {
       const clauses = ['subscription_id = @subscriptionId'];
-      const params = { subscriptionId, limit, offset };
+      const params = { subscriptionId };
       if (decision) {
         // Allow-listed, never interpolated: the same rule stats.js and activity.js
         // follow for every caller-supplied value that reaches SQL.
@@ -517,13 +524,44 @@ export function createSubscriptions({ db, config, events, logger }) {
         clauses.push('decision = @decision');
         params.decision = decision;
       }
+      const term = String(search ?? '').trim();
+      if (term) {
+        /* A LIKE pattern, so `%` and `_` typed by the user are matched as themselves.
+           Without the escape, searching for "100%" would silently match every row —
+           a search box that answers a question nobody asked. */
+        clauses.push("(title LIKE @like ESCAPE '\\' OR filename LIKE @like ESCAPE '\\')");
+        params.like = `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+      }
+      /* Half-open, and on the same expression the rows are ordered by: an item whose
+         feed gave no date is placed by when SelfPod first saw it, and a window that
+         filtered on pub_date alone would drop those rows out of a range they visibly
+         sit inside. */
+      if (from) {
+        clauses.push('COALESCE(pub_date, first_seen_at) >= @from');
+        params.from = from;
+      }
+      if (to) {
+        clauses.push('COALESCE(pub_date, first_seen_at) < @to');
+        params.to = to;
+      }
+      return { where: clauses.join(' AND '), params };
+    },
+
+    items({ subscriptionId, decision = null, search = null, from = null, to = null, limit = 50, offset = 0 } = {}) {
+      const { where, params } = api.itemWhere({ subscriptionId, decision, search, from, to });
       return db
         .prepare(
-          `SELECT * FROM feed_items WHERE ${clauses.join(' AND ')}
+          `SELECT * FROM feed_items WHERE ${where}
             ORDER BY COALESCE(pub_date, first_seen_at) DESC, id DESC
             LIMIT @limit OFFSET @offset`,
         )
-        .all(params);
+        .all({ ...params, limit, offset });
+    },
+
+    /** How many rows that same filter matches, for the pager and the empty state. */
+    itemCount({ subscriptionId, decision = null, search = null, from = null, to = null } = {}) {
+      const { where, params } = api.itemWhere({ subscriptionId, decision, search, from, to });
+      return db.prepare(`SELECT COUNT(*) AS n FROM feed_items WHERE ${where}`).get(params).n;
     },
 
     itemCounts(subscriptionId) {

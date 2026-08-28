@@ -1,0 +1,100 @@
+<%
+  /* The table alone, so a filter can replace it without touching the controls above.
+     The rows are split out again underneath, so "Show older" can append.
+
+     The whole table sits inside the form that queues a selection. Ticked rows are
+     ordinary fields, so a selection posts with JavaScript switched off; only the
+     select-all box needs script, and it hides itself when there is none. */
+  const items = it.items || [];
+  const sub = it.subscription;
+  const filtered = Boolean(it.filter.qs);
+  const action = `/ui/subscriptions/${sub.id}/items/redownload${it.filter.qs ? `?${it.filter.qs}` : ''}`;
+%>
+<div id="subscription-ledger">
+  <% if (!items.length) { %>
+    <div class="empty">
+      <div class="empty__title">
+        <% if (filtered) { %>Nothing matches that<% } else { %>Nothing here yet<% } %>
+      </div>
+      <p class="empty__hint">
+        <% if (filtered) { %>
+          No episode in this feed's history matches those filters. Clear them to see
+          everything SelfPod has decided about.
+        <% } else { %>
+          SelfPod records every episode it sees — including the ones it skips, and why —
+          as soon as it first checks the feed.
+        <% } %>
+      </p>
+    </div>
+  <% } else { %>
+    <%
+      /* A control that cannot work must not be shown. The select-all box and the
+         running count are the two things here that only script can drive; the row
+         checkboxes and the button are real form controls and stay. */
+    %>
+    <noscript>
+      <style>[data-select-all], [data-select-count] { display: none; }</style>
+    </noscript>
+
+    <form method="post" action="<%= action %>" data-ledger-select
+          hx-post="<%= action %>" hx-target="#subscription-items" hx-swap="outerHTML">
+      <div class="table-scroll">
+        <table class="ep-table ledger-table">
+          <thead>
+            <tr>
+              <th class="ledger-pick" scope="col">
+                <%
+                  /* The label is hidden on a wide screen, where a box at the top of a
+                     column of boxes explains itself, and shown on a phone, where the
+                     column headers are gone and it would otherwise be one stray
+                     checkbox above a list. */
+                %>
+                <label class="ledger-pick__all">
+                  <input type="checkbox" data-select-all>
+                  <span class="ledger-pick__label">Select all shown</span>
+                </label>
+              </th>
+              <th scope="col">Episode</th>
+              <th scope="col">Published</th>
+              <th scope="col">What happened</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <%~ include('../partials/subscription-item-rows.eta', it) %>
+          </tbody>
+        </table>
+      </div>
+
+      <%
+        /* The count is written by the server as well as by the script, so the bar says
+           something true before anything has been ticked and on a page with no
+           JavaScript at all. The button is never disabled, for the same reason: a
+           gate that only script can open is a gate that never opens. */
+      %>
+      <div class="ledger-bulk">
+        <button class="btn btn-ink btn-sm" type="submit">Fetch the selected episodes</button>
+        <span class="dim" data-select-count>None selected</span>
+        <span class="ledger-bulk__note dim">
+          Queued for the next checks, at up to <%= it.helpers.perPollLimit %> a check — nothing downloads now.
+        </span>
+      </div>
+    </form>
+
+    <%
+      /* Said once, under the table, rather than on each of the rows it applies to.
+         A second fetch is not free — it costs the publisher a counted listen — so the
+         reasoning belongs on the page; repeating it per row is what turned this table
+         into a wall of the same paragraph. */
+      const rechecking = items.some((entry) => entry.lookAgain);
+    %>
+    <% if (rechecking) { %>
+      <p class="help-note" style="margin-top:14px">
+        <strong>Fetched again tomorrow</strong> means SelfPod will download that episode a
+        second time and compare the two. Whatever differs between two downloads of one
+        episode cannot be the theme tune, so it is an advert — it is the only way to find
+        one that is stitched in as the file is served.
+      </p>
+    <% } %>
+  <% } %>
+</div>

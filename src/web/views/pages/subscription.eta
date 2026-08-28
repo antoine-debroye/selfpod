@@ -13,22 +13,25 @@
 </div>
 
 <% if (!it.featureEnabled) { %>
-  <div class="callout callout-warn" role="status">
-    <strong>Following feeds is switched off.</strong>
-    It is off by default, because it is the only thing that makes SelfPod fetch from the
-    internet at all — with it off, SelfPod only ever talks to your own network.
-    Turn it on in <a href="/settings">Settings</a> when you want to use it.
+  <div class="notice warn" role="status" style="margin-bottom:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div>
+      <strong>Following feeds is switched off.</strong>
+      It is off by default, because it is the only thing that makes SelfPod fetch from the
+      internet at all — with it off, SelfPod only ever talks to your own network.
+      Turn it on in <a href="/settings">Settings</a> when you want to use it.
+    </div>
   </div>
 <% } %>
 
-<div class="grid-2">
-  <div>
+<div class="sub-grid">
+  <div class="sub-grid__main">
     <%~ include('../partials/subscription-form.eta', { show, subscription: sub, helpers: it.helpers, errors: it.errors, values: it.values, saved: it.saved, reopened: it.reopened }) %>
     <div id="subscription-preview"></div>
   </div>
 
-  <div>
-    <% if (sub) { %>
+  <% if (sub) { %>
+    <div class="sub-grid__side">
       <div class="form-card">
         <div class="ftitle">Status</div>
         <dl class="kv">
@@ -41,18 +44,21 @@
         </dl>
 
         <% if (sub.lastError) { %>
-          <div class="callout callout-<%= sub.lastStatus === 'blocked' ? 'err' : 'warn' %>" role="status">
-            <%= sub.lastError %>
-            <% if (sub.lastStatus === 'blocked') { %>
-              <div class="muted">SelfPod has stopped checking this feed. Fix the address and switch it back on.</div>
-            <% } %>
+          <div class="notice <%= sub.lastStatus === 'blocked' ? 'err' : 'warn' %>" role="status" style="margin-bottom:16px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            <div>
+              <%= sub.lastError %>
+              <% if (sub.lastStatus === 'blocked') { %>
+                <div class="dim">SelfPod has stopped checking this feed. Fix the address and switch it back on.</div>
+              <% } %>
+            </div>
           </div>
         <% } %>
 
         <div class="form-actions">
           <form method="post" action="/ui/subscriptions/<%= sub.id %>/poll"
                 hx-post="/ui/subscriptions/<%= sub.id %>/poll" hx-target="body" hx-swap="none">
-            <button class="btn btn-secondary btn-sm" type="submit">Check now</button>
+            <button class="btn btn-ink btn-sm" type="submit">Check now</button>
           </form>
           <form method="post" action="/ui/subscriptions/<%= sub.id %>/toggle"
                 hx-post="/ui/subscriptions/<%= sub.id %>/toggle" hx-target="body" hx-swap="none">
@@ -61,7 +67,7 @@
         </div>
       </div>
 
-      <div class="form-card">
+      <div class="form-card danger-zone">
         <div class="ftitle">Stop following</div>
         <div class="fdesc">
           The episodes SelfPod already downloaded stay exactly where they are — in your feed
@@ -72,18 +78,10 @@
           <button class="btn btn-danger btn-sm" type="submit">Stop following this feed</button>
         </form>
       </div>
-    <% } %>
-  </div>
+    </div>
+  <% } %>
 </div>
 
 <% if (sub) { %>
-  <div class="section">
-    <div class="section-title">
-      <h2>Every episode SelfPod has seen</h2>
-      <p class="muted">
-        Including the ones it skipped, and why. This is the answer to “where is that episode?”.
-      </p>
-    </div>
-    <%~ include('../partials/subscription-items.eta', { subscription: sub, items: it.items, counts: sub.counts, filter: it.filter, helpers: it.helpers }) %>
-  </div>
+  <%~ include('../partials/subscription-items.eta', it.ledger) %>
 <% } %>

@@ -166,6 +166,67 @@
   document.addEventListener('input', onGateInteraction);
   document.addEventListener('change', onGateInteraction);
 
+  /* ------------------------------------------------- ledger row selection */
+
+  /**
+   * Tick-and-queue on the subscription ledger.
+   *
+   * Everything here is an enhancement over checkboxes that already post: the boxes are
+   * ordinary fields inside the form that queues a selection, and the button submits
+   * them with or without this running. What script adds is the header box that ticks
+   * the whole page at once, and a count so nobody has to work out how many they hit.
+   *
+   * Delegated from the document, because the table is swapped by htmx every time a
+   * filter changes and listeners bound to the old rows would go with them.
+   */
+  function ledgerBoxes(form) {
+    return form ? form.querySelectorAll('[data-select-item]') : [];
+  }
+
+  function refreshLedgerSelection(form) {
+    if (!form) return;
+    var boxes = ledgerBoxes(form);
+    var picked = 0;
+    Array.prototype.forEach.call(boxes, function (box) {
+      if (box.checked) picked += 1;
+    });
+
+    var all = form.querySelector('[data-select-all]');
+    if (all) {
+      all.checked = picked > 0 && picked === boxes.length;
+      // Neither ticked nor empty: some of the page is selected, and the box says so
+      // rather than pretending the selection is all or nothing.
+      all.indeterminate = picked > 0 && picked < boxes.length;
+    }
+
+    var count = form.querySelector('[data-select-count]');
+    if (count) {
+      count.textContent = picked
+        ? picked + ' of ' + boxes.length + ' selected'
+        : 'None selected';
+    }
+  }
+
+  document.addEventListener('change', function (event) {
+    var all = event.target.closest('[data-select-all]');
+    if (all) {
+      var form = all.closest('[data-ledger-select]');
+      Array.prototype.forEach.call(ledgerBoxes(form), function (box) {
+        box.checked = all.checked;
+      });
+      refreshLedgerSelection(form);
+      return;
+    }
+    var item = event.target.closest('[data-select-item]');
+    if (item) refreshLedgerSelection(item.closest('[data-ledger-select]'));
+  });
+
+  // A swap brings in new rows — an appended page, or a whole new filtered table — and
+  // the count and header box have to describe what is on screen now.
+  document.addEventListener('htmx:afterSettle', function () {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ledger-select]'), refreshLedgerSelection);
+  });
+
   /* --------------------------------------------------------------- toggles */
 
   document.addEventListener('change', function (event) {

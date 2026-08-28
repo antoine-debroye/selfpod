@@ -1,0 +1,110 @@
+<%
+  /* Rows only, with no wrapper of their own: "Show older" targets the pager row and
+     swaps it for the next page of rows plus a fresh pager, which is what makes paging
+     append rather than replace. Anything that is not a <tr> in a response bound for a
+     <tbody> is dropped by the HTML parser before htmx ever sees it.
+
+     One decision is made here and nowhere else: the "why" sentence is printed once at
+     the top of a run of identical ones, not on every row. A feed whose backfill limit
+     left 495 episodes behind has 495 rows carrying the same sentence, and repeating it
+     is how the answer to "where is that episode?" became impossible to read. Every row
+     still carries it as the badge's tooltip, and the badge itself says which of the
+     eleven decisions this was, so nothing is only inferable from a row above. */
+  const sub = it.subscription;
+  const filter = it.filter;
+  const qs = filter.qs ? `?${filter.qs}` : '';
+  let lastDetail = null;
+%>
+<% for (const entry of it.items) { %>
+  <%
+    const badge = it.helpers.ledgerBadge(entry.decision);
+    const missing = entry.decision === 'downloaded' && entry.episodeStatus && entry.episodeStatus !== 'active';
+    const showDetail = entry.detail && entry.detail !== lastDetail;
+    lastDetail = entry.detail ?? null;
+    const action = `/ui/subscriptions/${sub.id}/items/${entry.id}/redownload${qs}`;
+  %>
+  <tr>
+    <td class="ledger-pick">
+      <%
+        /* No checkbox where there is no action: an episode refused because its audio
+           is on a private address is never fetched from this page, so offering it to a
+           bulk queue would be offering something that is then silently dropped. */
+      %>
+      <% if (entry.decision !== 'rejected_blocked') { %>
+        <input type="checkbox" name="itemIds" value="<%= entry.id %>" data-select-item
+               aria-label="Select <%= entry.title || 'this episode' %>">
+      <% } %>
+    </td>
+    <td class="ledger-episode">
+      <div class="ep-title">
+        <%= entry.title || '(untitled)' %>
+        <% if (entry.filename) { %><small><%= entry.filename %></small><% } %>
+      </div>
+    </td>
+    <td class="ep-date mono"><%= entry.publishedAt ? it.helpers.formatDate(entry.publishedAt) : '—' %></td>
+    <td class="ledger-what">
+      <span class="badge <%= badge.cls %> badge--tight" title="<%= entry.detail || badge.label %>">
+        <span class="d" aria-hidden="true"></span><%= badge.label %>
+      </span>
+      <% if (missing) { %>
+        <div class="ledger-why ledger-why--warn">…but the file is no longer on your share.</div>
+      <% } %>
+      <% if (showDetail) { %>
+        <div class="ledger-why"><%= entry.detail %></div>
+      <% } %>
+      <% if (entry.lookAgain) { %>
+        <div class="ledger-why">
+          Fetched again tomorrow, because
+          <%= entry.lookAgain.charAt(0).toLowerCase() + entry.lookAgain.slice(1) %>
+        </div>
+      <% } %>
+      <% if (entry.lookedAgain) { %>
+        <div class="ledger-why">
+          <% if (entry.lookedAgain === 'differs') { %>
+            Fetched a second time, and the two copies differed — the difference is
+            catalogued as an advert.
+          <% } else if (entry.lookedAgain === 'identical') { %>
+            Fetched a second time; both copies were the same, so nothing is inserted
+            when this is served.
+          <% } else if (entry.lookedAgain === 'differs_elsewhere') { %>
+            Fetched a second time. The two differed, but only by audio the other copy
+            had — there is nothing in your file to remove.
+          <% } else { %>
+            Tried to fetch this a second time and could not.
+          <% } %>
+        </div>
+      <% } %>
+    </td>
+    <td class="ledger-actions">
+      <%
+        /* A `formaction` rather than a form of its own: these rows are inside the form
+           that queues a selection, and a nested <form> is dropped by the parser — the
+           button would render and do nothing. Same device the subscription form uses
+           for "Preview what would match". */
+      %>
+      <% if (entry.decision !== 'rejected_blocked') { %>
+        <button class="btn btn-ghost btn-sm" type="submit"
+                formmethod="post" formaction="<%= action %>"
+                hx-post="<%= action %>" hx-target="#subscription-items" hx-swap="outerHTML"
+                aria-label="<%= entry.decision === 'downloaded' ? 'Download again' : 'Fetch it anyway' %>: <%= entry.title %>">
+          <%= entry.decision === 'downloaded' ? 'Download again' : 'Fetch it anyway' %>
+        </button>
+      <% } %>
+    </td>
+  </tr>
+<% } %>
+
+<% if (it.hasMore) { %>
+  <tr class="log-more-row" id="subscription-items-more">
+    <td colspan="5">
+      <div class="log-more">
+        <button class="btn btn-ghost btn-sm" type="button"
+                hx-get="/ui/subscriptions/<%= sub.id %>/items/rows?<%= filter.qs %><%= filter.qs ? '&' : '' %>offset=<%= it.nextOffset %>"
+                hx-target="#subscription-items-more" hx-swap="outerHTML">
+          Show older
+        </button>
+        <span class="dim"><%= it.loaded %> of <%= it.total %> shown</span>
+      </div>
+    </td>
+  </tr>
+<% } %>

@@ -317,6 +317,13 @@ describe('htmx fragments', () => {
     assert.equal(response.headers['hx-retarget'], '#episode-table');
     assert.equal(server.episodes.get(episode.id).status, 'removed');
     assert.ok(response.body.includes('Not in feed'));
+    /* The confirmation rides along out of band. It has been silently lost twice —
+       `reply.view` sends as it renders, so anything appended to its return value
+       reaches nobody — and a removal that says nothing looks like one that failed. */
+    assert.ok(
+      response.body.includes('hx-swap-oob="beforeend:#toast-root"'),
+      'and says so, rather than swapping a table and going quiet',
+    );
   });
 
   it('refuses to delete an audio file without the explicit confirmation', async () => {

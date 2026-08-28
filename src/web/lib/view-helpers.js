@@ -1,6 +1,34 @@
 import { formatDateTime, formatDuration, formatTimeOfDay, relativeTime, toLocalInputValue } from '../../lib/dates.js';
-import { LANGUAGES, SUPPORTED_EXTENSIONS_LABEL } from '../../constants.js';
+import {
+  ITEM_DECISION,
+  LANGUAGES,
+  REMOTE_MAX_ITEMS_PER_POLL,
+  SUPPORTED_EXTENSIONS_LABEL,
+} from '../../constants.js';
 import { APPLE_CATEGORIES, CATEGORY_NAMES } from './apple-categories.js';
+
+/**
+ * What happened to a remote episode, said in words.
+ *
+ * Every decision gets a sentence fragment, because a bare enum in the one place
+ * someone looks to find out where an episode went is not an answer. The order is the
+ * order the filter lists them in: what arrived, then what is on its way, then the
+ * refusals, then the failures — roughly how interesting each is to someone who came
+ * here asking "where is that episode?".
+ */
+const LEDGER_DECISIONS = Object.freeze([
+  { value: ITEM_DECISION.DOWNLOADED, label: 'In your feed', cls: 'badge-ok' },
+  { value: ITEM_DECISION.MATCHED, label: 'Waiting to download', cls: 'badge-warn' },
+  { value: ITEM_DECISION.DOWNLOADING, label: 'Downloading', cls: 'badge-warn' },
+  { value: ITEM_DECISION.PENDING, label: 'Not looked at yet', cls: 'badge-mute' },
+  { value: ITEM_DECISION.REJECTED_DECLARED, label: "Didn't match your rules", cls: 'badge-mute' },
+  { value: ITEM_DECISION.REJECTED_MEASURED, label: 'Too short or too long', cls: 'badge-mute' },
+  { value: ITEM_DECISION.SKIPPED_BACKFILL, label: 'Older than your backfill limit', cls: 'badge-mute' },
+  { value: ITEM_DECISION.DUPLICATE, label: 'Identical to one you already have', cls: 'badge-mute' },
+  { value: ITEM_DECISION.DELETED_BY_USER, label: 'You deleted this one', cls: 'badge-mute' },
+  { value: ITEM_DECISION.REJECTED_BLOCKED, label: 'Refused: audio on a private address', cls: 'badge-err' },
+  { value: ITEM_DECISION.FAILED, label: "Couldn't be fetched", cls: 'badge-err' },
+]);
 
 /**
  * Helpers exposed to every template. Formatting lives here rather than in the
@@ -210,6 +238,22 @@ export function createViewHelpers({ config }) {
       return { tone, glyph, label: `${size} vs ${periodLabel}` };
     },
 
+    /**
+     * Every ledger decision, in words, in the order the filter offers them.
+     *
+     * One list rather than a map inlined in the template: the filter and the rows
+     * have to agree about what a decision is called, and a second copy is how the
+     * chip that says "Didn't match your rules" comes to filter to something that
+     * reads as "rejected_declared" in the table underneath.
+     */
+    ledgerDecisions: LEDGER_DECISIONS,
+
+    /** Badge class and wording for one ledger decision. */
+    ledgerBadge(decision) {
+      return LEDGER_DECISIONS.find((entry) => entry.value === decision)
+        ?? { value: decision, label: decision, cls: 'badge-mute' };
+    },
+
     /** Dot colour + label for one episode-timeline event, mirroring episodeBadge. */
     episodeEventBadge(event) {
       if (event === 'added') return { cls: 'badge-ok', label: 'Added' };
@@ -229,6 +273,9 @@ export function createViewHelpers({ config }) {
       }
       return bars;
     },
+
+    /** How many queued episodes one check may take, so the UI can promise the truth. */
+    perPollLimit: REMOTE_MAX_ITEMS_PER_POLL,
 
     languages: LANGUAGES,
     categories: APPLE_CATEGORIES,

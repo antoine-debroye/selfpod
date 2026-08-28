@@ -3,45 +3,54 @@
   const problem = it.problem;
 %>
 <% if (problem) { %>
-  <div class="callout callout-err" role="status"><%= problem %></div>
+  <div class="notice err" role="status" style="margin-top:18px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><%= problem %></div>
+  </div>
 <% } else if (preview) { %>
-  <div class="form-card">
+  <div class="form-card" style="margin-top:18px">
     <div class="ftitle"><%= preview.feed.title || 'That feed' %></div>
     <div class="fdesc">
       <%= preview.matchCount %> of the <%= preview.items.length %> most recent
       <%= preview.items.length === 1 ? 'episode' : 'episodes' %> match your rules.
       Nothing has been downloaded — this is only a look.
     </div>
-    <table class="table table-compact">
-      <thead>
-        <tr><th>Episode</th><th>Length</th><th>Verdict</th></tr>
-      </thead>
-      <tbody>
-        <% for (const entry of preview.items) { %>
+    <div class="table-scroll">
+      <table class="ep-table">
+        <thead>
           <tr>
-            <td>
-              <%= entry.title %>
-              <% if (entry.publishedAt) { %>
-                <div class="muted mono"><%= it.helpers.formatDate(entry.publishedAt) %></div>
-              <% } %>
-            </td>
-            <td class="mono"><%= entry.durationSeconds === null ? '—' : it.helpers.formatDuration(entry.durationSeconds) %></td>
-            <td>
-              <% if (entry.keep && entry.needsDownloadToDecide) { %>
-                <span class="pill pill-warn">Will download to check its length</span>
-              <% } else if (entry.keep) { %>
-                <span class="pill pill-ok">Will download</span>
-              <% } else { %>
-                <span class="pill pill-muted">Skipped</span>
-                <div class="muted"><%= entry.detail %></div>
-              <% } %>
-            </td>
+            <th scope="col">Episode</th>
+            <th scope="col">Length</th>
+            <th scope="col">Verdict</th>
           </tr>
-        <% } %>
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          <% for (const entry of preview.items) { %>
+            <tr>
+              <td>
+                <div class="ep-title">
+                  <%= entry.title %>
+                  <% if (entry.publishedAt) { %><small class="mono"><%= it.helpers.formatDate(entry.publishedAt) %></small><% } %>
+                </div>
+              </td>
+              <td class="dur mono"><%= entry.durationSeconds === null ? '—' : it.helpers.formatDuration(entry.durationSeconds) %></td>
+              <td class="ledger-what">
+                <% if (entry.keep && entry.needsDownloadToDecide) { %>
+                  <span class="badge badge-warn badge--tight"><span class="d" aria-hidden="true"></span>Will download to check its length</span>
+                <% } else if (entry.keep) { %>
+                  <span class="badge badge-ok badge--tight"><span class="d" aria-hidden="true"></span>Will download</span>
+                <% } else { %>
+                  <span class="badge badge-mute badge--tight"><span class="d" aria-hidden="true"></span>Skipped</span>
+                  <div class="ledger-why"><%= entry.detail %></div>
+                <% } %>
+              </td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
     <% if (preview.truncated) { %>
-      <div class="hint">Only the most recent <%= preview.items.length %> are shown.</div>
+      <p class="help-note" style="margin-top:14px">Only the most recent <%= preview.items.length %> are shown.</p>
     <% } %>
   </div>
 <% } %>

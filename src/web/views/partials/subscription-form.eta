@@ -85,10 +85,11 @@
   </div>
 
   <% if (it.reopened) { %>
-    <div class="callout callout-ok" role="status">
-      <%= it.reopened %> previously skipped
+    <div class="notice info" role="status" style="margin:4px 0 14px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+      <div><%= it.reopened %> previously skipped
       <%= it.reopened === 1 ? 'episode' : 'episodes' %> will be re-checked on the next look,
-      because your rules got less strict.
+      because your rules got less strict.</div>
     </div>
   <% } %>
 
@@ -100,6 +101,6 @@
             hx-target="#subscription-preview" hx-swap="innerHTML">
       Preview what would match
     </button>
-    <% if (it.saved) { %><span class="saved-note" role="status">Saved</span><% } %>
+    <% if (it.saved) { %><span class="form-saved" role="status">Saved</span><% } %>
   </div>
 </form>

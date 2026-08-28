@@ -7,6 +7,48 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.7.0 — 2026-08-28
+
+### Added
+
+- **The list of every episode a followed feed has offered can now be searched, filtered
+  and paged.** A feed followed for a while has hundreds of entries — a handful in your
+  feed and the rest refused, nearly all of them for the same reason. There is now a
+  search box (title or filename), a "what happened" filter listing every decision with
+  how many entries it holds, a "published" filter for the last 7, 30 or 90 days, and a
+  "Show older" button that says how much of the list you are looking at. Every filter
+  survives a reload, a bookmark and a browser with JavaScript switched off, because
+  they are in the address bar.
+- **Episodes can be ticked and fetched together.** Each entry has a checkbox, with a
+  select-all for everything on screen, and one button queues the lot — so bringing back
+  a month of episodes you skipped is a filter, a tick and a click rather than forty
+  separate ones. Nothing downloads when you press it: the selection joins the queue and
+  each check takes up to 25 of them, which the button says next to it. Episodes refused
+  because their audio sits on a private address have no checkbox, and are refused again
+  if one is sent by hand.
+
+### Fixed
+
+- **That same list quietly stopped at the first hundred entries.** It fetched a hundred
+  rows, showed them, and said nothing about the rest. On the feed this was found on, 402
+  of 502 entries were simply not on the page — on the one page in SelfPod whose entire
+  job is to account for every episode a feed has offered.
+- **The subscription page was rendering half-unstyled.** It had been built out of class
+  names the stylesheet never had — the status panel, the state of each entry, the
+  refusal notes and the table itself all fell back to browser defaults. It is now built
+  from the same components as the rest of the app: the table is the episode table, the
+  states are the same badges used everywhere else, and it stacks into readable blocks on
+  a phone rather than scrolling the "what happened" column off the screen.
+- **A confirmation was being dropped on the floor after removing an episode from the
+  feed.** With JavaScript on, "Remove from feed" swapped the table and said nothing —
+  the message was rendered into a response that had already been sent. It had been
+  fixed once before and silently regressed; there is now a test that fails if it goes
+  quiet again.
+- **The reason an episode was skipped was repeated on every row it applied to.** Four
+  hundred rows carried the same sentence about the backfill limit. It is now printed
+  once at the top of a run of identical ones and kept on every row as a tooltip, so the
+  column reads as a column instead of a wall.
+
 ## 1.6.4 — 2026-08-27
 
 ### Fixed

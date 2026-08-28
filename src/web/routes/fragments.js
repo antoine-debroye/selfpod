@@ -1,4 +1,11 @@
-import { AD_TRIM_MODES, ITEM_DECISION, SCAN_TRIGGER, SEGMENT_STATUS, SHOW_STATUS } from '../../constants.js';
+import {
+  AD_TRIM_MODES,
+  ITEM_DECISION,
+  REMOTE_MAX_ITEMS_PER_POLL,
+  SCAN_TRIGGER,
+  SEGMENT_STATUS,
+  SHOW_STATUS,
+} from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseKeywords } from '../../lib/feed-filter.js';
 import { describeComparability, presentSegment } from '../../lib/present-segment.js';
@@ -174,16 +181,15 @@ export default async function fragmentRoutes(fastify, services) {
       });
     }
 
-    function renderItems(reply, subscription, { filter = '' } = {}) {
-      return reply.view('partials/subscription-items.eta', {
-        subscription: presentSubscription(subscription, services),
-        items: services.subscriptions
-          .items({ subscriptionId: subscription.id, decision: filter || null, limit: 100 })
-          .map((row) => presentItem(row, services)),
-        counts: services.subscriptions.itemCounts(subscription.id),
-        filter,
-        helpers: fastify.viewHelpers,
-      });
+    /**
+     * The ledger card, filtered by whatever the request carries.
+     *
+     * The filter travels in the query string even on the redownload POST, so that
+     * fetching one episode by hand re-renders the view the operator was looking at
+     * rather than throwing them back to the unfiltered first page.
+     */
+    function renderItems(reply, subscription, request) {
+      return reply.view('partials/subscription-items.eta', services.ledgerContext(subscription, request));
     }
 
     /** Create or update, on one URL, because the form is the same either way. */
@@ -300,7 +306,119 @@ export default async function fragmentRoutes(fastify, services) {
 
     scoped.get('/ui/subscriptions/:id/items', async (request, reply) => {
       const subscription = services.subscriptions.getOrThrow(request.params.id);
-      return renderItems(reply, subscription, { filter: request.query?.decision ?? '' });
+      const show = shows.getOrThrow(subscription.show_id);
+      const context = services.ledgerContext(subscription, request);
+      // Changing a filter is a navigation: the address bar has to end up somewhere
+      // that reloads into the same view.
+      reply.header(
+        'HX-Push-Url',
+        `${subscriptionPath(show.slug)}${context.filter.qs ? `?${context.filter.qs}` : ''}`,
+      );
+      return reply.view('partials/subscription-items.eta', context);
+    });
+
+    /* The table alone, which is what a filter replaces. Swapping the whole card
+       instead would take the search box out of the document between keystrokes and
+       the cursor with it. */
+    scoped.get('/ui/subscriptions/:id/items/table', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      const context = services.ledgerContext(subscription, request);
+      reply.header(
+        'HX-Push-Url',
+        `${subscriptionPath(show.slug)}${context.filter.qs ? `?${context.filter.qs}` : ''}`,
+      );
+      return reply.view('partials/subscription-ledger.eta', context);
+    });
+
+    /* Rows only, so "Show older" appends a page instead of replacing the card it
+       lives inside — the same split the access log uses, for the same reason. */
+    scoped.get('/ui/subscriptions/:id/items/rows', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      reply.header('HX-Push-Url', 'false');
+      return reply.view('partials/subscription-item-rows.eta', services.ledgerContext(subscription, request));
+    });
+
+    /** Back to the queue, with everything a previous decision left behind cleared. */
+    function queueItem(item) {
+      services.subscriptions.markItem(item.id, {
+        decision: ITEM_DECISION.MATCHED,
+        reject_reason: null,
+        reject_detail: null,
+        episode_id: null,
+        filename: null,
+        identity_key: null,
+        attempts: 0,
+        next_attempt_at: null,
+      });
+    }
+
+    /**
+     * Queue everything that was ticked.
+     *
+     * Ticked rows are ordinary form fields, so this works with JavaScript switched off:
+     * the select-all box is the only part of the selection that needs it, and it is an
+     * enhancement over checkboxes that already post.
+     *
+     * Nothing here downloads. Each poll takes a bounded number of queued episodes, so
+     * selecting four hundred of them queues four hundred and spends the bandwidth over
+     * days rather than in one burst — which the wording says, because a button that
+     * silently starts a multi-gigabyte fetch is not a button anyone can consent to.
+     */
+    scoped.post('/ui/subscriptions/:id/items/redownload', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      const raw = request.body?.itemIds;
+      const ids = (Array.isArray(raw) ? raw : raw === undefined ? [] : [raw])
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value));
+
+      let queued = 0;
+      let blocked = 0;
+      for (const id of ids) {
+        const item = services.subscriptions.getItem(id);
+        // Silently ignoring an id from another subscription rather than throwing: the
+        // only way to send one is by hand, and a 404 on a bulk action would throw away
+        // the rest of a selection that was perfectly valid.
+        if (!item || item.subscription_id !== subscription.id) continue;
+        if (item.decision === ITEM_DECISION.REJECTED_BLOCKED) {
+          blocked += 1;
+          continue;
+        }
+        queueItem(item);
+        queued += 1;
+      }
+
+      const message = queued
+        ? `${queued} episode${queued === 1 ? '' : 's'} queued for the next check` +
+          `${queued > REMOTE_MAX_ITEMS_PER_POLL ? `, at up to ${REMOTE_MAX_ITEMS_PER_POLL} a check` : ''}.` +
+          (blocked ? ` ${blocked} could not be: their audio is on a private address.` : '')
+        : blocked
+          ? `Those ${blocked === 1 ? 'episode has' : 'episodes have'} audio on a private address, which SelfPod will not fetch from.`
+          : 'Nothing was selected, so nothing was queued.';
+      const level = queued ? 'ok' : 'err';
+
+      if (!isHtmx(request)) {
+        const qs = services.ledgerFilter(request).qs;
+        return redirectBack(
+          request,
+          reply,
+          `${subscriptionPath(show.slug)}${qs ? `?${qs}` : ''}`,
+          message,
+          level,
+        );
+      }
+      /* The card is re-rendered whatever happened, and the toast rides along out of
+         band — the same pairing the episode table uses. Without it a selection that
+         was entirely refused would swap in an unchanged table and say nothing. */
+      const context = services.ledgerContext(subscription, request);
+      const card = await reply.viewAsync('partials/subscription-items.eta', context);
+      const toast = await reply.viewAsync('partials/toast.eta', {
+        message,
+        level,
+        helpers: fastify.viewHelpers,
+      });
+      return reply.type('text/html; charset=utf-8').send(`${card}${toast}`);
     });
 
     scoped.post('/ui/subscriptions/:id/items/:itemId/redownload', async (request, reply) => {
@@ -322,20 +440,17 @@ export default async function fragmentRoutes(fastify, services) {
           'err',
         );
       }
-      services.subscriptions.markItem(item.id, {
-        decision: ITEM_DECISION.MATCHED,
-        reject_reason: null,
-        reject_detail: null,
-        episode_id: null,
-        filename: null,
-        identity_key: null,
-        attempts: 0,
-        next_attempt_at: null,
-      });
+      queueItem(item);
       if (!isHtmx(request)) {
-        return redirectBack(request, reply, subscriptionPath(show.slug), 'Queued for the next check.');
+        const qs = services.ledgerFilter(request).qs;
+        return redirectBack(
+          request,
+          reply,
+          `${subscriptionPath(show.slug)}${qs ? `?${qs}` : ''}`,
+          'Queued for the next check.',
+        );
       }
-      return renderItems(reply, subscription);
+      return renderItems(reply, subscription, request);
     });
 
     /* ------------------------------------------------------------- show card */
@@ -691,14 +806,20 @@ export default async function fragmentRoutes(fastify, services) {
       reply.header('HX-Retarget', '#episode-table');
       reply.header('HX-Reswap', 'outerHTML');
       reply.header('HX-Trigger', 'selfpod:modal-close');
-      const table = await reply.view('partials/episode-table.eta', {
+      /* `viewAsync`, not `view`: `reply.view` renders *and sends*, so a second call
+         appended to its return value is two objects concatenated into a response that
+         has already gone out. That is how the toast came to be dropped on the floor a
+         second time after being fixed once. `viewAsync` hands back the HTML and
+         nothing is sent until the send below. */
+      const table = await reply.viewAsync('partials/episode-table.eta', {
         show: presentShow(show),
         episodes: episodes.listByShow(show.id).map((e) => presentEpisode(e, show)),
         helpers: fastify.viewHelpers,
       });
-      if (!message) return table;
-      const toast = await reply.view('partials/toast.eta', { message, level, helpers: fastify.viewHelpers });
-      return `${table}${toast}`;
+      const toast = message
+        ? await reply.viewAsync('partials/toast.eta', { message, level, helpers: fastify.viewHelpers })
+        : '';
+      return reply.type('text/html; charset=utf-8').send(`${table}${toast}`);
     }
 
     /* ---------------------------------------------------------------- scans */

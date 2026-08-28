@@ -1,4 +1,4 @@
-import { PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
+import { ITEM_DECISION, PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
 import { describeComparability, presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
@@ -300,12 +300,100 @@ export default async function pageRoutes(fastify, services) {
 
   /* --------------------------------------------------------- subscription */
 
+  /**
+   * One page of the ledger is 50 rows.
+   *
+   * A feed followed for a year has hundreds of rows, almost all of them refusals, and
+   * the page used to render the first hundred with nothing to say that the rest
+   * existed — which is the one thing a page called "every episode SelfPod has seen"
+   * must not do.
+   */
+  const LEDGER_PAGE_SIZE = 50;
+  const LEDGER_URL_KEYS = ['decision', 'q', 'published'];
+
+  /**
+   * The windows the ledger offers, borrowed from the stats vocabulary.
+   *
+   * "All time" is not among them because it is the default here rather than an option:
+   * the ledger's job is the whole history, so an absent parameter already means every
+   * date. Stats defaults to 30 days for the opposite reason — a dashboard of all time
+   * answers no question about now.
+   */
+  const LEDGER_RANGES = Object.entries(RANGES)
+    .filter(([key]) => key !== 'all')
+    .map(([key, spec]) => ({ key, label: spec.label }));
+
+  /**
+   * The single place the ledger's filter is read from a request and written back.
+   *
+   * Shared by the page, the two htmx fragments and the pager, for the reason
+   * `logFilter` gives: with the filter hand-assembled per template, "Show older" is
+   * where one of them quietly gets dropped.
+   */
+  function ledgerFilter(request) {
+    const query = request.query ?? {};
+    const decision = Object.values(ITEM_DECISION).includes(query.decision)
+      ? String(query.decision)
+      : null;
+    const search = typeof query.q === 'string' ? query.q.trim().slice(0, 120) : '';
+    /* Checked against the offered keys before resolveRange sees it, because
+       resolveRange answers an unknown key with the stats default — thirty days — and a
+       typo in a URL must not quietly hide fifteen years of a feed's history. */
+    const published = LEDGER_RANGES.some((entry) => entry.key === query.published)
+      ? resolveRange(String(query.published), { timeZone: config.timeZone })
+      : null;
+    const params = { decision, q: search || null, published: published?.key ?? null };
+    return {
+      decision,
+      search,
+      published,
+      offset: positiveInt(query.offset),
+      params,
+      /** Canonical query string minus offset; the pager appends its own. */
+      qs: toQueryString(LEDGER_URL_KEYS, params),
+    };
+  }
+  services.ledgerFilter = ledgerFilter;
+
+  /** Everything the ledger card and its rows need, from one filter. */
+  function ledgerContext(subscription, request) {
+    const filter = ledgerFilter(request);
+    const query = {
+      subscriptionId: subscription.id,
+      decision: filter.decision,
+      search: filter.search || null,
+      from: filter.published?.from ?? null,
+      to: filter.published?.to ?? null,
+    };
+    const items = services.subscriptions
+      .items({ ...query, limit: LEDGER_PAGE_SIZE, offset: filter.offset })
+      .map((row) => presentItem(row, services));
+    const total = services.subscriptions.itemCount(query);
+
+    return {
+      // The show comes along because every URL the ledger writes — the filter form's
+      // action, the link that clears it — is a page URL, and a page URL is a slug.
+      show: presentShow(shows.getOrThrow(subscription.show_id)),
+      subscription: presentSubscription(subscription, services),
+      items,
+      counts: services.subscriptions.itemCounts(subscription.id),
+      filter,
+      rangeOptions: LEDGER_RANGES,
+      total,
+      loaded: filter.offset + items.length,
+      hasMore: filter.offset + items.length < total,
+      nextOffset: filter.offset + items.length,
+      helpers: fastify.viewHelpers,
+    };
+  }
+  services.ledgerContext = ledgerContext;
+
   fastify.get('/shows/:slug/subscription', guarded, async (request, reply) => {
     const show = shows.getBySlug(request.params.slug);
     if (!show) throw notFound('That show does not exist.', 'show_not_found');
 
     const subscription = services.subscriptions.getForShow(show.id);
-    const presented = subscription ? presentSubscription(subscription, services) : null;
+    const ledger = subscription ? ledgerContext(subscription, request) : null;
 
     return reply.view(
       'pages/subscription.eta',
@@ -318,14 +406,9 @@ export default async function pageRoutes(fastify, services) {
           { label: 'Subscription' },
         ],
         show: presentShow(show),
-        subscription: presented,
+        subscription: ledger?.subscription ?? null,
         featureEnabled: services.settings.subscriptionsEnabled(),
-        items: subscription
-          ? services.subscriptions
-              .items({ subscriptionId: subscription.id, limit: 100 })
-              .map((row) => presentItem(row, services))
-          : [],
-        filter: '',
+        ledger,
       }),
       APP_LAYOUT,
     );

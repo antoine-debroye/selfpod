@@ -1974,3 +1974,160 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   .seg-decided__state { order: 3; margin-right: auto; }
   .seg-decided form { order: 4; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   18  FOLLOWING A FEED
+   The subscription page and its ledger — the table that answers "where is that
+   episode?" for a feed SelfPod does not own. Everything here is built from the
+   components above: the ledger is an .ep-table in a .form-card behind a
+   .filter-bar, because a second table vocabulary is how one of them drifts.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The rules on the left, the state of the feed on the right — narrow, because
+   three dates and two buttons do not need half a page. */
+.sub-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 22px;
+  align-items: start;
+  margin-bottom: 22px;
+}
+.sub-grid__main { min-width: 0; }
+.sub-grid__side { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+/* Label above value rather than beside it: "Next check" and a timestamp do not
+   fit side by side in a 320px card, and a wrapped label reads worse than a
+   stacked one. */
+.kv { margin: 0; }
+.kv dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-soft);
+}
+.kv dd { font-size: 13.5px; color: var(--ink); margin: 2px 0 12px; }
+.kv dd:last-child { margin-bottom: 4px; }
+
+/* Same treatment as .filter-bar select, for the same reason: it sits in the bar
+   rather than inside a .field, so §05 does not reach it. */
+.filter-bar__search {
+  font-family: var(--sans); font-size: 13px; color: var(--text);
+  background: #fff; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  padding: 6px 10px; min-width: 220px; transition: .15s;
+}
+.filter-bar__search:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* A grey badge with an invisible dot reads as a badge with a hole in it. Every
+   other variant colours its dot; this one was simply never given one. */
+.badge-mute .d { background: var(--line-2); }
+
+/* Titles get the width; the other three columns are as narrow as their content.
+   Without this the "What happened" sentences take half the table and the titles
+   wrap to one word a line. */
+.ledger-table td { vertical-align: top; }
+.ledger-table .ledger-episode { min-width: 220px; }
+/* The state is two or five words and reads as one label; wrapped across two lines it
+   reads as a paragraph in a pill. The column gives it the width instead, and the
+   sentence underneath is what wraps. */
+.ledger-table .ledger-what { max-width: 42ch; }
+.ledger-table .ledger-what .badge { white-space: nowrap; }
+.ledger-table .ledger-actions { text-align: right; white-space: nowrap; }
+.ledger-table .ledger-actions form { margin: 0; }
+
+/* The selection column. Narrow, and the box is centred on the first line of the row
+   rather than on its height, so a tick sits beside the title it belongs to and not
+   halfway down a three-line explanation. */
+.ledger-table .ledger-pick { width: 34px; padding-right: 0; }
+.ledger-table .ledger-pick input,
+.ledger-pick__all input { margin: 2px 0 0; cursor: pointer; accent-color: var(--accent); }
+.ledger-table th.ledger-pick { padding-bottom: 8px; }
+.ledger-pick__all { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.ledger-pick__label {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* What a selection can be done with. Sits under the table, inside the form the
+   checkboxes post to, so the count and the button cannot end up describing different
+   sets of rows. */
+.ledger-bulk {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 14px;
+  font-size: 12px;
+}
+.ledger-bulk__note { flex: 1 1 260px; min-width: 0; line-height: 1.5; }
+
+/* The sentence under a badge: why this episode was skipped, or what a second
+   download found. Quieter than the row, and never wider than a readable line. */
+.ledger-why {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin-top: 5px;
+}
+.ledger-why--warn { color: #8A5E10; }
+
+@media (max-width: 1080px) {
+  /* The status card stops being a side column before the form gets too narrow to
+     hold two fields on a row. */
+  .sub-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .filter-bar__search { flex: 1 1 100%; min-width: 0; }
+
+  /* Four columns cannot be a table at 375px, and side-scrolling is worse here than
+     anywhere else in the app: the column that would scroll out of sight is "What
+     happened", which is the only reason this table exists. So each row becomes a
+     block — title, then when it was published and what became of it, then the
+     button. The same treatment §14 gives the episode table, for the same reason. */
+  /* Beats the 620px floor §11 puts on every non-pinned table in a scroller. */
+  .table-scroll .ep-table.ledger-table { min-width: 0; }
+  .ledger-table,
+  .ledger-table tbody,
+  .ledger-table tr,
+  .ledger-table td { display: block; width: auto; }
+  /* The column headers go, but the select-all does not: it is the only control here
+     that has nowhere else to live, and its label appears with it. */
+  .ledger-table thead { display: block; }
+  .ledger-table thead tr { padding: 0 0 12px; }
+  .ledger-table thead th { display: none; padding: 0; border: none; }
+  .ledger-table thead th.ledger-pick { display: block; }
+  .ledger-pick__label {
+    position: static;
+    width: auto; height: auto;
+    margin: 0;
+    clip: auto;
+    clip-path: none;
+    font-family: var(--sans);
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--ink-soft);
+  }
+
+  .ledger-table tr { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .ledger-table tr:last-child { border-bottom: none; }
+  .ledger-table td { padding: 0; border: none; }
+  .ledger-table .ledger-episode { min-width: 0; margin-bottom: 7px; }
+  .ledger-table .ep-title small { white-space: normal; word-break: break-word; }
+  .ledger-table .ep-date { display: block; margin-bottom: 7px; }
+  .ledger-table .ledger-what { max-width: none; }
+  .ledger-table .ledger-actions { text-align: left; margin-top: 11px; }
+  /* The tick goes above the title rather than beside it: a 34px column inside a
+     stacked block is a column of one, and the block is the row now. */
+  .ledger-table .ledger-pick { width: auto; margin-bottom: 6px; }
+  .ledger-table tr.log-more-row { padding-top: 4px; }
+}

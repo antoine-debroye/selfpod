@@ -1,112 +1,99 @@
 <%
-  const items = it.items || [];
-  const counts = it.counts || {};
+  /* The ledger card: a heading, the filters, and the table.
+
+     The filters swap only the table (#subscription-ledger), never this card, so the
+     search box keeps the cursor while someone is still typing into it. Anything that
+     changes the counts in the filter — fetching an episode by hand — replaces the
+     whole card instead, because a chip reading "(495)" beside a table that no longer
+     has 495 rows in it is worse than a redraw. */
   const sub = it.subscription;
-  const filter = it.filter || '';
+  const counts = it.counts || {};
+  const filter = it.filter;
   const base = `/ui/subscriptions/${sub.id}/items`;
-  /* Every decision gets a word, because a bare enum in the one place someone looks
-     to find out what happened is not an answer. */
-  const LABEL = {
-    downloaded: ['In your feed', 'pill-ok'],
-    matched: ['Waiting to download', 'pill-warn'],
-    downloading: ['Downloading', 'pill-warn'],
-    pending: ['Not looked at yet', 'pill-muted'],
-    rejected_declared: ["Didn't match your rules", 'pill-muted'],
-    rejected_measured: ['Downloaded, then found too short or too long', 'pill-muted'],
-    rejected_blocked: ['Refused: its audio is on a private address', 'pill-err'],
-    skipped_backfill: ['Older than your backfill limit', 'pill-muted'],
-    duplicate: ['Identical to an episode you already have', 'pill-muted'],
-    deleted_by_user: ['You deleted this one', 'pill-muted'],
-    failed: ["Couldn't be fetched", 'pill-err'],
+  const page = `/shows/${encodeURIComponent(it.show.slug)}/subscription`;
+  const swap = {
+    get: `${base}/table`,
+    target: '#subscription-ledger',
   };
 %>
-<div id="subscription-items">
-  <div class="filter-row">
-    <a class="chip<%= filter === '' ? ' is-active' : '' %>" href="<%= base %>"
-       hx-get="<%= base %>" hx-target="#subscription-items" hx-swap="outerHTML">All (<%= counts.total || 0 %>)</a>
-    <% for (const key of ['downloaded', 'rejected_declared', 'skipped_backfill', 'rejected_measured', 'failed']) { %>
-      <% if (counts[key]) { %>
-        <a class="chip<%= filter === key ? ' is-active' : '' %>" href="<%= base %>?decision=<%= key %>"
-           hx-get="<%= base %>?decision=<%= key %>" hx-target="#subscription-items" hx-swap="outerHTML">
-          <%= LABEL[key] ? LABEL[key][0] : key %> (<%= counts[key] %>)
-        </a>
-      <% } %>
-    <% } %>
+<div class="form-card" id="subscription-items">
+  <div class="episode-table__head">
+    <div class="ftitle" style="margin:0">Every episode SelfPod has seen</div>
+    <span class="badge badge-mute"><%= counts.total || 0 %></span>
+    <span class="episode-table__order">newest first ↓</span>
   </div>
+  <p class="help-note" style="margin:0 0 14px">
+    Including the ones it skipped, and why. This is the answer to “where is that episode?”.
+  </p>
 
-  <% if (!items.length) { %>
-    <div class="empty">
-      Nothing here yet. SelfPod records every episode it sees — including the ones it
-      skips, and why — as soon as it first checks the feed.
+  <%
+    /* A real GET form around the controls, so with JavaScript off the browser
+       submits it and the page comes back filtered — the rule every filter bar in
+       the app follows. htmx only changes what comes back, never what is sent. */
+  %>
+  <form class="filter-bar" method="get" action="<%= page %>" style="margin-bottom:16px">
+    <div class="filter-bar__group">
+      <label class="filter-bar__label" for="ledger-q">Search</label>
+      <input class="filter-bar__search" id="ledger-q" type="search" name="q" maxlength="120"
+             placeholder="Title or filename" value="<%= filter.search %>"
+             hx-get="<%= swap.get %>" hx-include="closest form"
+             hx-trigger="input changed delay:300ms, search"
+             hx-target="<%= swap.target %>" hx-swap="outerHTML">
     </div>
-  <% } else { %>
-    <table class="table table-compact">
-      <thead><tr><th>Episode</th><th>Published</th><th>What happened</th><th></th></tr></thead>
-      <tbody>
-        <% for (const entry of items) { %>
-          <tr>
-            <td>
-              <%= entry.title || '(untitled)' %>
-              <% if (entry.filename) { %><div class="muted mono"><%= entry.filename %></div><% } %>
-            </td>
-            <td class="mono"><%= entry.publishedAt ? it.helpers.formatDate(entry.publishedAt) : '—' %></td>
-            <td>
-              <%
-                const label = LABEL[entry.decision] || [entry.decision, 'pill-muted'];
-                const missing = entry.decision === 'downloaded' && entry.episodeStatus && entry.episodeStatus !== 'active';
-              %>
-              <span class="pill <%= label[1] %>"><%= label[0] %></span>
-              <% if (missing) { %>
-                <div class="muted">…but the file is no longer on your share.</div>
-              <% } %>
-              <% if (entry.detail) { %><div class="muted"><%= entry.detail %></div><% } %>
-              <%
-                /* A second fetch is not free — it costs the publisher a counted listen
-                   — so it is stated rather than done quietly. */
-              %>
-              <% if (entry.lookAgain) { %>
-                <div class="muted">
-                  SelfPod will fetch this one again tomorrow and compare the two, because
-                  <%= entry.lookAgain.charAt(0).toLowerCase() + entry.lookAgain.slice(1) %>
-                  Whatever differs between two downloads of one episode cannot be the
-                  theme tune, so it is an advert.
-                </div>
-              <% } %>
-              <% if (entry.lookedAgain) { %>
-                <div class="muted">
-                  <% if (entry.lookedAgain === 'differs') { %>
-                    Fetched a second time, and the two copies differed — the difference is
-                    catalogued as an advert.
-                  <% } else if (entry.lookedAgain === 'identical') { %>
-                    Fetched a second time; both copies were the same, so nothing is inserted
-                    when this is served.
-                  <% } else if (entry.lookedAgain === 'differs_elsewhere') { %>
-                    Fetched a second time. The two differed, but only by audio the other copy
-                    had — there is nothing in your file to remove.
-                  <% } else { %>
-                    Tried to fetch this a second time and could not.
-                  <% } %>
-                </div>
-              <% } %>
-            </td>
-            <td>
-              <% if (entry.decision !== 'rejected_blocked' && entry.decision !== 'downloaded') { %>
-                <form method="post" action="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
-                      hx-post="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
-                      hx-target="#subscription-items" hx-swap="outerHTML">
-                  <button class="btn btn-ghost btn-xs" type="submit">Fetch it anyway</button>
-                </form>
-              <% } else if (entry.decision === 'downloaded') { %>
-                <form method="post" action="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
-                      hx-post="/ui/subscriptions/<%= sub.id %>/items/<%= entry.id %>/redownload"
-                      hx-target="#subscription-items" hx-swap="outerHTML">
-                  <button class="btn btn-ghost btn-xs" type="submit">Download again</button>
-                </form>
-              <% } %>
-            </td>
-          </tr>
+
+    <div class="filter-bar__group">
+      <label class="filter-bar__label" for="ledger-decision">What happened</label>
+      <select id="ledger-decision" name="decision"
+              hx-get="<%= swap.get %>" hx-include="closest form"
+              hx-target="<%= swap.target %>" hx-swap="outerHTML">
+        <option value="">Everything (<%= counts.total || 0 %>)</option>
+        <%
+          /* Only decisions this feed has actually produced. An empty "Downloading (0)"
+             on every feed that has never had a download in flight is a control that
+             promises a view of nothing. */
+        %>
+        <% for (const entry of it.helpers.ledgerDecisions) { %>
+          <% if (counts[entry.value]) { %>
+            <option value="<%= entry.value %>"<%= filter.decision === entry.value ? ' selected' : '' %>>
+              <%= entry.label %> (<%= counts[entry.value] %>)
+            </option>
+          <% } %>
         <% } %>
-      </tbody>
-    </table>
-  <% } %>
+      </select>
+    </div>
+
+    <div class="filter-bar__group">
+      <label class="filter-bar__label" for="ledger-published">Published</label>
+      <select id="ledger-published" name="published"
+              hx-get="<%= swap.get %>" hx-include="closest form"
+              hx-target="<%= swap.target %>" hx-swap="outerHTML">
+        <%
+          /* "Any time" is the empty value rather than an "all time" key, so the
+             default leaves nothing in the URL and a bare page URL is the whole
+             history — which is what this table is for. */
+        %>
+        <option value="">Any time</option>
+        <% for (const range of it.rangeOptions) { %>
+          <option value="<%= range.key %>"<%= filter.published?.key === range.key ? ' selected' : '' %>>
+            <%= range.label %>
+          </option>
+        <% } %>
+      </select>
+    </div>
+
+    <span class="filter-bar__spacer"></span>
+    <%
+      /* Deliberately a plain link, not an htmx swap: clearing has to put the controls
+         back to their empty state as well as the table, and only a real navigation
+         does both without a second copy of the form's state to keep in step.
+
+         Always rendered, rather than only when something is filtered: a filter changed
+         through htmx swaps the table and leaves this bar alone, so a button that
+         appeared with the filter would be a button that never appeared. */
+    %>
+    <a class="btn btn-ghost btn-sm" href="<%= page %>">Clear</a>
+    <noscript><button class="btn btn-ghost btn-sm" type="submit">Filter</button></noscript>
+  </form>
+
+  <%~ include('../partials/subscription-ledger.eta', it) %>
 </div>

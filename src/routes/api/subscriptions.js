@@ -84,15 +84,22 @@ export default async function subscriptionRoutes(fastify, services) {
 
   fastify.get('/subscriptions/:id/items', async (request) => {
     const subscription = subscriptions.getOrThrow(request.params.id);
-    const { decision = null, limit = '50', offset = '0' } = request.query ?? {};
-    const items = subscriptions.items({
+    const { decision = null, q = '', limit = '50', offset = '0' } = request.query ?? {};
+    const query = {
       subscriptionId: subscription.id,
       decision: decision || null,
+      // The same free-text filter the admin page offers, so the two agree about what
+      // "the ledger, narrowed" means — the rule this file's presenters already follow.
+      search: String(q).trim().slice(0, 120) || null,
+    };
+    const items = subscriptions.items({
+      ...query,
       limit: clampInt(limit, 1, 200, 50),
       offset: clampInt(offset, 0, 100000, 0),
     });
     return {
       items: items.map((row) => presentItem(row, { episodes })),
+      total: subscriptions.itemCount(query),
       counts: subscriptions.itemCounts(subscription.id),
     };
   });
