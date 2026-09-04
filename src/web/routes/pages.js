@@ -1,5 +1,4 @@
 import { ITEM_DECISION, PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
-import { describeComparability, presentSegment } from '../../lib/present-segment.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
 import { bucketEdges, DEFAULT_RANGE, RANGES, resolveRange } from '../../lib/time-range.js';
@@ -365,15 +364,22 @@ export default async function pageRoutes(fastify, services) {
       from: filter.published?.from ?? null,
       to: filter.published?.to ?? null,
     };
+    const show = shows.getOrThrow(subscription.show_id);
     const items = services.subscriptions
       .items({ ...query, limit: LEDGER_PAGE_SIZE, offset: filter.offset })
-      .map((row) => presentItem(row, services));
+      .map((row) => {
+        const item = presentItem(row, services);
+        // What the words said about a downloaded episode, from the same presenter
+        // the episode page uses, so the two never disagree.
+        item.adverts = item.episodeId ? services.advertsView.advertsFor(episodes.get(item.episodeId), show) : null;
+        return item;
+      });
     const total = services.subscriptions.itemCount(query);
 
     return {
       // The show comes along because every URL the ledger writes — the filter form's
       // action, the link that clears it — is a page URL, and a page URL is a slug.
-      show: presentShow(shows.getOrThrow(subscription.show_id)),
+      show: presentShow(show),
       subscription: presentSubscription(subscription, services),
       items,
       counts: services.subscriptions.itemCounts(subscription.id),
@@ -431,18 +437,7 @@ export default async function pageRoutes(fastify, services) {
           { label: 'Adverts' },
         ],
         show: presentShow(show),
-        mode: show.ad_trim_mode ?? 'off',
-        minEpisodes: show.ad_auto_min_episodes ?? 3,
-        held: episodes.counts(show.id).held,
-        segments: services.adDetect
-          .listSegments(show.id)
-          .map((row) => presentSegment(row, { episodes })),
-        ...describeComparability({
-          show,
-          episodes,
-          segments: services.adDetect.listSegments(show.id),
-          fingerprinted: services.adDetect.countFingerprinted(show.id),
-        }),
+        ...(await services.advertsView.segmentsContext(show)),
       }),
       APP_LAYOUT,
     );
@@ -470,6 +465,7 @@ export default async function pageRoutes(fastify, services) {
         ],
         show: presentShow(show),
         episode: presentEpisode(episode, show),
+        transcript: await services.advertsView.episodeTranscript(episode, show),
         episodeLog: services.stats.list({ episodeId: episode.id, limit: 15 }),
         episodeLogTotal: services.stats.count({ episodeId: episode.id }),
       }),

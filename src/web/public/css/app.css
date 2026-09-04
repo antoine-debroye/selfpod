@@ -2131,3 +2131,64 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   .ledger-table .ledger-pick { width: auto; margin-bottom: 6px; }
   .ledger-table tr.log-more-row { padding-top: 4px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE WORDS — transcript excerpts, edges and the teaching loop (spec §19.6)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tx {
+  line-height: 1.95; font-size: 14px; max-width: 72ch;
+  margin: 0 0 8px; padding: 8px 10px; background: var(--paper-2); border-radius: var(--r-sm);
+}
+.tx--full { max-height: 320px; overflow: auto; }
+/* Every word is a button, so a tap can set an edge; it must not look like one. */
+.tx__w {
+  all: unset; display: inline; cursor: pointer; padding: 3px 1px; border-radius: 3px;
+  color: var(--ink); font: inherit; line-height: inherit;
+}
+.tx__w:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tx__w--context { color: var(--ink-soft); }
+.tx__w--cut, .tx__w--candidate { background: var(--warn-soft); color: var(--ink); }
+.tx__w--approved { text-decoration: line-through; color: var(--ink-soft); }
+.tx__w--rejected { text-decoration: underline dotted var(--line-2); }
+.tx__w--cue { text-decoration: underline dotted var(--accent); text-underline-offset: 3px; }
+.tx__w--low { opacity: .6; }
+/* A bar at each edge of the cut, so the range reads without hunting for the last tinted word. */
+.tx__w--start { box-shadow: -2px 0 0 0 var(--accent); }
+.tx__w--end { box-shadow: 2px 0 0 0 var(--accent); }
+.tx__w--start.tx__w--end { box-shadow: -2px 0 0 0 var(--accent), 2px 0 0 0 var(--accent); }
+.tx__range { font-size: 12.5px; min-height: 1.2em; margin-bottom: 8px; }
+.tx__legend { display: block; font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+.tx__intro { margin-bottom: 12px; }
+.tx__edges, .tx__teach, .seg-just { margin: 0 0 12px; }
+.tx__edges summary, .tx__teach summary, .seg-just summary { cursor: pointer; font-size: 13px; color: var(--ink-soft); }
+.tx__edges .form-row, .tx__teach .form-row { margin-top: 10px; }
+.tx__edges .hint { margin-bottom: 8px; }
+.tx__region { margin-bottom: 14px; }
+.tx__region > summary { cursor: pointer; font-size: 14px; padding: 6px 0; }
+.tx__mark { margin: 8px 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; }
+.tx__mark form { margin: 0; }
+.seg-why { margin: 0 0 14px; }
+.seg-cues { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg-cue {
+  display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-ink);
+}
+.seg-decided__words, .seg-decided__why { flex: 1 1 100%; font-size: 12.5px; }
+.seg-decide { margin: 0; }
+.transcribe-progress { margin-bottom: 12px; }
+.listen-scope { border: 0; padding: 0; margin: 4px 0 16px; }
+.listen-scope legend { margin-bottom: 8px; }
+.listen-scope .field-unit { display: flex; align-items: center; gap: 8px; }
+.listen-scope .field-unit input { width: 90px; }
+.choice--inline { margin-top: 8px; }
+
+@media (pointer: coarse) {
+  /* A word has to be a target a thumb can hit. */
+  .tx__w { padding: 6px 2px; }
+}
+/* A button that reads as a link, for a reversal offered mid-sentence. */
+.btn-link {
+  all: unset; cursor: pointer; color: var(--accent); text-decoration: underline;
+  text-underline-offset: 2px; font: inherit;
+}
+.btn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }

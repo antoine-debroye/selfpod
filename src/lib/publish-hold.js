@@ -36,6 +36,7 @@ export function resolvePublishHold({
   undecidedSegments = 0,
   trimStatus = null,
   canBeTrimmed = true,
+  transcriptPending = false,
 }) {
   if (mode !== 'review' && mode !== 'auto') return null;
 
@@ -50,6 +51,15 @@ export function resolvePublishHold({
    * more episodes would not have helped.
    */
   if (!canBeTrimmed) return null;
+
+  /*
+   * Still being listened to. Only ever true of an episode that is already held — the
+   * caller guarantees that — so an episode published before SelfPod could read words
+   * is never pulled back out of the feed for a transcript it has lived without. Shown
+   * under the same hold as a small corpus, because both mean "SelfPod has not finished
+   * looking yet" and the wording is the caller's to choose.
+   */
+  if (transcriptPending) return PUBLISH_HOLDS.AWAITING_CORPUS;
 
   // Nothing can be detected in a show SelfPod has barely seen, and publishing now
   // would mean re-cutting the first few episodes once it can. The UI shows this as a

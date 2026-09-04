@@ -11,6 +11,11 @@ import { EventEmitter } from 'node:events';
 export const EVENTS = Object.freeze({
   /** A show's feed content changed. Payload: { showId, slug? } */
   SHOW_CHANGED: 'show:changed',
+  /** An episode's words are on disk; the page showing them can refresh. */
+  TRANSCRIPT_READY: 'transcript:ready',
+  /** Progress through a show's listening, for the strip on the Adverts page. */
+  TRANSCRIBE_PROGRESS: 'transcribe:progress',
+  TRANSCRIBE_FINISHED: 'transcribe:finished',
   /** The set of shows changed (folder added/removed). Payload: {} */
   SHOWS_CHANGED: 'shows:changed',
   /** Instance settings changed. Payload: { keys: string[] } */

@@ -360,6 +360,19 @@ function countDistinct(frames, key) {
   return seen.size;
 }
 
+/**
+ * The number of frames that cover the first `ms` milliseconds — the inverse of
+ * `frameIndexToMs`, for choosing a window of an episode to decode.
+ */
+export function framesForMs(frames, ms) {
+  let elapsed = 0;
+  for (let i = 0; i < frames.length; i += 1) {
+    if (elapsed >= ms) return i;
+    elapsed += (frames[i].samplesPerFrame / frames[i].sampleRate) * 1000;
+  }
+  return frames.length;
+}
+
 /** Milliseconds from the start of the audio to the given frame index. */
 export function frameIndexToMs(frames, index) {
   let ms = 0;

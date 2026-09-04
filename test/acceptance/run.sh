@@ -820,6 +820,67 @@ if not (4.5 <= best["durationSeconds"] <= 8.0):
 ' && pass "a re-encoded theme is found in all three episodes, at about the right length" \
   || fail "re-encoded repeated audio was not found"
 
+step "23. A sponsor read in the words is found across episodes that sound nothing alike"
+
+# The case the recogniser exists for: the same script read by two different voices.
+# The acoustic fingerprint cannot match them — they share no sound — and the words
+# can. Each episode is its own programme with the read spoken at the start; the two
+# reads were made with macOS `say -v Daniel` and `say -v Samantha` from one text, so
+# nothing but the words is common to them. This also proves the whisper binary the
+# image chose for this CPU actually runs on real speech, not only on the smoke file.
+mkdir -p "${WORK}/data/shows/spoken"
+cat "${FIXTURES}/sponsor-en-daniel.mp3" "${FIXTURES}/prog-a.mp3" "${FIXTURES}/prog-b.mp3" \
+  > "${WORK}/data/shows/spoken/monday.mp3"
+cat "${FIXTURES}/sponsor-en-samantha.mp3" "${FIXTURES}/prog-c.mp3" "${FIXTURES}/prog-a.mp3" \
+  > "${WORK}/data/shows/spoken/tuesday.mp3"
+
+wait_for_scan 12
+SP_SHOW_ID="$(api "${BASE}/api/shows" | json '
+print(next(s["id"] for s in json.load(sys.stdin)["shows"] if s["slug"] == "spoken"))')"
+api -X PATCH -H 'Content-Type: application/json' -d '{"mode":"review","minEpisodes":2}' \
+  "${BASE}/api/shows/${SP_SHOW_ID}/ad-trim" >/dev/null
+api -X POST "${BASE}/api/shows/${SP_SHOW_ID}/ad-detect" >/dev/null
+
+api "${BASE}/api/shows/${SP_SHOW_ID}/ad-segments" | json '
+d = json.load(sys.stdin)
+if d.get("listening", {}).get("engine") != "ready":
+    print("the recogniser is not ready in the container: " + str(d.get("listening")))
+    sys.exit(1)
+spoken = [s for s in d["segments"] if s["source"] == "transcript"]
+if not spoken:
+    print("nothing heard; " + str(len(d["segments"])) + " segments, listening=" + str(d.get("listening")))
+    sys.exit(1)
+best = max(spoken, key=lambda s: s["episodeCount"])
+if best["episodeCount"] < 2:
+    print("the read was heard in only " + str(best["episodeCount"]) + " episode")
+    sys.exit(1)
+if not (5.0 <= best["durationSeconds"] <= 12.0):
+    print("an eight-second read was measured as " + str(best["durationSeconds"]) + "s")
+    sys.exit(1)
+ids = [c["id"] for c in best["cues"]]
+if not any(i in ids for i in ("brought_to_you_by", "use_code", "promo_code", "web_address", "percent_off", "terms_apply")):
+    print("no sponsor cue on the read: " + str(ids) + " / " + str(best.get("rawText")))
+    sys.exit(1)
+if not best.get("why", {}).get("sentence"):
+    print("no sentence saying what will happen")
+    sys.exit(1)
+if not best.get("excerpt", {}).get("words"):
+    print("no words on the card")
+    sys.exit(1)
+' && pass "the same read, in two voices, is heard in both episodes with its cues and its words" \
+  || fail "a spoken sponsor read was not found across episodes"
+
+# The health endpoint must not be carrying a recogniser complaint either: a broken
+# binary that found nothing would otherwise pass this step by accident.
+api "${BASE}/api/status" | json '
+d = json.load(sys.stdin)
+issues = [i["key"] for i in d.get("issues", []) if i["key"].startswith("whisper")]
+if issues:
+    print("health complains about the recogniser: " + str(issues))
+    sys.exit(1)
+' && pass "no health warning about the recogniser" \
+  || fail "the recogniser is reported unhealthy"
+
 # ---------------------------------------------------------------------- report
 step "Result"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"

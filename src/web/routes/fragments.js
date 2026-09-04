@@ -8,7 +8,7 @@ import {
 } from '../../constants.js';
 import { notFound } from '../../lib/errors.js';
 import { normaliseKeywords } from '../../lib/feed-filter.js';
-import { describeComparability, presentSegment } from '../../lib/present-segment.js';
+import { SEGMENT_STATUS as STATUS } from '../../constants.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { normaliseBaseUrl } from '../../lib/urls.js';
 import { SETTING_KEYS } from '../../services/settings.js';
@@ -57,22 +57,48 @@ export default async function fragmentRoutes(fastify, services) {
     }
 
     /** The one place the review panel is rendered, so htmx and a reload agree. */
-    function renderSegments(reply, show) {
+    async function renderSegments(reply, show, extra = {}) {
       return reply.view('partials/ad-segments.eta', {
         show: presentShow(show),
-        mode: show.ad_trim_mode ?? 'off',
-        held: episodes.counts(show.id).held,
-        segments: services.adDetect
-          .listSegments(show.id)
-          .map((row) => presentSegment(row, { episodes })),
-        ...describeComparability({
-          show,
-          episodes,
-          segments: services.adDetect.listSegments(show.id),
-          fingerprinted: services.adDetect.countFingerprinted(show.id),
-        }),
+        ...(await services.advertsView.segmentsContext(show)),
+        helpers: fastify.viewHelpers,
+        ...extra,
       });
     }
+
+    /** The episode page's "What SelfPod heard" card, for the routes that re-render it. */
+    async function renderTranscript(reply, episode, show) {
+      return reply.view('partials/episode-transcript.eta', {
+        show: presentShow(show),
+        episode: presentEpisode(episode, show),
+        transcript: await services.advertsView.episodeTranscript(episode, show),
+        helpers: fastify.viewHelpers,
+      });
+    }
+
+    /** Where a decision came from, so the reply re-renders the panel it was made on. */
+    function returnTarget(request, show) {
+      const target = String(request.body?.returnTo ?? '');
+      if (target.startsWith('episode:')) {
+        const episode = episodes.get(target.slice('episode:'.length));
+        if (episode && episode.show_id === show.id) return { episode };
+      }
+      return null;
+    }
+
+    scoped.get('/ui/shows/:slug/ad-segments', async (request, reply) => renderSegments(reply, findShow(request.params.slug)));
+
+    scoped.get('/ui/shows/:slug/transcribe-status', async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const status = services.transcriber?.status?.() ?? { active: null };
+      if (!status.active || status.active.showId !== show.id) return reply.type('text/html; charset=utf-8').send('');
+      const progress = services.transcriber.progress(show.id);
+      return reply.view('partials/transcribe-progress.eta', {
+        showId: show.id,
+        slug: show.slug,
+        label: `Listened to ${progress.done} of ${progress.total}, newest first — hearing “${status.active.title ?? 'an episode'}”…`,
+      });
+    });
 
     scoped.post('/ui/shows/:slug/ad-trim', async (request, reply) => {
       const show = findShow(request.params.slug);
@@ -84,9 +110,29 @@ export default async function fragmentRoutes(fastify, services) {
           ? parsed
           : (show.ad_auto_min_episodes ?? 3);
 
+      const listen = services.advertsView.listenSettingsFrom(body, show);
+      if (listen.error) {
+        if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), listen.error, 'err');
+        reply.status(422);
+        return renderSegments(reply, show, { formError: listen.error });
+      }
+      const listenChanged =
+        listen.fields.ad_transcribe !== show.ad_transcribe ||
+        listen.fields.ad_transcribe_head_seconds !== show.ad_transcribe_head_seconds ||
+        listen.fields.ad_transcribe_tail_seconds !== show.ad_transcribe_tail_seconds;
+
       services.db
-        .prepare('UPDATE shows SET ad_trim_mode = ?, ad_auto_min_episodes = ?, updated_at = ? WHERE id = ?')
-        .run(mode, minEpisodes, new Date().toISOString(), show.id);
+        .prepare(
+          `UPDATE shows SET ad_trim_mode = ?, ad_auto_min_episodes = ?, ad_transcribe = ?, ad_transcribe_head_seconds = ?,
+                  ad_transcribe_tail_seconds = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          mode, minEpisodes, listen.fields.ad_transcribe, listen.fields.ad_transcribe_head_seconds,
+          listen.fields.ad_transcribe_tail_seconds, new Date().toISOString(), show.id,
+        );
+      // New windows mean new transcripts; the old ones are forgotten so the next run
+      // makes them, rather than comparing words nobody asked for any more.
+      if (listenChanged) services.transcriber?.forgetShow(show.id);
 
       // Settled in the same request. Switching a show off has to actually let its
       // episodes out, and waiting for a scheduler tick to find out whether it worked
@@ -132,8 +178,35 @@ export default async function fragmentRoutes(fastify, services) {
       if (!segment || segment.show_id !== show.id) {
         throw notFound('That segment no longer exists.', 'segment_not_found');
       }
+      const back = returnTarget(request, show);
 
-      services.adDetect.decide(segment.id, status);
+      /*
+       * Edges moved by word. The words are the segment, so moving them rewrites what
+       * every later episode is matched against, and the run below re-finds the new
+       * words everywhere else.
+       */
+      const body = request.body ?? {};
+      if (body.startWord !== undefined && body.endWord !== undefined && body.episodeId) {
+        const episode = episodes.get(String(body.episodeId));
+        if (!episode || episode.show_id !== show.id) throw notFound('That episode no longer exists.', 'episode_not_found');
+        const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
+        if (!range) {
+          const message = 'The last word has to come after the first.';
+          if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), message, 'err');
+          reply.status(422);
+          return renderSegments(reply, show, { formError: message });
+        }
+        await services.adDetect.reshapeSegment(segment.id, { episodeId: episode.id, ...range });
+      }
+
+      if (status === 'programme_starts') {
+        // "The programme starts here", from a card: the words become a boundary and
+        // the intro they belong to is kept.
+        services.adDetect.addMarker({ showId: show.id, role: 'programme_starts', rawText: segment.raw_text ?? '', language: segment.language });
+        services.adDetect.decide(segment.id, STATUS.REJECTED);
+      } else {
+        services.adDetect.decide(segment.id, status);
+      }
       // The cut happens here rather than on the next tick, because a decision that has
       // not reached the audio has not really been taken.
       const result = await services.adPipeline.processShow(show.id);
@@ -142,10 +215,88 @@ export default async function fragmentRoutes(fastify, services) {
         const note =
           status === SEGMENT_STATUS.APPROVED
             ? `Removed from ${result.trimmed?.trimmed ?? 0} ${(result.trimmed?.trimmed ?? 0) === 1 ? 'episode' : 'episodes'}.`
-            : 'Kept.';
-        return redirectBack(request, reply, advertsPath(show.slug), note);
+            : status === 'programme_starts'
+              ? `From now on everything before “${segment.raw_text}” is cut, in every episode where SelfPod hears it.`
+              : 'Kept.';
+        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note);
       }
+      if (back) return renderTranscript(reply, episodes.get(back.episode.id), shows.get(show.id));
       return renderSegments(reply, shows.get(show.id));
+    });
+
+    function episodePath(slug, id) {
+      return `/shows/${encodeURIComponent(slug)}/episodes/${encodeURIComponent(id)}`;
+    }
+
+    /** Forgetting a boundary puts back everything it cut. */
+    scoped.post('/ui/shows/:slug/ad-markers/:markerId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const marker = services.adDetect.getMarker(request.params.markerId);
+      if (!marker || marker.show_id !== show.id) throw notFound('That boundary no longer exists.', 'marker_not_found');
+      const back = returnTarget(request, show);
+      services.adDetect.removeMarker(marker.id);
+      await services.adPipeline.processShow(show.id);
+      if (!isHtmx(request)) {
+        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), 'Forgotten, and the audio put back.');
+      }
+      if (back) return renderTranscript(reply, episodes.get(back.episode.id), shows.get(show.id));
+      return renderSegments(reply, shows.get(show.id));
+    });
+
+    /* ------------------------------------------------------------ transcripts */
+
+    function findEpisode(id) {
+      const episode = episodes.get(id);
+      if (!episode) throw notFound('That episode does not exist.', 'episode_not_found');
+      return { episode, show: shows.getOrThrow(episode.show_id) };
+    }
+
+    scoped.get('/ui/episodes/:id/transcript', async (request, reply) => {
+      const { episode, show } = findEpisode(request.params.id);
+      return renderTranscript(reply, episode, show);
+    });
+
+    /**
+     * The teaching loop: a range of words and what they are. An advert becomes a
+     * remembered read with the decision already taken; a boundary becomes a marker.
+     * Either way the run happens now, so the owner sees the cut land.
+     */
+    scoped.post('/ui/episodes/:id/transcript/teach', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+      const { episode, show } = findEpisode(request.params.id);
+      const body = request.body ?? {};
+      const verdict = String(body.verdict ?? '');
+      const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
+      const fail = (message) => {
+        if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), message, 'err');
+        reply.status(422);
+        return renderTranscript(reply, episode, show);
+      };
+      if (!range) return fail('Pick a first and a last word, in that order.');
+
+      let note;
+      if (verdict === 'advert' || verdict === 'not_advert') {
+        await services.adDetect.teachSegment({
+          showId: show.id,
+          episodeId: episode.id,
+          ...range,
+          status: verdict === 'advert' ? STATUS.APPROVED : STATUS.REJECTED,
+        });
+        note =
+          verdict === 'advert'
+            ? `Removed ${fastify.viewHelpers.formatDuration(Math.round(range.startMs / 1000))}–${fastify.viewHelpers.formatDuration(Math.round(range.endMs / 1000))} from this episode. The same words will be cut from later episodes.`
+            : 'Kept, and SelfPod will not offer those words again.';
+      } else if (verdict === 'programme_starts' || verdict === 'programme_ends') {
+        services.adDetect.addMarker({ showId: show.id, role: verdict, rawText: range.rawText, language: range.language });
+        note =
+          verdict === 'programme_starts'
+            ? `From now on everything before “${range.rawText}” is cut, in every episode where SelfPod hears it.`
+            : `From now on everything after “${range.rawText}” is cut, in every episode where SelfPod hears it.`;
+      } else {
+        return fail('Say what those words are.');
+      }
+      await services.adPipeline.processShow(show.id);
+      if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), note);
+      return renderTranscript(reply, episodes.get(episode.id), shows.get(show.id));
     });
 
     /* ---------------------------------------------------------- subscription */

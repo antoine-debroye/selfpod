@@ -205,6 +205,13 @@ export const DIRECTORY_NAMES = Object.freeze({
    * original is never modified" a property of the layout rather than a promise.
    */
   TRIMMED: '.trimmed',
+  /**
+   * Transcripts, as `/data/.tx/{show_id}/{episode_id}.{version}.json`.
+   *
+   * On disk for the same reason fingerprints are: derived, rebuildable, and a few tens
+   * of kilobytes per episode that have no business in the database being backed up.
+   */
+  TRANSCRIPTS: '.tx',
 });
 
 export const FILE_NAMES = Object.freeze({
@@ -468,7 +475,33 @@ export const SEGMENT_STATUS = Object.freeze({
   REJECTED: 'rejected',
 });
 
-export const SEGMENT_SOURCES = Object.freeze({ CORPUS: 'corpus', DIFF: 'diff' });
+export const SEGMENT_SOURCES = Object.freeze({ CORPUS: 'corpus', DIFF: 'diff', TRANSCRIPT: 'transcript' });
+
+/**
+ * The transcript format. Bump it and every episode is transcribed again on its next
+ * turn, which is the whole cost of changing what the file holds.
+ */
+export const TRANSCRIPT_VERSION = 1;
+
+/** Where SelfPod listens for words, per show. */
+export const TRANSCRIBE_MODES = Object.freeze(['off', 'edges', 'whole']);
+
+/**
+ * How many already-published episodes are transcribed per run, over and above every
+ * held one. Small on purpose: a fresh episode must never queue behind a fifty-episode
+ * backfill on a box that is also serving audio.
+ */
+export const MAX_BACKFILL_PER_RUN = 2;
+
+/**
+ * Sponsor-cue score (0..1) at which the wording alone is taken as evidence.
+ *
+ * `CUE_STRONG` is one strong cue or a web address: enough to lift the theme-tune guard
+ * off a stretch that also repeats across episodes. `CUE_OFFER_ALONE` is roughly two of
+ * them: enough to *offer* a stretch heard in a single episode, never to cut it.
+ */
+export const CUE_STRONG = 0.5;
+export const CUE_OFFER_ALONE = 0.67;
 
 /** Why automatic approval was withheld. Shown to the user, so each has wording. */
 export const HOLD_REASONS = Object.freeze({
@@ -477,6 +510,9 @@ export const HOLD_REASONS = Object.freeze({
   too_long_to_be_an_advert: 'Longer than any advert — more likely a recurring part of the show.',
   always_at_the_start: 'It is always at the very start, which is where a theme tune lives.',
   always_at_the_end: 'It is always at the very end, which is where credits live.',
+  only_heard_once:
+    'Heard in one episode so far. Wording like this is offered for you to decide, and only cut on its own once it repeats.',
+  matches_kept_words: 'The same words as something you chose to keep, so it was not offered again.',
 });
 
 export const TRIM_STATUS = Object.freeze({

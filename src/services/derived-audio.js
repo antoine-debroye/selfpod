@@ -4,8 +4,8 @@ import { join } from 'node:path';
 /**
  * Collecting the audio SelfPod derived from an episode, when the episode goes.
  *
- * Two caches live outside the database: the frame fingerprints under `/data/.fp` and
- * the trimmed copies under `/data/.trimmed`. The database rows that describe them go
+ * Three caches live outside the database: the fingerprints under `/data/.fp`, the
+ * transcripts under `/data/.tx` and the trimmed copies under `/data/.trimmed`. The database rows that describe them go
  * with the foreign-key cascade; the files do not, and nothing else would ever come
  * back for them.
  *
@@ -21,7 +21,7 @@ import { join } from 'node:path';
  * collaborator with real dependencies could not be handed to them.
  */
 export function createDerivedAudio({ config, logger }) {
-  const roots = [config.fingerprintDir, config.trimmedDir];
+  const roots = [config.fingerprintDir, config.trimmedDir, config.transcriptDir];
 
   /** Everything derived from one episode. Names are `{episodeId}.{something}`. */
   async function forget(showId, episodeId) {

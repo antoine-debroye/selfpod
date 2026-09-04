@@ -275,54 +275,83 @@ of it can be changed later in **Settings** without touching the container.
 | `ADMIN_PASSWORD` | — | First-run only. If unset, a random password is generated and printed once to the logs. |
 | `SESSION_SECRET` | generated | First-run only; afterwards it lives in the database. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
+| `WHISPER_MODEL` | `base` | Which speech model hears the words: `base` or `small` (both ship in the image), or a path to a whisper.cpp model file. `small` is about twice the work and markedly better in French. |
+| `WHISPER_CLI` | *(the image's own)* | Path to a `whisper-cli` binary, for a build of your own. The image picks its AVX2 or SSE4.2 build for the CPU at boot. |
+| `WHISPER_THREADS` | `2` | Threads the recogniser may use. Two is right for a box that is also serving audio. |
 
 ---
 
 ## Cutting the adverts out
 
-SelfPod can find audio that repeats across a show's episodes and remove it from
-every one of them. Set it per show, under **Adverts** on the show's page.
+SelfPod can find sponsor reads and other repeated audio in a show's episodes and
+remove them from every one of them. Set it per show, under **Adverts** on the show's
+page.
 
 | Setting | What happens |
 |---|---|
-| **Nothing** *(default)* | Your episodes are published exactly as they arrive. SelfPod never reads them looking for repeats. |
-| **Show me what repeats, and wait** | New episodes are held out of your feed until you have decided about them. Nothing is removed that you did not ask for. |
-| **Remove repeats without asking** | SelfPod cuts what it is confident about and publishes. It still leaves anything that looks like a theme tune or credits for you to look at. |
+| **Nothing** *(default)* | Your episodes are published exactly as they arrive. SelfPod never listens to them or reads them. |
+| **Listen, tell me what it heard, and wait** | New episodes are held out of your feed until you have decided about anything that sounds like a sponsor read or repeats across episodes. Remove a read once and the same words are cut from later episodes without asking. |
+| **Remove what it is sure about, without asking** | SelfPod cuts a stretch when the words say sponsor read and the same words come back in other episodes, or when you have removed that read before. Anything it is unsure of is listed for you and the episode is published untouched. |
 
-**It compares what episodes sound like, not what their bytes are.** SelfPod decodes a
-low-quality copy of each episode and fingerprints the sound — 32 bits every 11.6
-milliseconds, describing how energy moves between frequency bands. That survives being
-re-encoded, and it has to: a podcast is normally mixed and encoded in one pass, so the
-same theme tune comes out as completely different data in every episode. Measured on
-three real episodes of one show, the encoded bytes had nine frames in common out of
-ninety thousand; the fingerprints of the same audio agreed to within eight per cent.
+**It reads the words.** SelfPod transcribes the opening and closing minutes of each
+MP3 episode — on your own machine, with [whisper.cpp](https://github.com/ggml-org/whisper.cpp);
+nothing leaves it — and looks for three things in the text:
 
-It also survives the volume being changed, which is the first thing an advert network
-does to a piece of audio.
+- **The same words, day after day.** A campaign runs for a week, and the host reads
+  the same script every morning. The audio is different every time, so nothing that
+  compares sound can find it; the words are the same, and SelfPod finds those, allowing
+  for the recogniser's mishearings.
+- **Wording that sounds like an advert.** "Brought to you by", a promo code, a web
+  address, "terms apply" — and in French, "sans engagement", "code promo", "soumise à
+  condition", the small print the law makes advertisers say. Every candidate shows
+  which of these it heard.
+- **A boundary you point at.** On any episode page, pick the words the programme
+  starts with — "Vous écoutez RMC" — and press *The programme starts here*. From then
+  on everything before those words is cut in every episode where SelfPod hears them,
+  whatever it is. That is how a pre-roll that is a different advert every day goes.
 
-**It does not know what an advert is, and does not pretend to.** A theme tune, a
-sponsor read, a standing intro and a recurring stinger repeat in exactly the same
-way, and nothing in the audio separates them. So SelfPod tells you what it found —
-how long it is, how many episodes carry it, whereabouts it sits, and a player so
-you can hear it — and you decide. Automatic mode changes only whether you are asked
-first; it still refuses on its own to cut anything that is always at the very start
-or the very end, which is where a theme and credits live.
+**It shows you the words.** Each candidate is the transcript with the cut marked and a
+few seconds either side, the cues that fired, and one sentence saying what SelfPod will
+do and why — "This sounds like a sponsor read: it says ‘brought to you by’ and gives a
+web address, but you asked to decide first." Tap a word to move an edge. The player
+carries three seconds either side, so the edges can be judged by ear.
+
+**It remembers.** Remove a read once and later episodes carrying the same words are cut
+without asking, in review mode too — that decision was yours. Keep one and it is never
+offered again. Every automatic cut says why, wherever it is mentioned, and every one
+can be put back with one click.
+
+**It still compares what episodes sound like.** The acoustic detector from 1.6 — 32
+bits every 11.6 milliseconds describing how energy moves between frequency bands,
+which survives re-encoding and loudness changes — runs as before and finds the theme
+tune, the bed under the credits and a pre-recorded read. When the words of such a
+stretch turn out to say sponsor, the theme-tune guard that used to hold it lets go.
+
+**Where to listen** is per show: the first five and last four minutes by default,
+or the whole episode to catch mid-roll reads at the cost of as much work as the
+episode is long. Reading speech is the expensive part: a small NAS runs the default
+`base` model at a few times real time, so the opening and closing of an episode is a
+minute or two of work behind the publish hold; a desktop is many times faster. The
+page quotes the measured speed once it has heard something. `WHISPER_MODEL=small`
+selects the larger model that ships alongside — roughly twice the work, and markedly
+better in French.
 
 **Your files are never touched.** The trimmed copy lives with SelfPod's other
 derived data and can be deleted at any time; the originals in your show folders are
 exactly as you left them. Change your mind about a segment and the episodes go back
 to how they were.
 
-**Nothing is decoded or re-encoded**, so what your subscribers download is
-byte-identical to your original everywhere except the few milliseconds either side
-of a join. That also means no quality is lost, and cutting an hour-long episode
-takes about a thirtieth of a second.
+**Nothing is decoded or re-encoded** on the way to your subscribers: what they download
+is byte-identical to your original everywhere except the few milliseconds either side
+of a join. Cutting an hour-long episode takes about a thirtieth of a second.
 
 **Episodes are held until the decision is settled**, rather than published and then
 swapped. Podcast apps download in pieces and resume, so replacing an episode's audio
 underneath a URL a listener is part-way through would hand them half of one file and
 half of another with nothing to notice. Held episodes are counted and explained on
 the show's page — a feed that quietly stops is the thing this app exists to prevent.
+An episode is never held for a recogniser that is not there: if whisper cannot run on
+your machine, the health banner says so and everything is published as it arrives.
 
 ### Adverts a host inserts as it serves
 
@@ -431,12 +460,16 @@ the app.
 
 **Reading the audio.** Removing adverts means SelfPod parses episode files, and a
 file downloaded from a followed feed is written by someone you do not control. That
-parsing is deliberately as small as it could be: it walks MP3 frame headers and
-hashes bytes. It decodes no audio, spawns no process and loads no media library —
-SelfPod ships no `ffmpeg`, which is a decision rather than an omission, since
-bundling one would put a full video-codec stack inside an image that is handed files
-chosen by strangers. The reader is bounded on frame count and refuses a file it
-cannot make sense of rather than hunting through it.
+parsing is deliberately as small as it could be. Cutting walks MP3 frame headers and
+never decodes. Comparing sound decodes MP3 and nothing else, through an eighty-kilobyte
+WebAssembly decoder running in-process inside the Wasm sandbox. Hearing the words
+runs whisper.cpp as a child process — two megabytes of MIT-licensed code, no shell,
+low priority, a hard time limit — fed a WAV that SelfPod's own decoder wrote a moment
+earlier, never a file chosen by a stranger; an illegal instruction or a bad allocation
+in it ends the child, not the server. SelfPod ships no `ffmpeg`, which is a decision
+rather than an omission, since bundling one would put a full video-codec stack inside
+an image that is handed files chosen by strangers. The reader is bounded on frame
+count and refuses a file it cannot make sense of rather than hunting through it.
 
 If you have a feed on your own LAN that you genuinely want followed, name its address
 in `ALLOW_PRIVATE_FEED_HOSTS`. It exempts exactly the addresses you list — not their

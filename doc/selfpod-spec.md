@@ -1104,6 +1104,97 @@ A trim that fails publishes the original and says so loudly. An advert
 that survives explains itself the moment it is heard; an episode that
 silently never appears does not.
 
+### 19.6 Hearing the words
+
+**Amended in 1.8.0.** Everything above compares sound, and sound cannot find the
+advert the owner actually complained about: a host reading the same sponsor script
+every morning, in a different take every morning. Nor can it tell a pre-roll from a
+theme tune, and it is deliberately barred from cutting anything at the very start of
+an episode for that reason. The words can do both.
+
+**What is transcribed, and where.** The first five and last four minutes of each MP3
+episode, by whisper.cpp in a child process, on the box itself; the whole episode if
+the owner asks for it. The audio goes to the recogniser as a WAV that SelfPod's own
+decoder wrote a moment earlier, resampled to 16 kHz through a short low-pass, so no
+file chosen by a stranger reaches a maths library. Nothing leaves the machine, and
+the running container fetches nothing this feature adds: the binary and both models
+are in the image, proved against each other on a one-second file before the image is
+accepted. The transcript — words with timings and the recogniser's confidence, and a
+loudness envelope at ten-millisecond hops — lives under `/data/.tx` beside the
+fingerprints, derived and rebuildable, invalidated by the audio's digest, the
+transcript version and the show's listening settings.
+
+**Why a subprocess, when the MP3 decoder is not.** The case against ffmpeg was a
+video-codec stack fed strangers' files; this is two megabytes of MIT-licensed code
+fed SelfPod's own PCM. And a child is the safer shape for it: an illegal instruction
+in ggml on an unexpected CPU kills the child, not the server; the several hundred
+megabytes a model needs go back to the operating system on exit, which they would not
+from inside a musl-linked Node process; and a run that has gone on too long ends with
+one signal. The amd64 image carries an AVX2 build and an SSE4.2 build and picks at
+boot, because the Celerons in most small NAS boxes have no AVX at all.
+
+**Never holding the feed for a recogniser that is not there.** The failure this is
+built against is quiet: an episode held "until SelfPod has listened" on a box where
+it cannot, for ever. So the recogniser is proved at boot and declared unavailable in
+the health banner when that fails; an episode is only ever held for its transcript if
+it was already held for something else, so nothing published before 1.8.0 is pulled
+back; three failures on one episode and it is left alone and counted; three failures
+in a row of any kind trip a breaker that makes the stage unavailable for six hours,
+and whatever is unavailable is not waited for.
+
+**Four things the words say, in order.** First, a *boundary* the owner taught: "the
+programme starts when it says this". Found in an episode, everything on the far side
+of it is cut — the marker's own words are kept — bounded by the listening window;
+not found, nothing is cut and the ledger says so. This is how a pre-roll that is a
+different advert every day is removed, and it is the only mechanism here that needs
+no repetition. Second, *reads already decided about*, matched by their words with a
+tolerance for the recogniser's variation: a match attaches to the existing segment,
+so an approved read is cut from the new episode without asking, in review mode too,
+and a rejected one is recorded and not offered — visibly, as "the same words as
+something you chose to keep". Approved and rejected segments *are* the memory; there
+is no separate list of phrases to keep in step. Third, *what repeats*: a text
+counterpart of the acoustic search, seeded on four matching tokens and grown while
+the two sides keep agreeing, tolerating a substitution or a skipped word wherever the
+next two tokens line up again, and recruiting every other episode before its edges
+are fixed. Fourth, *what sounds like a sponsor read heard once*: offered, never cut.
+
+**Cues, and what they are allowed to decide.** A short, readable list of things
+adverts say and programmes mostly do not — who paid, where to go, what code to use,
+and in French the small print the law makes an advertiser say — each with a weight,
+summed against a ceiling. The page names which fired. The score decides only how
+much SelfPod does before asking: strong cues lift the theme-tune guard from a stretch
+that also repeats, and roughly two of them are enough to *offer* a stretch heard
+once. A stretch heard once is never cut unasked whatever it says, and a stretch that
+repeats with no cues is held as the standing intro it usually is — with the offer to
+make it a boundary.
+
+**Edges.** A recogniser places a word to within a few hundred milliseconds. Each
+edge the words propose is moved to the quietest moment within six hundred
+milliseconds, read off the envelope stored with the transcript, then biased outwards
+by a few tens of milliseconds and rounded to a frame as §19.4 requires. At a
+boundary the edge may only move away from the marker's words and gets no bias: a
+syllable of jingle removed is a different complaint from a syllable of advert kept,
+and here the second one wins.
+
+**What the owner sees.** Every candidate found by the words carries the transcript
+with the cut marked and a few seconds of context either side, the cues that fired,
+and one sentence saying what SelfPod will do and why. The edges are two selects that
+work with script off, and a tap on a word when it is on; the player carries three
+seconds either side so the edges can be judged by ear. The episode page shows the
+words of the opening and closing with cuts struck through and candidates
+highlighted, and is where the owner teaches: "this is an advert", "not an advert",
+"the programme starts here", "the programme ends here". The ledger says, per
+episode, what the words meant for it. Every automatic cut says why wherever it is
+mentioned, and every one can be put back with one click; putting back a remembered
+read is also telling SelfPod to stop cutting those words.
+
+**What it costs.** Measured on the owner's French show on a desktop: the `base`
+model at about 40× real time and `small` at about 20×; on a two-thread Core-class
+NAS expect several times real time for `base`. The image grows by about 260 MB for
+the binary and both models. `small` is markedly better in French — it hears a jingle
+over music that `base` drops — and is one environment variable away.
+
+
 ## 17. Acceptance checklist
 
 Before considering this "done," verify each of these explicitly — every

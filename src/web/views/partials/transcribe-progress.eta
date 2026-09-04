@@ -1,0 +1,17 @@
+<%
+  /* Live listening feedback, the same two mechanisms as the rescan strip: the SSE
+     stream supplies an immediate label, and a slow poll guarantees the strip goes
+     away when the listening is over — which is what makes this correct when SSE is
+     unavailable and when a run finishes before this element was inserted. */
+  const showId = it.showId;
+  const label = it.label || 'Listening…';
+%>
+<div class="scan-progress transcribe-progress" id="transcribe-progress" role="status" aria-live="polite"
+     sse-swap="transcribe-progress-<%= showId %>"
+     hx-get="/ui/shows/<%= encodeURIComponent(it.slug) %>/transcribe-status"
+     hx-trigger="load delay:5s"
+     hx-swap="outerHTML">
+  <span class="scan-progress__dot" aria-hidden="true"></span>
+  <span class="scan-progress__status"><%= label %></span>
+  <span class="scan-progress__bar" aria-hidden="true"><i></i></span>
+</div>

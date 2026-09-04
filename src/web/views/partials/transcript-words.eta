@@ -1,0 +1,24 @@
+<%
+  /* A run of words, each a button so a tap can set an edge (see app.js, "transcript
+     edges"). The classes carry every mark a word can have; the legend below explains
+     them. Pure output: nothing here submits anything. */
+  const words = it.words ?? [];
+  const lang = it.language ?? null;
+%>
+<p class="tx <%= it.excerpt ? 'tx--excerpt' : 'tx--full' %>"<%= lang ? ` lang="${lang}"` : '' %>
+   data-tx-edit data-tx-default-start="<%= it.cutStartWord ?? '' %>" data-tx-default-end="<%= it.cutEndWord ?? '' %>">
+<% for (const word of words) {
+     const classes = ['tx__w'];
+     if (word.role === 'context') classes.push('tx__w--context');
+     if (word.role === 'cut') classes.push('tx__w--cut');
+     if (word.mark === 'approved') classes.push('tx__w--approved');
+     if (word.mark === 'candidate') classes.push('tx__w--candidate');
+     if (word.mark === 'rejected') classes.push('tx__w--rejected');
+     if (word.cue) classes.push('tx__w--cue');
+     if (word.low) classes.push('tx__w--low');
+     if (word.i === it.cutStartWord) classes.push('tx__w--start');
+     if (word.i === it.cutEndWord) classes.push('tx__w--end');
+%><button type="button" class="<%= classes.join(' ') %>" data-tx-word="<%= word.i %>"
+        title="<%= it.helpers ? it.helpers.formatDuration(Math.round(word.startMs / 1000)) : Math.round(word.startMs / 1000) + 's' %><%= word.cue ? ' · ' + word.cue.replace(/_/g, ' ') : '' %>"
+        aria-pressed="<%= word.role === 'cut' ? 'true' : 'false' %>"><%= word.t %></button> <% } %>
+</p>

@@ -39,15 +39,45 @@ export const TARGET_RATE = 5512;
 /** Frames handed to the decoder at once — a couple of seconds of audio. */
 const BATCH_FRAMES = 96;
 
+const TAPS = 31;
+const tapCache = new Map();
+
+/** Hann-windowed sinc, cut off just under the target's Nyquist, normalised to unit gain. */
+function lowPassTaps(sourceRate, targetRate) {
+  const key = `${sourceRate}:${targetRate}`;
+  let taps = tapCache.get(key);
+  if (taps) return taps;
+  const cutoff = (0.45 * targetRate) / sourceRate; // as a fraction of the source rate
+  const half = (TAPS - 1) / 2;
+  taps = new Float64Array(TAPS);
+  let sum = 0;
+  for (let k = 0; k < TAPS; k += 1) {
+    const x = k - half;
+    const sinc = x === 0 ? 2 * cutoff : Math.sin(2 * Math.PI * cutoff * x) / (Math.PI * x);
+    const window = 0.5 - 0.5 * Math.cos((2 * Math.PI * k) / (TAPS - 1));
+    taps[k] = sinc * window;
+    sum += taps[k];
+  }
+  for (let k = 0; k < TAPS; k += 1) taps[k] /= sum;
+  tapCache.set(key, taps);
+  return taps;
+}
+
 /**
- * Decodes an MP3 and hands the caller mono 5512 Hz samples in chunks.
+ * Decodes an MP3 and hands the caller mono samples in chunks.
  *
  * @param {Buffer} buffer the whole file
- * @param {Array<{offset: number, length: number}>} frames from `readFrames`
+ * @param {Array<{offset: number, length: number}>} frames from `readFrames` — any
+ *   slice of them, so a window of the episode costs only the window
  * @param {(samples: Float64Array) => void} onSamples called with each chunk, in order
+ * @param {{targetRate?: number, resample?: 'nearest'|'average'}} [options] the rate the
+ *   caller wants, and how to get there. The fingerprint takes the nearest sample (see
+ *   below); the speech recogniser wants 16 kHz and the average of the source samples
+ *   each output sample stands for, because the nearest one alone folds everything
+ *   above 8 kHz down into the band a mel spectrogram reads.
  * @returns {Promise<{sampleRate: number, samples: number, errors: number}>}
  */
-export async function decodeToMono(buffer, frames, onSamples) {
+export async function decodeToMono(buffer, frames, onSamples, { targetRate = TARGET_RATE, resample = 'nearest' } = {}) {
   const decoder = new MPEGDecoder();
   await decoder.ready;
 
@@ -71,7 +101,7 @@ export async function decodeToMono(buffer, frames, onSamples) {
       sourceRate ||= decoded.sampleRate;
 
       const [left, right] = decoded.channelData;
-      const step = decoded.sampleRate / TARGET_RATE;
+      const step = decoded.sampleRate / targetRate;
       const count = Math.floor((decoded.samplesDecoded - position) / step);
       if (count <= 0) {
         position -= decoded.samplesDecoded;
@@ -79,15 +109,38 @@ export async function decodeToMono(buffer, frames, onSamples) {
       }
 
       const out = new Float64Array(count);
-      for (let i = 0; i < count; i += 1) {
-        // Nearest sample rather than an interpolating filter. The fingerprint reads
-        // band energies between 300 Hz and 2 kHz, and the aliasing this admits lands
-        // far above that — it is audible and irrelevant, which is the right trade for
-        // work that happens on every episode.
-        const source = Math.min(Math.round(position + i * step), decoded.samplesDecoded - 1);
-        // A damaged file can decode to NaN. That is dealt with where samples become
-        // bits — see createFingerprinter — rather than twice.
-        out[i] = right ? (left[source] + right[source]) / 2 : left[source];
+      if (resample === 'average') {
+        /*
+         * A short windowed-sinc low-pass, evaluated only at the output positions. The
+         * speech recogniser reads a mel spectrogram up to 8 kHz, and anything above
+         * that in the source folds down into it unless it is removed first; a plain
+         * average of a couple of samples leaves most of it. Thirty-one taps at the
+         * output rate is a few hundred thousand multiplications per second of audio.
+         */
+        const taps = lowPassTaps(decoded.sampleRate, targetRate);
+        const half = (taps.length - 1) / 2;
+        const n = decoded.samplesDecoded;
+        for (let i = 0; i < count; i += 1) {
+          const centre = Math.round(position + i * step);
+          let sum = 0;
+          for (let k = 0; k < taps.length; k += 1) {
+            const at = centre + k - half;
+            if (at < 0 || at >= n) continue;
+            sum += taps[k] * (right ? (left[at] + right[at]) / 2 : left[at]);
+          }
+          out[i] = sum;
+        }
+      } else {
+        for (let i = 0; i < count; i += 1) {
+          // Nearest sample rather than an interpolating filter. The fingerprint reads
+          // band energies between 300 Hz and 2 kHz, and the aliasing this admits lands
+          // far above that — it is audible and irrelevant, which is the right trade for
+          // work that happens on every episode.
+          const source = Math.min(Math.round(position + i * step), decoded.samplesDecoded - 1);
+          // A damaged file can decode to NaN. That is dealt with where samples become
+          // bits — see createFingerprinter — rather than twice.
+          out[i] = right ? (left[source] + right[source]) / 2 : left[source];
+        }
       }
       onSamples(out);
       produced += count;

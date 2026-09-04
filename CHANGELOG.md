@@ -7,6 +7,48 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.0 — 2026-09-04
+
+### Added — SelfPod hears the words
+
+- **Spoken-advert detection.** SelfPod now transcribes the opening and closing minutes
+  of each MP3 episode on the box itself, with whisper.cpp, and looks for sponsor reads
+  in the *words*: the same words day after day even when a host reads them live, and
+  wording that sounds like an advert — a promo code, "brought to you by", a web
+  address, and the small print French law makes advertisers say. Nothing leaves the
+  machine. (spec §19.6)
+- **Boundaries.** On any episode page, pick the words the programme starts with —
+  "Vous écoutez RMC" — and press *The programme starts here*: everything before them
+  is cut, in every episode where SelfPod hears them, whatever it is. The way to
+  remove a pre-roll that is a different advert every day. *The programme ends here*
+  does the same for the tail.
+- **Memory.** Remove a read once and the same words are cut from later episodes
+  without asking, in review mode too; keep one and it is never offered again. Approved
+  and rejected reads *are* the memory.
+- **A card you can read.** Each candidate found by the words shows the transcript
+  with the cut marked and a few seconds of context, the cues that fired, and one
+  sentence saying what SelfPod will do and why. Tap a word to move an edge; the
+  player carries three seconds either side so the edges can be judged by ear.
+- **What SelfPod heard**, on the episode page: the words with cuts struck through and
+  candidates highlighted, and the place to teach it.
+- The subscription ledger says what the words meant for each episode — heard and
+  waiting, cut from memory, cut at the boundary, could not be read.
+- *Where to listen* per show: first N minutes, last N minutes, or the whole episode.
+  The page quotes the measured speed once it has heard something.
+- `WHISPER_MODEL=base` (default) or `small`: both ship in the image. `small` is about
+  twice the work and markedly better in French; `WHISPER_CLI` and `WHISPER_MODEL`
+  also accept paths.
+
+### Changed
+
+- A stretch found by ear at the very start of an episode is no longer held as a
+  theme tune once its words say sponsor.
+- The migration rebuilds the advert catalogue to widen a CHECK constraint; every
+  segment, decision and cut survives, and an older image still runs against it.
+- The image builds whisper.cpp from a pinned tag, in AVX2 and SSE4.2 flavours for
+  amd64 chosen at boot, and proves every binary against every model on a one-second
+  file before the image is accepted. About 260 MB larger.
+
 ## 1.7.0 — 2026-08-28
 
 ### Added

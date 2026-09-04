@@ -19,7 +19,7 @@ import { resolvePublishHold } from '../lib/publish-hold.js';
  * Serialising costs wall-clock time nobody is waiting on: the work happens behind a
  * publish hold, so the only observable difference is when an episode appears.
  */
-export function createAdPipeline({ db, events, logger, health, shows, episodes, adDetect, trimmer, activity }) {
+export function createAdPipeline({ db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber = null }) {
   let chain = Promise.resolve();
   let active = null;
 
@@ -87,6 +87,13 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
         undecidedSegments: countUndecided.get(episode.id)?.n ?? 0,
         trimStatus: episode.trim_status,
         canBeTrimmed: isTrimmable(episode),
+        // Only an episode already held waits for its words (see resolvePublishHold),
+        // and only while there is a recogniser to wait for.
+        transcriptPending:
+          episode.publish_hold !== null &&
+          episode.publish_hold !== undefined &&
+          Boolean(transcriber?.available()) &&
+          transcriber.needsTranscript(episode, show),
       });
       if (wanted === (episode.publish_hold ?? null)) {
         if (wanted) held += 1;
@@ -136,10 +143,19 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
    */
   function recordActivity(show, counts) {
     if (!activity) return;
-    if (!counts.found && !counts.trimmed && !counts.failed && !counts.released) return;
+    if (
+      !counts.found && !counts.trimmed && !counts.failed && !counts.released &&
+      !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts && !counts.transcriptionFailed
+    ) return;
 
     const parts = [];
+    if (counts.transcribed) {
+      parts.push(`${counts.transcribed} ${counts.transcribed === 1 ? 'episode' : 'episodes'} listened to`);
+    }
     if (counts.found) parts.push(`${counts.found} repeated ${counts.found === 1 ? 'segment' : 'segments'} found`);
+    if (counts.heard) parts.push(`${counts.heard} sponsor ${counts.heard === 1 ? 'read' : 'reads'} heard`);
+    if (counts.rememberedCuts) parts.push(`${counts.rememberedCuts} cut from memory`);
+    if (counts.markerCuts) parts.push(`${counts.markerCuts} cut at the boundary you set`);
     if (counts.trimmed) {
       parts.push(`${counts.trimmed} ${counts.trimmed === 1 ? 'episode' : 'episodes'} trimmed`);
     }
@@ -153,16 +169,32 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
       filesFound: counts.examined,
       updated: counts.trimmed,
       note: `${show.title} — ${parts.join(', ')}.`,
-      warnings: counts.failed
-        ? [
-            {
-              file: null,
-              message: `SelfPod could not remove the approved adverts from ${counts.failed} ${
-                counts.failed === 1 ? 'episode' : 'episodes'
-              }. They are published as they arrived, adverts included.`,
-            },
-          ]
-        : [],
+      warnings: [
+        ...(counts.failed
+          ? [
+              {
+                file: null,
+                message: `SelfPod could not remove the approved adverts from ${counts.failed} ${
+                  counts.failed === 1 ? 'episode' : 'episodes'
+                }. They are published as they arrived, adverts included.`,
+              },
+            ]
+          : []),
+        ...(counts.transcriptionFailed
+          ? [
+              {
+                file: null,
+                message: `SelfPod could not hear the words in ${counts.transcriptionFailed} ${
+                  counts.transcriptionFailed === 1 ? 'episode' : 'episodes'
+                }. ${counts.transcriptionFailed === 1 ? 'It is' : 'They are'} published as ${
+                  counts.transcriptionFailed === 1 ? 'it' : 'they'
+                } arrived; a sponsor read the host performs live will not be caught in ${
+                  counts.transcriptionFailed === 1 ? 'it' : 'them'
+                }.`,
+              },
+            ]
+          : []),
+      ],
     });
   }
 
@@ -190,12 +222,21 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
         const started = Date.now();
         const fingerprinted = await adDetect.fingerprintShow(showId);
 
+        // Hearing the words comes before either detector, so the acoustic one's finds
+        // can be read against them in the same run (a pre-roll found by ear is let go
+        // once its words say sponsor). Still inside the unsettled stretch below.
+        const transcribed = transcriber ? await transcriber.transcribeShow(showId) : null;
+        if (transcribed?.transcribed) {
+          events?.emit(EVENTS.TRANSCRIBE_FINISHED, { showId, slug: show.slug, ...transcribed });
+        }
+
         // Deliberately no settle here. Between fingerprinting and detection there are
         // no segments yet, so every episode looks like it has nothing outstanding —
         // settling on that would release the whole show untrimmed for as long as
         // detection takes, which is the one thing the hold exists to prevent. "Nothing
         // to decide" and "not yet asked" are not the same answer.
         const detected = await adDetect.detectForShow(showId);
+        const heard = transcriber ? await adDetect.detectFromTranscripts(showId) : null;
 
         // Now it means something, and an episode that turned out to need nothing is
         // released here rather than waiting behind the cutting of episodes that do.
@@ -208,6 +249,11 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           examined: fingerprinted?.fingerprinted ?? 0,
           corpus: holds.corpusSize,
           found: detected?.newSegments ?? 0,
+          transcribed: transcribed?.transcribed ?? 0,
+          transcriptionFailed: transcribed?.failed ?? 0,
+          heard: heard?.newSegments ?? 0,
+          rememberedCuts: heard?.rememberedCuts ?? 0,
+          markerCuts: heard?.markerCuts ?? 0,
           trimmed: trimmed.trimmed,
           failed: trimmed.failed,
           held: holds.held,
@@ -220,7 +266,9 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
             slug: show.slug,
             mode: show.ad_trim_mode,
             fingerprinted: fingerprinted?.fingerprinted ?? 0,
+            transcribed: transcribed?.transcribed ?? 0,
             segments: detected?.segments ?? 0,
+            spoken: heard?.segments ?? 0,
             trimmed: trimmed.trimmed,
             failed: trimmed.failed,
             held: holds.held,
@@ -229,7 +277,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           'ran advert detection for a show',
         );
         events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
-        return { ...holds, fingerprinted, detected, trimmed };
+        return { ...holds, fingerprinted, transcribed, detected, heard, trimmed };
       });
     },
 
@@ -260,7 +308,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
 
     /** What the chain is doing, for the status endpoint. */
     status() {
-      return { busy: active !== null, doing: active };
+      return { busy: active !== null, doing: active, listening: transcriber?.status().active ?? null };
     },
   };
 

@@ -45,7 +45,8 @@ export default async function adSegmentRoutes(fastify, services) {
 
   fastify.get('/shows/:id/ad-segments', async (request) => {
     const show = shows.getOrThrow(request.params.id);
-    const segments = adDetect.listSegments(show.id).map((row) => presentSegment(row, { episodes }));
+    const context = await services.advertsView.segmentsContext(show);
+    const segments = context.segments;
     const counts = episodes.counts(show.id);
 
     /*
@@ -68,6 +69,10 @@ export default async function adSegmentRoutes(fastify, services) {
       held: counts.held,
       segments,
       awaiting: segments.filter((row) => row.status === SEGMENT_STATUS.CANDIDATE).length,
+      /* ---- the words (spec §19.6) ---- */
+      listening: context.listening,
+      listen: context.listen,
+      markers: adDetect.listMarkers(show.id).map(presentMarker),
     };
   });
 
@@ -105,6 +110,12 @@ export default async function adSegmentRoutes(fastify, services) {
       fields.ad_auto_min_episodes = value;
     }
 
+    if (body.listenHeadMinutes !== undefined || body.listenTailMinutes !== undefined || body.listenWhole !== undefined) {
+      const listen = services.advertsView.listenSettingsFrom(body, show);
+      if (listen.error) throw badRequest(listen.error, 'invalid_listen_settings');
+      Object.assign(fields, listen.fields);
+    }
+
     if (!Object.keys(fields).length) throw badRequest('Nothing to change.', 'no_fields');
 
     const assignments = Object.keys(fields)
@@ -114,14 +125,98 @@ export default async function adSegmentRoutes(fastify, services) {
       .prepare(`UPDATE shows SET ${assignments}, updated_at = @updated_at WHERE id = @id`)
       .run({ ...fields, id: show.id, updated_at: new Date().toISOString() });
 
+    if (
+      fields.ad_transcribe !== undefined &&
+      (fields.ad_transcribe !== show.ad_transcribe ||
+        fields.ad_transcribe_head_seconds !== show.ad_transcribe_head_seconds ||
+        fields.ad_transcribe_tail_seconds !== show.ad_transcribe_tail_seconds)
+    ) {
+      services.transcriber?.forgetShow(show.id);
+    }
+
     const settled = adPipeline.settle(show.id);
     const updated = shows.get(show.id);
     return {
       mode: updated.ad_trim_mode,
       minEpisodes: updated.ad_auto_min_episodes,
+      listen: {
+        headMinutes: Math.round(updated.ad_transcribe_head_seconds / 60),
+        tailMinutes: Math.round(updated.ad_transcribe_tail_seconds / 60),
+        whole: updated.ad_transcribe === 'whole',
+      },
       released: settled.released,
       held: settled.held,
     };
+  });
+
+  function presentMarker(marker) {
+    return {
+      id: marker.id,
+      role: marker.role,
+      inclusive: Boolean(marker.inclusive),
+      text: marker.raw_text,
+      language: marker.language,
+      createdAt: marker.created_at,
+    };
+  }
+
+  /* ---- boundaries and the words (spec §19.6) ---- */
+
+  fastify.get('/shows/:id/ad-markers', async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    return { markers: adDetect.listMarkers(show.id).map(presentMarker) };
+  });
+
+  fastify.post('/shows/:id/ad-markers', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    const body = request.body ?? {};
+    if (body.role !== 'programme_starts' && body.role !== 'programme_ends') {
+      throw badRequest('A boundary is where the programme starts or where it ends.', 'unknown_marker_role');
+    }
+    const text = String(body.text ?? '').trim();
+    if (!text) throw badRequest('Say which words the boundary is.', 'empty_marker');
+    const marker = adDetect.addMarker({ showId: show.id, role: body.role, inclusive: Boolean(body.inclusive), rawText: text, language: body.language ?? null });
+    const result = await adPipeline.processShow(show.id);
+    return { marker: presentMarker(marker), trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  fastify.delete('/ad-markers/:id', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const marker = adDetect.getMarker(request.params.id);
+    if (!marker) throw notFound('That boundary no longer exists.', 'marker_not_found');
+    adDetect.removeMarker(marker.id);
+    await adPipeline.processShow(marker.show_id);
+    return { removed: true };
+  });
+
+  fastify.get('/episodes/:id/transcript', async (request) => {
+    const episode = episodes.getOrThrow(request.params.id);
+    const show = shows.getOrThrow(episode.show_id);
+    return { transcript: await services.advertsView.episodeTranscript(episode, show), adverts: services.advertsView.advertsFor(episode, show) };
+  });
+
+  fastify.post('/episodes/:id/transcript/teach', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const episode = episodes.getOrThrow(request.params.id);
+    const show = shows.getOrThrow(episode.show_id);
+    const body = request.body ?? {};
+    const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
+    if (!range) throw badRequest('Pick a first and a last word, in that order.', 'invalid_word_range');
+    const verdict = String(body.verdict ?? '');
+    if (verdict === 'advert' || verdict === 'not_advert') {
+      const segment = await adDetect.teachSegment({
+        showId: show.id,
+        episodeId: episode.id,
+        ...range,
+        status: verdict === 'advert' ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.REJECTED,
+      });
+      const result = await adPipeline.processShow(show.id);
+      return { segment: presentSegment(adDetect.listSegments(show.id).find((row) => row.id === segment.id), { episodes }), trimmed: result.trimmed?.trimmed ?? 0 };
+    }
+    if (verdict === 'programme_starts' || verdict === 'programme_ends') {
+      const marker = adDetect.addMarker({ showId: show.id, role: verdict, rawText: range.rawText, language: range.language });
+      const result = await adPipeline.processShow(show.id);
+      return { marker: presentMarker(marker), trimmed: result.trimmed?.trimmed ?? 0 };
+    }
+    throw badRequest('Say what those words are: an advert, not an advert, or where the programme starts or ends.', 'unknown_verdict');
   });
 
   fastify.post('/shows/:id/ad-detect', { preHandler: [fastify.rateLimit(DETECT_LIMIT)] }, async (request) => {
@@ -154,6 +249,17 @@ export default async function adSegmentRoutes(fastify, services) {
     const status = request.body?.status;
     if (status !== SEGMENT_STATUS.APPROVED && status !== SEGMENT_STATUS.REJECTED) {
       throw badRequest('A segment is either approved or rejected.', 'unknown_status');
+    }
+
+    // Edges moved by word (spec §19.6): the words are the segment, so the text moves
+    // with the cut and the run below re-finds it everywhere.
+    const body = request.body ?? {};
+    if (body.startWord !== undefined && body.endWord !== undefined) {
+      const episode = episodes.get(String(body.episodeId ?? segment.exemplar_episode_id ?? ''));
+      if (!episode || episode.show_id !== segment.show_id) throw badRequest('Say which episode the words are in.', 'unknown_episode');
+      const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
+      if (!range) throw badRequest('The last word has to come after the first.', 'invalid_word_range');
+      await adDetect.reshapeSegment(segment.id, { episodeId: episode.id, ...range });
     }
 
     adDetect.decide(segment.id, status);
@@ -204,10 +310,22 @@ export default async function adSegmentRoutes(fastify, services) {
       throw notFound('That episode is not readable right now.', 'file_missing');
     }
 
-    const total = frameProfile(buffer)?.frameCount ?? 0;
+    const profile = frameProfile(buffer);
+    const total = profile?.frameCount ?? 0;
+    /*
+     * `?context=N` plays a few seconds either side, so the edges can be judged by
+     * ear. Clamped on the server: a query string must not turn a forty-second read
+     * into forty minutes of somebody's episode.
+     */
+    const contextSeconds = Math.max(0, Math.min(10, Number(request.query?.context) || 0));
+    const contextFrames = profile?.frames?.length
+      ? Math.round((contextSeconds * 1000 * profile.frames[0].sampleRate) / (profile.frames[0].samplesPerFrame * 1000))
+      : 0;
+    const from = Math.max(0, occurrence.start_frame - contextFrames);
+    const to = Math.min(total, occurrence.end_frame + contextFrames);
     const sample = cutFrames(buffer, [
-      { startFrame: 0, endFrame: occurrence.start_frame },
-      { startFrame: occurrence.end_frame, endFrame: total },
+      { startFrame: 0, endFrame: from },
+      { startFrame: to, endFrame: total },
     ]);
     if (!sample) throw notFound('That segment could not be played.', 'not_playable');
 

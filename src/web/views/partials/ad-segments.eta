@@ -10,19 +10,37 @@
   const decided = off ? [] : segments.filter((row) => row.status !== 'candidate');
 %>
 <div id="ad-segments">
+  <% const listening = it.listening ?? null; %>
+  <% if (it.formError) { %>
+    <div class="notice warn" role="alert"><%= it.formError %></div>
+  <% } %>
+  <% if (listening && listening.inProgress) { %>
+    <%~ include('./transcribe-progress.eta', { showId: show.id, slug: show.slug, label: listening.progressLabel }) %>
+  <% } %>
+
   <% if (it.held > 0) { %>
-    <div class="callout callout-warn" role="status">
+    <div class="notice warn" role="status">
       <strong><%= it.held %> <%= it.held === 1 ? 'episode is' : 'episodes are' %> waiting, and not in your feed yet.</strong>
       <%
         /* An episode held with nothing explaining why is the failure this app is built
            against, so the reason is spelled out rather than implied by a badge. */
       %>
-      <% if (mode === 'auto' && !waiting.length) { %>
+      <% if (listening && listening.pending > 0) { %>
+        SelfPod is still listening to <%= listening.pending %> of them. They will be published as soon as it has.
+      <% } else if (mode === 'auto' && !waiting.length) { %>
         SelfPod needs a few episodes to compare before it can tell what this show repeats.
         They will be published as soon as it can.
       <% } else { %>
         They will be published as soon as you have decided about the segments below.
       <% } %>
+    </div>
+  <% } %>
+
+  <% if (!off && listening && (listening.engine === 'missing' || listening.engine === 'failing')) { %>
+    <div class="notice warn" role="status">
+      <strong>SelfPod cannot read the words in this show's episodes.</strong>
+      The speech recogniser is not available on this machine, so it is only comparing
+      episodes by sound. A sponsor read the host performs live will get through until it is.
     </div>
   <% } %>
 
@@ -37,23 +55,45 @@
         </div>
       <% } %>
     </div>
+  <% } else if (!segments.length && listening && listening.unsupported > 0 && listening.unsupported === listening.total) { %>
+    <div class="empty">
+      SelfPod cannot read this show's episodes: it reads MP3 files only, and this show
+      has none. Everything is published exactly as it arrives.
+    </div>
+  <% } else if (!segments.length && listening && listening.inProgress) { %>
+    <div class="empty">
+      Listened to <%= listening.done %> of <%= listening.total %> so far, and heard nothing to
+      decide about yet. The rest follow, newest first.
+    </div>
   <% } else if (!segments.length && it.lookedAndFoundNothing) { %>
     <%
       /* "Looked and found nothing" is not "not yet", and saying the second when the
          first is true leaves someone waiting for ever. See describeComparability. */
     %>
-    <div class="callout" role="status">
-      <strong>SelfPod compared <%= it.comparableEpisodes %> episodes and found no repeated audio.</strong>
-      <p>
-        It listens for anything these episodes have in common — a theme tune, a bed
-        under the credits, the same sponsor read week after week — and there was
-        nothing lasting more than a few seconds. Plenty of shows are like that.
-      </p>
+    <div class="notice info" role="status">
+      <div>
+      <% if (listening && listening.engine === 'ready' && listening.done > 0) { %>
+        <strong>SelfPod listened to <%= listening.scopeLabel %> of <%= listening.done %> episodes and heard no sponsor read, and compared <%= it.comparableEpisodes %> by sound and found no repeated audio.</strong>
+        <p>
+          It listens for a sponsor's name, “brought to you by”, a promo code, and for
+          words that come back episode after episode; and for anything these episodes
+          have in common by sound — a theme tune, a bed under the credits. There was
+          nothing. Plenty of shows are like that.
+        </p>
+      <% } else { %>
+        <strong>SelfPod compared <%= it.comparableEpisodes %> episodes and found no repeated audio.</strong>
+        <p>
+          It listens for anything these episodes have in common — a theme tune, a bed
+          under the credits, the same sponsor read week after week — and there was
+          nothing lasting more than a few seconds. Plenty of shows are like that.
+        </p>
+      <% } %>
       <p class="muted">
         Adverts that a podcast host inserts while it sends you the file are a separate
         matter, found by fetching one episode twice and comparing. That happens on its
         own and is not affected by this.
       </p>
+      </div>
     </div>
   <% } else if (!segments.length) { %>
     <div class="empty">
@@ -62,11 +102,23 @@
     </div>
   <% } %>
 
+  <% if (listening && listening.failed > 0 && !off) { %>
+    <div class="notice warn" role="status">
+      <%= listening.failed %> <%= listening.failed === 1 ? 'episode' : 'episodes' %> could not be listened to. <%= listening.failed === 1 ? 'It is' : 'They are' %> published as <%= listening.failed === 1 ? 'it' : 'they' %> arrived.
+    </div>
+  <% } %>
+
   <% if (waiting.length) { %>
     <p class="muted">
-      This is audio that repeats across your episodes. SelfPod cannot tell a sponsor read
-      from a theme tune — they repeat in exactly the same way — so it does not guess.
-      Listen, and decide.
+      <% if (waiting.some((row) => row.spoken)) { %>
+        What SelfPod heard, with the words it would remove marked. Read it, listen if
+        you like, and decide. Remove a read once and the same words are cut from later
+        episodes without asking.
+      <% } else { %>
+        This is audio that repeats across your episodes. SelfPod cannot tell a sponsor read
+        from a theme tune — they repeat in exactly the same way — so it does not guess.
+        Listen, and decide.
+      <% } %>
     </p>
   <% } %>
 
@@ -75,6 +127,9 @@
       <div class="ftitle">
         <%= found.durationLabel %>
         <span class="muted">· <%= found.sourceLabel %></span>
+        <% if (found.language && found.language !== (show.language ?? 'en').slice(0, 2)) { %>
+          <span class="badge badge-mute badge--tight"><%= found.language.toUpperCase() %></span>
+        <% } %>
       </div>
 
       <dl class="seg-facts">
@@ -82,38 +137,85 @@
         <dd><%= found.positionLabel ?? 'Varies' %></dd>
         <dt>Episodes</dt>
         <dd><%= found.episodeCount %> of them<%= found.occurrenceCount > found.episodeCount ? `, ${found.occurrenceCount} times in total` : '' %></dd>
+        <% if (found.cues && found.cues.length) { %>
+          <dt>Heard</dt>
+          <dd class="seg-cues"><% for (const cue of found.cues) { %><span class="chip seg-cue"><%= cue.phrase %></span> <% } %></dd>
+        <% } %>
       </dl>
 
-      <% if (found.holdMessage) { %>
-        <div class="callout callout-warn" role="status">
+      <% if (found.why) { %>
+        <%
+          /* One sentence, always, for anything found by the words: what SelfPod is going
+             to do and why. The word carries the state; the tint only echoes it. */
+        %>
+        <div class="notice <%= found.why.verdict === 'asking' ? 'warn' : 'info' %> seg-why" role="status">
+          <strong><%= found.why.verdict === 'will_cut' ? 'Will cut this on its own.' : found.why.verdict === 'will_leave' ? 'Will leave this in.' : 'Asking you.' %></strong>
+          <%= found.why.sentence %>
+        </div>
+      <% } else if (found.holdMessage) { %>
+        <div class="notice warn" role="status">
           <strong>SelfPod will not remove this on its own.</strong>
           <%= found.holdMessage %>
         </div>
       <% } %>
 
-      <% if (found.exemplar) { %>
-        <%
-          /* Loaded on demand rather than preloaded: a review session can hold a dozen
-             of these, and each one is a slice of a real episode read off the disk. */
-        %>
-        <audio controls preload="none" src="<%= found.exemplar.sampleUrl %>"></audio>
-        <div class="seg-from">From <%= found.exemplar.title ?? 'an episode' %></div>
-      <% } %>
+      <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+            hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+            hx-target="#ad-segments" hx-swap="outerHTML" class="seg-decide">
+        <% if (found.excerpt) { %>
+          <%
+            /* The words, with the cut marked and a few seconds either side greyed. The
+               selects underneath are the real edges and work with JavaScript off; a tap
+               on a word sets them when it is on. */
+          %>
+          <input type="hidden" name="episodeId" value="<%= found.excerpt.episodeId %>">
+          <%~ include('./transcript-words.eta', { words: found.excerpt.words, cutStartWord: found.excerpt.cutStartWord, cutEndWord: found.excerpt.cutEndWord, excerpt: true, language: found.language, helpers: it.helpers }) %>
+          <div class="tx__range muted" data-tx-range aria-live="polite"></div>
+          <details class="tx__edges">
+            <summary>Adjust the edges</summary>
+            <div class="form-row">
+              <div class="field">
+                <label for="start-<%= found.id %>">First word to remove</label>
+                <select id="start-<%= found.id %>" name="startWord" data-tx-start>
+                  <% for (const word of found.excerpt.words) { %>
+                    <option value="<%= word.i %>" <%= word.i === found.excerpt.cutStartWord ? 'selected' : '' %>><%= word.t %></option>
+                  <% } %>
+                </select>
+              </div>
+              <div class="field">
+                <label for="end-<%= found.id %>">Last word to remove</label>
+                <select id="end-<%= found.id %>" name="endWord" data-tx-end>
+                  <% for (const word of found.excerpt.words) { %>
+                    <option value="<%= word.i %>" <%= word.i === found.excerpt.cutEndWord ? 'selected' : '' %>><%= word.t %></option>
+                  <% } %>
+                </select>
+              </div>
+            </div>
+            <div class="hint">Edges land on word boundaries, then on the nearest pause. Listen with context below to check them.</div>
+            <button class="btn btn-ghost btn-xs" type="button" data-tx-reset>Back to SelfPod's proposal</button>
+          </details>
+        <% } %>
 
-      <div class="seg-actions">
-        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-              hx-target="#ad-segments" hx-swap="outerHTML">
-          <input type="hidden" name="status" value="approved">
-          <button class="btn btn-sm" type="submit">Remove this from every episode</button>
-        </form>
-        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-              hx-target="#ad-segments" hx-swap="outerHTML">
-          <input type="hidden" name="status" value="rejected">
-          <button class="btn btn-ghost btn-sm" type="submit">Keep it</button>
-        </form>
-      </div>
+        <% if (found.exemplar) { %>
+          <%
+            /* Loaded on demand rather than preloaded: a review session can hold a dozen
+               of these, and each one is a slice of a real episode read off the disk. */
+          %>
+          <audio controls preload="none" src="<%= found.contextSampleUrl ?? found.exemplar.sampleUrl %>"></audio>
+          <div class="seg-from">From <%= found.exemplar.title ?? 'an episode' %><%= found.contextSampleUrl ? ' — with three seconds either side, so you can hear the edges' : '' %></div>
+          <% if (found.contextSampleUrl) { %>
+            <details class="seg-just"><summary>Just the cut</summary><audio controls preload="none" src="<%= found.exemplar.sampleUrl %>"></audio></details>
+          <% } %>
+        <% } %>
+
+        <div class="seg-actions">
+          <button class="btn btn-sm" type="submit" name="status" value="approved">Remove this from every episode</button>
+          <button class="btn btn-ghost btn-sm" type="submit" name="status" value="rejected">Keep it</button>
+          <% if (found.why && found.why.offerMarker && found.rawText) { %>
+            <button class="btn btn-ghost btn-sm" type="submit" name="status" value="programme_starts" title="Cut everything before these words, in every episode">The programme starts here</button>
+          <% } %>
+        </div>
+      </form>
     </div>
   <% } %>
 
@@ -129,19 +231,34 @@
               <%= found.status === 'approved' ? 'Removed' : 'Kept' %><%
               %><% if (found.autoApproved) { %> automatically<% } %>
             </span>
+            <% if (found.rawText) { %>
+              <span class="seg-decided__words muted" title="<%= found.rawText %>"><%= found.isMarker ? found.sourceLabel + ': ' : '' %>“<%= found.rawText.length > 90 ? found.rawText.slice(0, 90) + '…' : found.rawText %>”</span>
+            <% } %>
+            <% if (found.why) { %>
+              <span class="seg-decided__why muted"><%= found.why.sentence %></span>
+            <% } %>
             <%
               /* The reverse of whatever was decided, so changing your mind is one click
-                 rather than a hunt for where the decision lives. */
+                 rather than a hunt for where the decision lives. A boundary is undone
+                 by forgetting it, which puts back everything it cut. */
               const reverse = found.status === 'approved' ? 'rejected' : 'approved';
             %>
-            <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-                  hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-                  hx-target="#ad-segments" hx-swap="outerHTML">
-              <input type="hidden" name="status" value="<%= reverse %>">
-              <button class="btn btn-ghost btn-xs" type="submit">
-                <%= found.status === 'approved' ? 'Put it back' : 'Remove it' %>
-              </button>
-            </form>
+            <% if (found.isMarker) { %>
+              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
+                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
+                    hx-target="#ad-segments" hx-swap="outerHTML">
+                <button class="btn btn-ghost btn-xs" type="submit">Forget this boundary</button>
+              </form>
+            <% } else { %>
+              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                    hx-target="#ad-segments" hx-swap="outerHTML">
+                <input type="hidden" name="status" value="<%= reverse %>">
+                <button class="btn btn-ghost btn-xs" type="submit">
+                  <%= found.status === 'approved' ? (found.spoken ? 'Put it back and stop cutting these words' : 'Put it back') : 'Remove it' %>
+                </button>
+              </form>
+            <% } %>
           </li>
         <% } %>
       </ul>
