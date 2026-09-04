@@ -428,3 +428,34 @@ export function locatePhrase(tokens, phrase, { minSimilarity = MIN_SIMILARITY, m
     similarity: 1 - best.errors / m,
   };
 }
+
+/**
+ * Whether two stretches of words are the same read, transcribed differently.
+ *
+ * The signature is a hash and `tokenSimilarity` is a whole-against-whole comparison,
+ * and a recogniser gives neither of them a chance: the same closing tag comes out one
+ * day starting a word earlier, another day with "Banque" heard as "Bank", another day
+ * running on into the jingle after it. Each variant then became a segment of its own,
+ * so the owner was asked about one read four times and four rows of the catalogue said
+ * the same thing.
+ *
+ * So the shorter text is aligned *inside* the longer one, which forgives a different
+ * start and a different end, and the mishearings inside it are counted as errors. Two
+ * guards stop this swallowing things that merely overlap: the shorter has to be most
+ * of the longer, and what matches has to match well.
+ */
+export function sameSpokenRead(a, b, { minSimilarity = MIN_SIMILARITY, minLengthRatio = 0.6 } = {}) {
+  const as = (typeof a === 'string' ? a.split(' ') : a.map((token) => token.t ?? token)).filter(Boolean);
+  const bs = (typeof b === 'string' ? b.split(' ') : b.map((token) => token.t ?? token)).filter(Boolean);
+  if (as.length < 4 || bs.length < 4) return false;
+  const [shorter, longer] = as.length <= bs.length ? [as, bs] : [bs, as];
+  // A short phrase sitting inside a long read is not that read — it is a phrase they
+  // have in common, which is what "Vous écoutez RMC" is to the tag that precedes it.
+  if (shorter.length / longer.length < minLengthRatio) return false;
+  const hit = locatePhrase(
+    longer.map((t, i) => ({ t, startMs: i, endMs: i })),
+    shorter,
+    { maxErrors: Math.floor(shorter.length * 0.3) },
+  );
+  return Boolean(hit) && hit.similarity >= minSimilarity;
+}

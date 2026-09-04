@@ -7,6 +7,32 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.1 — 2026-09-04
+
+### Fixed
+
+- **“Already decided” was unreadable.** The row was a single line of flex carrying six
+  things, so the position label was squeezed to no width at all and printed straight
+  over the decision beside it — “Varies” and “Removed” on top of each other — while the
+  words and the reason were crushed into two narrow columns and the reversal button was
+  pushed off the edge of the card. Everything describing a segment now stacks in one
+  column and wraps there, and only the reversal sits beside it.
+- **One read is one row.** Every way the recogniser wrote the same closing tag became a
+  segment of its own, so the same sponsor read was offered four times and four rows of
+  the catalogue recorded the same decision. Variants are now recognised by aligning the
+  shorter wording inside the longer, and folded together — never across a disagreement,
+  and never swallowing a phrase two reads merely share, such as a jingle that follows
+  one of them.
+- **A decision now beats an open question.** When an undecided candidate and a decided
+  read covered the same words, whichever ran first took them, and a candidate winning
+  meant the owner's own decision stopped being applied to that episode.
+- A segment whose episodes have all gone said its position was “Varies”; it now says it
+  is not in an episode you have any more. It is still kept, because a segment is how
+  SelfPod remembers a decision and the same words can arrive again tomorrow.
+- “Repeats across 1 episodes”, and a wordless row that gave its episode count twice.
+- The reversal button says the short thing — “Put it back” — with what else it undoes
+  written under it, rather than a sentence too long to sit in a row.
+
 ## 1.8.0 — 2026-09-04
 
 ### Added — SelfPod hears the words

@@ -1951,28 +1951,43 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 .seg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .seg-actions form { margin: 0; }
 .seg-decided { list-style: none; }
+/* Two columns, not six. Everything describing the segment stacks in the first and
+   wraps there; only the reversal sits beside it. The single flex line this replaces
+   gave the position label `flex: 1; min-width: 0` and then asked it to share the row
+   with the words and the reason, so it was squeezed to zero width and its text
+   printed straight over the decision next to it. */
 .seg-decided li {
-  display: flex; align-items: center; gap: 14px;
-  padding: 9px 0; border-top: 1px solid var(--line);
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 12px 0; border-top: 1px solid var(--line);
 }
 .seg-decided li:first-child { border-top: 0; }
-.seg-decided__len { flex: none; width: 46px; font-size: 12.5px; color: var(--ink-soft); }
-.seg-decided__where { flex: 1; min-width: 0; font-size: 13.5px; }
+.seg-decided__main { flex: 1; min-width: 0; }
+.seg-decided__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 9px; }
 /* The word carries the state, not the colour: someone who cannot separate the two
    tints still has to be able to read which of these is being cut out of their feed. */
-.seg-decided__state { flex: none; font-size: 12.5px; color: var(--ink-soft); }
-.seg-decided__state--cut { color: var(--ink); font-weight: 500; }
-.seg-decided form { flex: none; margin: 0; }
+.seg-decided__state { font-size: 12.5px; color: var(--ink-soft); }
+.seg-decided__state--cut { color: var(--ink); font-weight: 600; }
+.seg-decided__fact { font-size: 12.5px; color: var(--ink-soft); }
+.seg-decided__fact::before { content: '·'; margin-right: 9px; color: var(--line-2); }
+.seg-decided__kind { font-weight: 500; color: var(--ink); }
+/* `anywhere` rather than `break-word`: a transcript can carry a web address the
+   recogniser ran together, and one long token must not push the reversal off the card. */
+.seg-decided__words {
+  margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.seg-decided__why { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
+.seg-decided__act { flex: none; width: 150px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.seg-decided__act form { margin: 0; }
+.seg-decided__note { font-size: 11.5px; line-height: 1.35; color: var(--ink-soft); text-align: right; }
 
 @media (max-width: 640px) {
-  /* The position of a segment is the most useful thing on the row and the longest
-     thing on it, so on a narrow screen it gets the width and the decision moves
-     underneath rather than being squeezed into four words a line. */
-  .seg-decided li { flex-wrap: wrap; row-gap: 6px; }
-  .seg-decided__where { flex: 1 1 100%; order: 1; }
-  .seg-decided__len { order: 2; width: auto; }
-  .seg-decided__state { order: 3; margin-right: auto; }
-  .seg-decided form { order: 4; }
+  /* The reversal moves under what it reverses rather than being squeezed into a
+     column four words wide. */
+  .seg-decided li { flex-wrap: wrap; gap: 8px; }
+  .seg-decided__main { flex: 1 1 100%; }
+  .seg-decided__act { width: auto; flex-direction: row; align-items: baseline; gap: 8px; }
+  .seg-decided__note { text-align: left; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
