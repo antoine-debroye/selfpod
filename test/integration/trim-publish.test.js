@@ -455,6 +455,17 @@ describe('serving the trimmed bytes', () => {
       assert.equal(resumed.statusCode, 200, `resuming with ${header} was refused`);
       assert.equal(Buffer.compare(resumed.rawPayload, now.rawPayload), 0, `${header} got a fragment`);
       assert.equal(resumed.headers['content-range'], undefined, `${header} was answered as a range`);
+      /*
+       * The 200 is only half the answer while a CDN sits in front. Cloudflare read
+       * the origin's whole file, saw `Accept-Ranges: bytes`, and cut it back down to
+       * the fragment the app asked for — so the app went on appending bytes to the
+       * refusal it was holding. The response has to say it cannot be ranged.
+       */
+      assert.equal(
+        resumed.headers['accept-ranges'],
+        'none',
+        `${header} left a proxy free to turn the whole file back into a fragment`,
+      );
     }
 
     // And an address with no version at all, which is what an app that saw this
@@ -507,7 +518,24 @@ describe('serving the trimmed bytes', () => {
 
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers['content-range'], undefined);
+    assert.equal(response.headers['accept-ranges'], 'none');
     assert.equal(Buffer.compare(response.rawPayload, await originalBytes(episode)), 0);
+  });
+
+  it('still lets an ordinary listener seek', async () => {
+    // The other half of the guarantee above: refusing ranges is for the one answer
+    // that ignores them. Saying `none` on every response would stop every player
+    // seeking, which is a worse bug than the one being fixed.
+    const show = await makeShow();
+    const [episode] = server.episodes.listByShow(show.id);
+
+    const whole = await media(show, episode);
+    assert.equal(whole.headers['accept-ranges'], 'bytes');
+
+    const part = await media(show, episode, { range: 'bytes=1000-1999' });
+    assert.equal(part.statusCode, 206);
+    assert.equal(part.rawPayload.length, 1000);
+    assert.equal(part.headers['accept-ranges'], 'bytes');
   });
 });
 

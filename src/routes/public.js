@@ -569,8 +569,20 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      * Dropping the range is what turns this into a 200 with the whole file: the static
      * handler reads it from the request. A client that asked to resume gets the
      * complete representation instead, which is what tells it to start again.
+     *
+     * That is not enough on its own once there is a CDN in front. A proxy that sees a
+     * 200 carrying `Accept-Ranges: bytes` is entitled to satisfy the range itself, and
+     * Cloudflare does: the origin sent the whole episode and the app still received
+     * bytes 59 onwards to append to the refusal it was holding, which is the very
+     * splice this is here to prevent. So the response also has to say that it cannot
+     * be ranged. `Accept-Ranges: none` is HTTP's way of saying so, and it is set on
+     * the reply as well as withheld from the static handler because absence only means
+     * "unknown" to an intermediary, while `none` is an instruction.
      */
-    if (serveWhole) delete request.headers.range;
+    if (serveWhole) {
+      delete request.headers.range;
+      reply.header('accept-ranges', 'none');
+    }
 
     reply
       // Always from the shared MIME map, never sniffed. Left to itself the static
@@ -623,6 +635,10 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     return reply.sendFile(basename(absolute), dirname(absolute), {
       cacheControl: false,
       contentType: false,
+      // Off for a whole-file answer only, so the handler neither re-reads the range
+      // nor overwrites the `accept-ranges: none` set above. Every ordinary request
+      // keeps the plugin's range support, which is what makes seeking work.
+      acceptRanges: !serveWhole,
     });
   });
 

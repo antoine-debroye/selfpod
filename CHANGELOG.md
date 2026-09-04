@@ -7,6 +7,23 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.7 — 2026-09-04
+
+### Fixed
+
+- **Cloudflare undid the fix in 1.8.6.** Giving a resuming client the whole episode is
+  what lets an app recover, and the NAS was doing it — but the response still carried
+  `Accept-Ranges: bytes`, which tells any proxy in front that it may satisfy the range
+  itself. Cloudflare did: it read the complete file from SelfPod and handed the app the
+  fragment it had asked for, so the app went on appending audio to the hundred-odd bytes
+  of the failed download it was holding, and the episode stayed broken. Measured against
+  the real deployment, the origin answered 200 with the whole file while the same request
+  through the tunnel came back 206.
+
+  A whole-file answer now says `Accept-Ranges: none`, so nothing between SelfPod and the
+  listener is entitled to cut it back down. Ordinary requests are untouched and seeking
+  still works.
+
 ## 1.8.6 — 2026-09-04
 
 ### Fixed
