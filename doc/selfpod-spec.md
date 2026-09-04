@@ -1110,10 +1110,20 @@ with no way back.
 What the check is really about is narrower than the version: only a client
 *assembling a file out of parts* can join two cuts into an episode that
 never existed. A client with no range, or one asking from byte zero,
-receives a whole consistent file whichever cut it gets. So an address from
-an earlier cut is served when the request starts at the beginning, and
-refused when it resumes from the middle or asks for a suffix. The refusal
-is kept exactly where the hazard is, and nowhere else.
+receives a whole consistent file whichever cut it gets.
+
+**Amended again in 1.8.6.** Refusing the resuming client was still wrong,
+and wrong in the same shape as before: an app whose download failed holds a
+hundred-odd bytes of the refusal, believes it has part of the episode, and
+asks to resume from there. It was refused again, stored the refusal again,
+and showed a failed download for ever, because the only request it knew how
+to make was the one being refused.
+
+So no address is refused at all. A client resuming against one that no
+longer matches is handed the *whole* current episode with a 200 — what HTTP
+does for a validator that has changed — rather than a fragment to append.
+The hazard was never the address; it was the fragment, and there is no
+longer a fragment to give.
 
 A trim that fails publishes the original and says so loudly. An advert
 that survives explains itself the moment it is heard; an episode that
