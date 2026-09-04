@@ -9,11 +9,16 @@
   const episode = it.episode;
   const base = `/ui/episodes/${encodeURIComponent(episode.id)}/transcript`;
 %>
-<section class="form-card" id="episode-transcript"
+<%
+  /* Embedded inside the episode's Adverts card, which owns the refreshing, or a card
+     of its own when something wants only the words. */
+  const embedded = it.embedded === true;
+%>
+<% if (embedded) { %><div class="ep-ad__heard" id="episode-transcript"><% } else { %><section class="form-card" id="episode-transcript"
          hx-get="<%= base %>"
          hx-trigger="sse:transcript-<%= episode.id %> from:body<%= tx.state === 'listening' ? ', load delay:10s' : '' %>"
-         hx-swap="outerHTML">
-  <div class="ftitle">What SelfPod heard</div>
+         hx-swap="outerHTML"><% } %>
+  <div class="<%= embedded ? 'ds-caption' : 'ftitle' %>">What SelfPod heard</div>
   <% if (tx.state === 'off') { %>
     <p class="muted">SelfPod is not listening to this show. Turn on advert removal on the show's <a href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Adverts</a> page and it will read the opening and closing minutes of each episode.</p>
   <% } else if (tx.state === 'unsupported') { %>
@@ -37,45 +42,13 @@
 
         <%~ include('./transcript-words.eta', { words: region.words, cutStartWord: null, cutEndWord: null, excerpt: false, language: region.language, helpers: it.helpers }) %>
 
-        <% for (const mark of region.marks) { %>
-          <div class="tx__mark notice <%= mark.status === 'candidate' ? 'warn' : 'info' %>">
-            <div>
-              <strong><%= mark.status === 'candidate' ? `Waiting for you: ${mark.atLabel}` : mark.status === 'approved' ? `Cut ${mark.atLabel}` : `Kept ${mark.atLabel}` %>.</strong>
-              <%= mark.why ? mark.why.sentence : '' %>
-            </div>
-            <% if (mark.status === 'candidate') { %>
-              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= mark.segmentId %>"
-                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= mark.segmentId %>"
-                    hx-target="#episode-transcript" hx-swap="outerHTML" class="seg-actions">
-                <input type="hidden" name="returnTo" value="episode:<%= episode.id %>">
-                <button class="btn btn-sm" type="submit" name="status" value="approved">Remove it</button>
-                <button class="btn btn-ghost btn-sm" type="submit" name="status" value="rejected">Not an advert</button>
-              </form>
-            <% } else if (mark.status === 'approved' && !mark.isMarker) { %>
-              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= mark.segmentId %>"
-                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= mark.segmentId %>"
-                    hx-target="#episode-transcript" hx-swap="outerHTML" class="seg-actions">
-                <input type="hidden" name="returnTo" value="episode:<%= episode.id %>">
-                <button class="btn btn-ghost btn-xs" type="submit" name="status" value="rejected">Put it back and stop cutting these words</button>
-              </form>
-            <% } else if (mark.isMarker) { %>
-              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= mark.markerId %>/remove"
-                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= mark.markerId %>/remove"
-                    hx-target="#episode-transcript" hx-swap="outerHTML" class="seg-actions">
-                <input type="hidden" name="returnTo" value="episode:<%= episode.id %>">
-                <button class="btn btn-ghost btn-xs" type="submit">Forget this boundary</button>
-              </form>
-            <% } %>
-          </div>
-        <% } %>
-
         <%
           /* The teaching loop. Pick the words, say what they are. Works with the two
              selects alone; a tap on a word above fills them in when script is on. */
         %>
         <details class="tx__teach">
           <summary>Tell SelfPod about these words</summary>
-          <form method="post" action="<%= base %>/teach" hx-post="<%= base %>/teach" hx-target="#episode-transcript" hx-swap="outerHTML">
+          <form method="post" action="<%= base %>/teach" hx-post="<%= base %>/teach" hx-target="<%= embedded ? '#episode-adverts' : '#episode-transcript' %>" hx-swap="outerHTML">
             <input type="hidden" name="region" value="<%= region.index %>">
             <div class="form-row">
               <div class="field">
@@ -109,4 +82,4 @@
       </details>
     <% } %>
   <% } %>
-</section>
+<% if (embedded) { %></div><% } else { %></section><% } %>

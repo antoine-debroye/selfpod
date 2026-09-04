@@ -132,7 +132,7 @@ async function main() {
   const trimmer = createTrimmer({
     config, events, logger, health, shows, episodes, adDetect, metadata,
   });
-  const advertsView = createAdvertsView({ adDetect, transcriber, episodes, shows });
+  const advertsView = createAdvertsView({ db, adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
     db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
   });

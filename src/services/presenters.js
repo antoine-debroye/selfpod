@@ -1,4 +1,5 @@
 import { SHOW_STATUS } from '../constants.js';
+import { publishedAudio } from '../lib/published-audio.js';
 import { coverUrl, episodeArtUrl, feedUrl, mediaUrl } from '../lib/urls.js';
 import { NO_ACCESS } from './stats.js';
 
@@ -129,6 +130,7 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
   function presentEpisode(episode, show, { access } = {}) {
     const baseUrl = settings.publicBaseUrl();
     const tokenPath = `${encodeURIComponent(show.slug)}/${encodeURIComponent(show.feed_token)}`;
+    const audio = publishedAudio(episode);
     return {
       id: episode.id,
       showId: episode.show_id,
@@ -157,10 +159,30 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
       // "Did my drop just get picked up?" is asked far more often than it is answered.
       createdAt: episode.created_at,
       removedAt: episode.removed_at,
+      /*
+       * The audio a subscriber actually gets: the original, or the copy with the
+       * approved adverts cut out of it. Both URLs carry the content version, because
+       * the media route *checks* it — the absence of one is the claim "the untrimmed
+       * copy", and a page that linked an episode without it after it had been cut got
+       * a 404 and a player that did nothing at all.
+       */
+      published: {
+        isTrimmed: audio.isTrimmed,
+        durationSeconds: audio.durationSeconds,
+        sizeBytes: audio.sizeBytes,
+        version: audio.version,
+      },
       mediaUrl: baseUrl
-        ? mediaUrl(baseUrl, show.slug, show.feed_token, episode.id, episode.filename)
+        ? mediaUrl(baseUrl, show.slug, show.feed_token, episode.id, episode.filename, {
+            cacheBust: audio.version ?? undefined,
+          })
         : null,
-      localMediaUrl: `/media/${tokenPath}/${encodeURIComponent(episode.id)}/${encodeURIComponent(episode.filename)}`,
+      /*
+       * For the admin's own player. It resolves the published copy when it is played
+       * rather than when the page was drawn, so a re-cut between the two does not
+       * leave a player that silently does nothing.
+       */
+      localMediaUrl: `/api/episodes/${encodeURIComponent(episode.id)}/audio`,
       // Null means "this episode uses the show's cover", which is what the feed does
       // for it too. The warning is the same arithmetic on the same numbers as a show
       // cover's, only labelled for an episode — see covers.describeDimensions.

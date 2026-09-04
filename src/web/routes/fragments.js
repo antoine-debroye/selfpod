@@ -66,7 +66,21 @@ export default async function fragmentRoutes(fastify, services) {
       });
     }
 
-    /** The episode page's "What SelfPod heard" card, for the routes that re-render it. */
+    /**
+     * The episode page's Adverts card — what was taken out of this episode, what is
+     * waiting, and the words underneath it. One target, so a decision made there
+     * re-renders the whole story rather than half of it.
+     */
+    async function renderEpisodeAdverts(reply, episode, show) {
+      return reply.view('partials/episode-adverts.eta', {
+        show: presentShow(show),
+        episode: presentEpisode(episode, show),
+        adverts: await services.advertsView.episodeAdverts(episode, show),
+        helpers: fastify.viewHelpers,
+      });
+    }
+
+    /** Just the words, for anything that wants them on their own. */
     async function renderTranscript(reply, episode, show) {
       return reply.view('partials/episode-transcript.eta', {
         show: presentShow(show),
@@ -229,7 +243,7 @@ export default async function fragmentRoutes(fastify, services) {
                 : 'Kept.';
         return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note);
       }
-      if (back) return renderTranscript(reply, episodes.get(back.episode.id), shows.get(show.id));
+      if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id));
       return renderSegments(reply, shows.get(show.id));
     });
 
@@ -248,7 +262,7 @@ export default async function fragmentRoutes(fastify, services) {
       if (!isHtmx(request)) {
         return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), 'Forgotten, and the audio put back.');
       }
-      if (back) return renderTranscript(reply, episodes.get(back.episode.id), shows.get(show.id));
+      if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id));
       return renderSegments(reply, shows.get(show.id));
     });
 
@@ -259,6 +273,11 @@ export default async function fragmentRoutes(fastify, services) {
       if (!episode) throw notFound('That episode does not exist.', 'episode_not_found');
       return { episode, show: shows.getOrThrow(episode.show_id) };
     }
+
+    scoped.get('/ui/episodes/:id/adverts', async (request, reply) => {
+      const { episode, show } = findEpisode(request.params.id);
+      return renderEpisodeAdverts(reply, episode, show);
+    });
 
     scoped.get('/ui/episodes/:id/transcript', async (request, reply) => {
       const { episode, show } = findEpisode(request.params.id);
@@ -278,7 +297,7 @@ export default async function fragmentRoutes(fastify, services) {
       const fail = (message) => {
         if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), message, 'err');
         reply.status(422);
-        return renderTranscript(reply, episode, show);
+        return renderEpisodeAdverts(reply, episode, show);
       };
       if (!range) return fail('Pick a first and a last word, in that order.');
 
@@ -313,7 +332,7 @@ export default async function fragmentRoutes(fastify, services) {
       }
       await services.adPipeline.processShow(show.id);
       if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), note);
-      return renderTranscript(reply, episodes.get(episode.id), shows.get(show.id));
+      return renderEpisodeAdverts(reply, episodes.get(episode.id), shows.get(show.id));
     });
 
     /* ---------------------------------------------------------- subscription */

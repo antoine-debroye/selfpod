@@ -1,3 +1,4 @@
+import { PUBLISH_HOLDS, SEGMENT_SOURCES, TRIM_STATUS } from '../constants.js';
 import { presentSegment, describeComparability } from '../lib/present-segment.js';
 import {
   describeAdvertStage,
@@ -20,7 +21,7 @@ import { normaliseWord } from '../lib/text-normalise.js';
  */
 const LANGUAGE_NAMES = { en: 'English', fr: 'French', de: 'German', es: 'Spanish', it: 'Italian', nl: 'Dutch', pt: 'Portuguese' };
 
-export function createAdvertsView({ adDetect, transcriber, episodes, shows }) {
+export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }) {
   /** 'ready' | 'unknown' (not yet proved) | 'missing' | 'failing' */
   function engineState() {
     return transcriber?.status?.()?.state ?? 'missing';
@@ -186,6 +187,101 @@ export function createAdvertsView({ adDetect, transcriber, episodes, shows }) {
         language: transcript.language,
         languageLabel: LANGUAGE_NAMES[transcript.language] ?? transcript.language,
         regions,
+      };
+    },
+
+    /**
+     * Everything that happened to one episode's adverts, for its own page.
+     *
+     * The show's page answers "what does this show repeat?"; this answers "what was
+     * taken out of *this* episode, and what is still to decide?" — which is the
+     * question somebody has when they click an episode and want to know why it is
+     * eight seconds shorter than the file on their share, or why it is not in the feed
+     * yet. Built from the same catalogue and worded with the same sentences as the
+     * show's page, because two accounts of one decision is how they drift apart.
+     */
+    async episodeAdverts(episode, show) {
+      const listened = await api.episodeTranscript(episode, show);
+      const off = !show.ad_trim_mode || show.ad_trim_mode === 'off';
+      const markers = new Map(adDetect.listMarkers(show.id).map((marker) => [marker.id, marker]));
+      const rows = off ? [] : adDetect.spokenIn(episode.id);
+      const audible = off
+        ? []
+        : db
+            .prepare(
+              `SELECT s.*, o.start_ms, o.end_ms, o.start_frame, o.end_frame
+                 FROM ad_segment_occurrences o
+                 JOIN ad_segments s ON s.id = o.segment_id
+                WHERE o.episode_id = ? AND s.source != '${SEGMENT_SOURCES.TRANSCRIPT}' AND s.text IS NULL
+                ORDER BY o.start_ms`,
+            )
+            .all(episode.id);
+
+      const present = (row) => {
+        const marker = markers.get(String(row.signature).slice('marker:'.length));
+        const isMarker = String(row.signature).startsWith('marker:');
+        return {
+          segmentId: row.id,
+          markerId: marker?.id ?? null,
+          isMarker,
+          status: row.status,
+          atLabel: `${formatClock(row.start_ms)}–${formatClock(row.end_ms)}`,
+          startMs: row.start_ms,
+          endMs: row.end_ms,
+          lengthLabel: formatClock(Math.max(0, row.end_ms - row.start_ms)),
+          text: row.raw_text ?? null,
+          heard: Boolean(row.text),
+          sourceLabel: presentSegment(row, { episodes }).sourceLabel,
+          why: describeVerdict({ ...row, marker_role: marker?.role, marker_inclusive: marker?.inclusive }, { mode: show.ad_trim_mode }),
+          // The stretch itself, with a few seconds either side so the edges can be
+          // judged by ear rather than by reading a timestamp.
+          sampleUrl: `/api/ad-segments/${row.id}/sample.mp3?context=3`,
+          autoApproved: Boolean(row.auto_approved),
+        };
+      };
+
+      const all = [...rows, ...audible].map(present).sort((a, b) => a.startMs - b.startMs);
+      const cut = all.filter((entry) => entry.status === 'approved');
+      const waiting = all.filter((entry) => entry.status === 'candidate');
+      const kept = all.filter((entry) => entry.status === 'rejected');
+
+      const before = episode.duration_seconds ?? null;
+      const after = episode.trimmed_duration_seconds ?? null;
+      const savedSeconds = before !== null && after !== null ? Math.max(0, before - after) : null;
+
+      return {
+        off,
+        listened,
+        cut,
+        waiting,
+        kept,
+        /* Held, and why — an episode kept out of the feed with nothing saying why is
+           the failure this whole app is built against. */
+        hold: episode.publish_hold
+          ? {
+              reason: episode.publish_hold,
+              sentence:
+                episode.publish_hold === PUBLISH_HOLDS.AWAITING_REVIEW
+                  ? 'Not in your feed yet: SelfPod is waiting for you to decide about what it found.'
+                  : episode.publish_hold === PUBLISH_HOLDS.TRIMMING
+                    ? 'Not in your feed for a moment: SelfPod is cutting the approved adverts out of it.'
+                    : listened.state === 'listening'
+                      ? 'Not in your feed yet: SelfPod is still listening to this episode.'
+                      : 'Not in your feed yet: SelfPod has not compared enough episodes of this show to tell what it repeats.',
+            }
+          : null,
+        trim: {
+          status: episode.trim_status ?? null,
+          failed: episode.trim_status === TRIM_STATUS.FAILED,
+          isTrimmed: Boolean(episode.trimmed_filename),
+          beforeSeconds: before,
+          afterSeconds: after,
+          savedSeconds,
+          savedLabel: savedSeconds ? formatClock(savedSeconds * 1000) : null,
+          beforeBytes: episode.file_size_bytes ?? null,
+          afterBytes: episode.trimmed_bytes ?? null,
+        },
+        advertsUrl: `/shows/${encodeURIComponent(show.slug)}/adverts`,
       };
     },
 

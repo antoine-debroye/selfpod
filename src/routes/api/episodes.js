@@ -1,4 +1,5 @@
 import { notFound, unprocessable } from '../../lib/errors.js';
+import { publishedAudio } from '../../lib/published-audio.js';
 
 export default async function episodeRoutes(fastify, { config, episodes, shows, presentEpisode }) {
   fastify.addHook('onRequest', fastify.requireAdminApi);
@@ -14,6 +15,31 @@ export default async function episodeRoutes(fastify, { config, episodes, shows, 
   fastify.get('/episodes/:id', async (request) => {
     const { episode, show } = load(request.params.id);
     return { episode: presentEpisode(episode, show) };
+  });
+
+  /**
+   * The audio this episode publishes right now, for the owner's own preview.
+   *
+   * A redirect rather than a second way to serve media: it resolves the content
+   * version at the moment of playing and hands over to the one route that serves
+   * episode audio, with its containment checks, its byte ranges and its logging.
+   *
+   * It exists because that route *checks* the version — it must, or a podcast app
+   * resuming a download would be handed half of one cut and half of another — and a
+   * page is stale the instant a re-cut lands. The owner pressing play on a page opened
+   * a minute ago got a refusal and a player that did nothing, which is the silent
+   * failure this app is built against. Subscribers still get the strict route; only
+   * the person signed in gets "whatever is current".
+   */
+  fastify.get('/episodes/:id/audio', async (request, reply) => {
+    const { episode, show } = load(request.params.id);
+    const audio = publishedAudio(episode);
+    const url =
+      `/media/${encodeURIComponent(show.slug)}/${encodeURIComponent(show.feed_token)}` +
+      `/${encodeURIComponent(episode.id)}/${encodeURIComponent(episode.filename)}` +
+      (audio.version ? `?v=${encodeURIComponent(audio.version)}` : '');
+    // Temporary and uncached: the answer changes whenever the cut list does.
+    return reply.header('cache-control', 'no-store').redirect(url, 307);
   });
 
   fastify.patch('/episodes/:id', async (request) => {

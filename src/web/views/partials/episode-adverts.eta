@@ -1,0 +1,143 @@
+<%
+  /* What SelfPod took out of this episode, and what is still to decide (spec §19.6).
+     One card and one swap target, so a decision made here re-renders the whole story
+     rather than half of it. The show's Adverts page answers "what does this show
+     repeat?"; this answers "what happened to this episode?" — and both use the same
+     words for the same things, because two accounts of one decision drift. */
+  const ad = it.adverts;
+  const episode = it.episode;
+  const show = it.show;
+  const base = `/ui/episodes/${encodeURIComponent(episode.id)}`;
+  const listened = ad.listened;
+%>
+<section class="form-card" id="episode-adverts"
+         hx-get="<%= base %>/adverts"
+         hx-trigger="sse:transcript-<%= episode.id %> from:body<%= listened.state === 'listening' ? ', load delay:10s' : '' %>"
+         hx-swap="outerHTML">
+  <div class="ftitle">Adverts</div>
+
+  <% if (ad.off) { %>
+    <p class="muted">
+      SelfPod is not looking for adverts in this show, so this episode is published
+      exactly as it arrived. Turn it on under <a href="<%= ad.advertsUrl %>">Adverts</a>
+      on the show's page.
+    </p>
+  <% } else { %>
+
+    <% if (ad.hold) { %>
+      <div class="notice warn ep-ad__hold" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>
+        <div><%= ad.hold.sentence %></div>
+      </div>
+    <% } %>
+
+    <% if (ad.trim.failed) { %>
+      <div class="notice warn" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <div>SelfPod could not cut this episode, so it is published exactly as it arrived
+          — adverts included. The reason is in the container log.</div>
+      </div>
+    <% } %>
+
+    <%
+      /* The headline: what your subscribers get, against what is on your share. Stated
+         as a measurement rather than a promise, because the trimmed length is measured
+         from the file that was written, never computed from what was removed. */
+    %>
+    <div class="ep-ad__summary">
+      <% if (ad.trim.isTrimmed && ad.trim.savedSeconds) { %>
+        <div class="ep-ad__headline">
+          <strong><%= ad.trim.savedLabel %> removed</strong> from what your subscribers download.
+        </div>
+        <dl class="ep-ad__figures">
+          <div><dt>On your share</dt><dd class="mono"><%= it.helpers.formatDuration(ad.trim.beforeSeconds) %> · <%= it.helpers.formatBytes(ad.trim.beforeBytes) %></dd></div>
+          <div><dt>Published</dt><dd class="mono"><%= it.helpers.formatDuration(ad.trim.afterSeconds) %> · <%= it.helpers.formatBytes(ad.trim.afterBytes) %></dd></div>
+          <div><dt>Cuts</dt><dd><%= ad.cut.length %> <%= ad.cut.length === 1 ? 'stretch' : 'stretches' %></dd></div>
+        </dl>
+        <p class="hint">Your own file is untouched. The player above is the published copy — the one subscribers get.</p>
+      <% } else if (ad.cut.length) { %>
+        <div class="ep-ad__headline"><strong><%= ad.cut.length %> <%= ad.cut.length === 1 ? 'stretch is' : 'stretches are' %> approved for removal</strong>, and the cut copy is being made.</div>
+      <% } else if (ad.waiting.length) { %>
+        <div class="ep-ad__headline"><strong>Nothing has been removed yet.</strong> <%= ad.waiting.length %> <%= ad.waiting.length === 1 ? 'stretch is' : 'stretches are' %> waiting for you below.</div>
+      <% } else if (listened.state === 'heard') { %>
+        <div class="ep-ad__headline"><strong>Nothing was removed.</strong> SelfPod listened to <%= listened.scopeLabel %> and heard no sponsor read, and found nothing this episode repeats.</div>
+      <% } else if (listened.state === 'listening') { %>
+        <div class="ep-ad__headline"><strong>Listening to <%= listened.scopeLabel %>…</strong> this card updates on its own when it is done.</div>
+      <% } else if (listened.state === 'not_looked') { %>
+        <div class="ep-ad__headline"><strong>Not looked at yet.</strong> SelfPod reads <%= listened.scopeLabel %> on its next check, newest episodes first.</div>
+      <% } else if (listened.state === 'unsupported') { %>
+        <div class="ep-ad__headline"><strong>SelfPod cannot read this episode.</strong> It reads MP3 only; this one is published exactly as it arrived.</div>
+      <% } else if (listened.state === 'engine_missing') { %>
+        <div class="ep-ad__headline"><strong>The speech recogniser is not available.</strong> Adverts are still found by comparing episodes by sound, but a read the host performs live will get through.</div>
+      <% } else if (listened.state === 'failed') { %>
+        <div class="ep-ad__headline"><strong><%= listened.failureSentence %></strong></div>
+      <% } %>
+    </div>
+
+    <%
+      /* Waiting first: it is the only part of this card that asks anything of the
+         person reading it. */
+    %>
+    <% for (const group of [{ key: 'waiting', rows: ad.waiting, title: 'Waiting for you' }, { key: 'cut', rows: ad.cut, title: 'Removed from this episode' }, { key: 'kept', rows: ad.kept, title: 'Kept in this episode' }]) { %>
+      <% if (group.rows.length) { %>
+        <div class="ep-ad__group">
+          <div class="ds-caption"><%= group.title %></div>
+          <ul class="ep-ad__list">
+            <% for (const entry of group.rows) { %>
+              <li>
+                <div class="ep-ad__main">
+                  <div class="ep-ad__head">
+                    <span class="ep-ad__at mono"><%= entry.atLabel %></span>
+                    <span class="ep-ad__fact"><%= entry.lengthLabel %> long</span>
+                    <span class="ep-ad__fact"><%= entry.heard ? 'heard in the words' : 'found by sound' %></span>
+                    <% if (entry.autoApproved) { %><span class="ep-ad__fact">removed automatically</span><% } %>
+                  </div>
+                  <% if (entry.text) { %>
+                    <p class="ep-ad__words" title="<%= entry.text %>"><% if (entry.isMarker) { %><span class="seg-decided__kind"><%= entry.sourceLabel %>:</span> <% } %>“<%= entry.text.length > 160 ? entry.text.slice(0, 160) + '…' : entry.text %>”</p>
+                  <% } %>
+                  <p class="ep-ad__why"><%= entry.why.sentence %></p>
+                  <audio controls preload="none" src="<%= entry.sampleUrl %>"></audio>
+                </div>
+                <div class="ep-ad__act">
+                  <% if (entry.isMarker) { %>
+                    <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= entry.markerId %>/remove"
+                          hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= entry.markerId %>/remove"
+                          hx-target="#episode-adverts" hx-swap="outerHTML">
+                      <input type="hidden" name="returnTo" value="episode:<%= episode.id %>">
+                      <button class="btn btn-ghost btn-xs" type="submit">Forget it</button>
+                    </form>
+                    <small class="seg-decided__note">and put back everything it cut</small>
+                  <% } else { %>
+                    <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= entry.segmentId %>"
+                          hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= entry.segmentId %>"
+                          hx-target="#episode-adverts" hx-swap="outerHTML" class="ep-ad__decide">
+                      <input type="hidden" name="returnTo" value="episode:<%= episode.id %>">
+                      <% if (group.key === 'waiting') { %>
+                        <button class="btn btn-sm" type="submit" name="status" value="approved">Remove it</button>
+                        <button class="btn btn-ghost btn-sm" type="submit" name="status" value="rejected">Keep it</button>
+                      <% } else if (group.key === 'cut') { %>
+                        <button class="btn btn-ghost btn-xs" type="submit" name="status" value="rejected">Put it back</button>
+                      <% } else { %>
+                        <button class="btn btn-ghost btn-xs" type="submit" name="status" value="approved">Remove it</button>
+                      <% } %>
+                    </form>
+                    <% if (group.key === 'cut' && entry.heard) { %>
+                      <small class="seg-decided__note">and stop cutting these words</small>
+                    <% } %>
+                  <% } %>
+                </div>
+              </li>
+            <% } %>
+          </ul>
+        </div>
+      <% } %>
+    <% } %>
+
+    <p class="hint ep-ad__more">
+      Every decision here applies to the whole show: the same words are cut from, or left
+      in, every other episode that carries them. <a href="<%= ad.advertsUrl %>">All adverts in this show</a>.
+    </p>
+  <% } %>
+
+  <%~ include('./episode-transcript.eta', { transcript: listened, show, episode, helpers: it.helpers, embedded: true }) %>
+</section>
