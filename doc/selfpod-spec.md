@@ -1143,9 +1143,11 @@ in a row of any kind trip a breaker that makes the stage unavailable for six hou
 and whatever is unavailable is not waited for.
 
 **Four things the words say, in order.** First, a *boundary* the owner taught: "the
-programme starts when it says this". Found in an episode, everything on the far side
-of it is cut — the marker's own words are kept — bounded by the listening window;
-not found, nothing is cut and the ledger says so. This is how a pre-roll that is a
+programme starts when it says this", "ends when it has said this", or "the closing
+adverts start with these words". Found in an episode, everything on the far side of
+it is cut — the marker's own words kept for the first two and taken for the third,
+because a closing sponsor tag is the advert rather than what precedes it — bounded by
+the listening window; not found, nothing is cut and the ledger says so. This is how a pre-roll that is a
 different advert every day is removed, and it is the only mechanism here that needs
 no repetition. Second, *reads already decided about*, matched by their words with a
 tolerance for the recogniser's variation: a match attaches to the existing segment,

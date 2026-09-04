@@ -168,7 +168,7 @@ export default async function fragmentRoutes(fastify, services) {
     scoped.post('/ui/shows/:slug/ad-segments/:segmentId', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const status = request.body?.status;
-      if (status !== SEGMENT_STATUS.APPROVED && status !== SEGMENT_STATUS.REJECTED) {
+      if (!['approved', 'rejected', 'programme_starts', 'tail_starts'].includes(status)) {
         return isHtmx(request)
           ? renderSegments(reply, show)
           : redirectBack(request, reply, advertsPath(show.slug), 'A segment is either removed or kept.', 'err');
@@ -199,11 +199,18 @@ export default async function fragmentRoutes(fastify, services) {
         await services.adDetect.reshapeSegment(segment.id, { episodeId: episode.id, ...range });
       }
 
-      if (status === 'programme_starts') {
-        // "The programme starts here", from a card: the words become a boundary and
-        // the intro they belong to is kept.
-        services.adDetect.addMarker({ showId: show.id, role: 'programme_starts', rawText: segment.raw_text ?? '', language: segment.language });
-        services.adDetect.decide(segment.id, STATUS.REJECTED);
+      if (status === 'programme_starts' || status === 'tail_starts') {
+        // From a card: the words become a boundary. "The programme starts here" keeps
+        // the intro they belong to; "cut from these words to the end" takes them too,
+        // because a closing sponsor tag is the advert rather than what precedes it.
+        services.adDetect.addMarker({
+          showId: show.id,
+          role: status === 'tail_starts' ? 'programme_ends' : 'programme_starts',
+          inclusive: status === 'tail_starts',
+          rawText: segment.raw_text ?? '',
+          language: segment.language,
+        });
+        services.adDetect.decide(segment.id, status === 'tail_starts' ? STATUS.APPROVED : STATUS.REJECTED);
       } else {
         services.adDetect.decide(segment.id, status);
       }
@@ -217,7 +224,9 @@ export default async function fragmentRoutes(fastify, services) {
             ? `Removed from ${result.trimmed?.trimmed ?? 0} ${(result.trimmed?.trimmed ?? 0) === 1 ? 'episode' : 'episodes'}.`
             : status === 'programme_starts'
               ? `From now on everything before “${segment.raw_text}” is cut, in every episode where SelfPod hears it.`
-              : 'Kept.';
+              : status === 'tail_starts'
+                ? `From now on everything from “${segment.raw_text}” to the end is cut, in every episode where SelfPod hears it.`
+                : 'Kept.';
         return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note);
       }
       if (back) return renderTranscript(reply, episodes.get(back.episode.id), shows.get(show.id));
@@ -285,12 +294,20 @@ export default async function fragmentRoutes(fastify, services) {
           verdict === 'advert'
             ? `Removed ${fastify.viewHelpers.formatDuration(Math.round(range.startMs / 1000))}–${fastify.viewHelpers.formatDuration(Math.round(range.endMs / 1000))} from this episode. The same words will be cut from later episodes.`
             : 'Kept, and SelfPod will not offer those words again.';
-      } else if (verdict === 'programme_starts' || verdict === 'programme_ends') {
-        services.adDetect.addMarker({ showId: show.id, role: verdict, rawText: range.rawText, language: range.language });
+      } else if (verdict === 'programme_starts' || verdict === 'programme_ends' || verdict === 'tail_starts') {
+        services.adDetect.addMarker({
+          showId: show.id,
+          role: verdict === 'tail_starts' ? 'programme_ends' : verdict,
+          inclusive: verdict === 'tail_starts',
+          rawText: range.rawText,
+          language: range.language,
+        });
         note =
           verdict === 'programme_starts'
             ? `From now on everything before “${range.rawText}” is cut, in every episode where SelfPod hears it.`
-            : `From now on everything after “${range.rawText}” is cut, in every episode where SelfPod hears it.`;
+            : verdict === 'tail_starts'
+              ? `From now on everything from “${range.rawText}” to the end is cut, in every episode where SelfPod hears it.`
+              : `From now on everything after “${range.rawText}” is cut, in every episode where SelfPod hears it.`;
       } else {
         return fail('Say what those words are.');
       }

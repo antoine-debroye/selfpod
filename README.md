@@ -309,6 +309,10 @@ nothing leaves it — and looks for three things in the text:
   starts with — "Vous écoutez RMC" — and press *The programme starts here*. From then
   on everything before those words is cut in every episode where SelfPod hears them,
   whatever it is. That is how a pre-roll that is a different advert every day goes.
+  The end works the same way, twice over: *The programme ends here* keeps the host's
+  sign-off and cuts whatever follows it, and *Cut from these words to the end* takes a
+  closing sponsor tag that is itself the advert — "C'était votre émission avec…" —
+  and everything after it.
 
 **It shows you the words.** Each candidate is the transcript with the cut marked and a
 few seconds either side, the cues that fired, and one sentence saying what SelfPod will

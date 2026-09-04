@@ -211,8 +211,10 @@
         <div class="seg-actions">
           <button class="btn btn-sm" type="submit" name="status" value="approved">Remove this from every episode</button>
           <button class="btn btn-ghost btn-sm" type="submit" name="status" value="rejected">Keep it</button>
-          <% if (found.why && found.why.offerMarker && found.rawText) { %>
+          <% if (found.why && found.why.offerMarker === 'programme_starts' && found.rawText) { %>
             <button class="btn btn-ghost btn-sm" type="submit" name="status" value="programme_starts" title="Cut everything before these words, in every episode">The programme starts here</button>
+          <% } else if (found.why && found.why.offerMarker === 'tail_starts' && found.rawText) { %>
+            <button class="btn btn-ghost btn-sm" type="submit" name="status" value="tail_starts" title="Cut these words and everything after them, in every episode">Cut from these words to the end</button>
           <% } %>
         </div>
       </form>

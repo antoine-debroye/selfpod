@@ -270,3 +270,75 @@ describe('the sample with context', () => {
     assert.ok(lots.rawPayload.length > some.rawPayload.length);
   });
 });
+
+describe('adverts at the end', () => {
+  const GUESTS = ['Arnaud Rousseau', 'Raphaël Glucksmann', 'Manuel Bompard', 'Marine Tondelier'];
+  const closing = (n) =>
+    whisperJson(
+      [
+        { from: 500, to: 16_000, text: PROGRAMME[n % 3].join(' ') },
+        { from: 16_500, to: 19_500, text: ['Allez, rendez-vous demain avec', 'On retrouve tout à l’heure', 'À suivre dans un instant,', 'Merci à tous, et à lundi avec'][n % 4] + ` ${GUESTS[n % 4]} ` + ['à huit heures trente', 'pour le face à face', 'dès la demie', 'sur cette antenne'][n % 4] },
+        { from: 20_000, to: 27_500, text: "C'était votre émission sur RMC avec Banque Populaire, engagée aux côtés de ceux qui entreprennent. Banque Populaire, la réussite est en vous." },
+      ],
+      { language: 'fr' },
+    );
+
+  it('offers to cut a repeated closing tag to the end, and does so from the words on', async () => {
+    const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2), 'episode-3.mp3': closing(3) } });
+    const tag = spoken(show.id).find((row) => /^c etait votre emission/.test(row.text));
+    assert.ok(tag, JSON.stringify(spoken(show.id).map((row) => row.text)));
+    assert.equal(tag.status, SEGMENT_STATUS.CANDIDATE);
+    const page = await server.get(`/shows/${show.slug}/adverts`);
+    assert.match(page.body, /cut from these words to the end, whatever follows them/);
+    assert.match(page.body, /value="tail_starts"/);
+
+    const response = await post(`/ui/shows/${show.slug}/ad-segments/${tag.id}`, { status: 'tail_starts' });
+    assert.equal(response.statusCode, 303);
+    const markers = (await server.get(`/api/shows/${show.id}/ad-markers`)).json().markers;
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0].role, 'programme_ends');
+    assert.equal(markers[0].inclusive, true);
+
+    const boundary = spoken(show.id).find((row) => row.signature === `marker:${markers[0].id}`);
+    assert.ok(boundary, 'no boundary segment');
+    assert.equal(boundary.episode_count, 3);
+    for (const occurrence of boundary.occurrences) {
+      assert.ok(occurrence.start_ms <= 20_000 && occurrence.start_ms >= 19_000, `cut starts at ${occurrence.start_ms}, the tag starts at 20 000`);
+      assert.ok(occurrence.end_ms >= 29_500, `cut ends at ${occurrence.end_ms}, not the end of the episode`);
+    }
+    const first = episodeNamed(show.id, 'episode-1.mp3');
+    assert.equal(server.episodes.get(first.id).trim_status, 'trimmed');
+    const adverts = (await server.get(`/api/episodes/${first.id}/transcript`)).json().adverts;
+    assert.equal(adverts.stage, 'cut_after_marker');
+    assert.match(adverts.sentence, /Cut everything from 0:(19|20) — “C'était votre émission/);
+    assert.match((await server.get(`/shows/${show.slug}/adverts`)).body, /Everything from “C(?:'|&#39;)était votre émission[^”]*” to the end is cut, as you asked/);
+  });
+
+  it('keeps the sign-off and cuts what follows when told the programme ends there', async () => {
+    // A fixed sign-off every day, then a closing advert that differs every day.
+    const signOff = (n) =>
+      whisperJson(
+        [
+          { from: 500, to: 16_000, text: PROGRAMME[n % 3].join(' ') },
+          { from: 16_500, to: 19_500, text: 'Allez, rendez-vous demain à huit heures trente' },
+          { from: 20_000, to: 27_500, text: ['Découvrez la nouvelle Peugeot 208 à partir de 199 euros par mois sans engagement', 'Chez SFR on s’engage à équiper votre ado pour la rentrée avec le pack ado Smart'][n % 2] },
+        ],
+        { language: 'fr' },
+      );
+    const show = await setUp({ canned: { 'episode-1.mp3': signOff(1), 'episode-2.mp3': signOff(2) } });
+    const first = episodeNamed(show.id, 'episode-1.mp3');
+    const words = (await server.get(`/api/episodes/${first.id}/transcript`)).json().transcript.regions[0].words;
+    const from = words.findIndex((word) => word.t === 'Allez,');
+    const to = words.findIndex((word) => word.t === 'trente');
+    assert.ok(from > 0 && to > from, words.map((word) => word.t).join(' '));
+    const response = await post(`/ui/episodes/${first.id}/transcript/teach`, { region: '0', startWord: String(from), endWord: String(to), verdict: 'programme_ends' });
+    assert.equal(response.statusCode, 303);
+    const [marker] = (await server.get(`/api/shows/${show.id}/ad-markers`)).json().markers;
+    assert.equal(marker.inclusive, false);
+    const boundary = spoken(show.id).find((row) => row.signature === `marker:${marker.id}`);
+    assert.equal(boundary.episode_count, 2);
+    for (const occurrence of boundary.occurrences) {
+      assert.ok(occurrence.start_ms >= 19_400, `the sign-off was cut too: starts at ${occurrence.start_ms}`);
+    }
+  });
+});

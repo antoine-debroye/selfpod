@@ -161,10 +161,15 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
   const isMarker = String(segment.signature ?? '').startsWith('marker:');
 
   if (isMarker) {
+    const ends = segment.marker_role === 'programme_ends';
     return {
       verdict: 'will_cut',
       key: 'boundary',
-      sentence: `Everything ${segment.marker_role === 'programme_ends' ? 'after' : 'before'} “${segment.raw_text}” is cut, as you asked.`,
+      sentence: ends
+        ? segment.marker_inclusive
+          ? `Everything from “${segment.raw_text}” to the end is cut, as you asked.`
+          : `Everything after “${segment.raw_text}” is cut, as you asked.`
+        : `Everything before “${segment.raw_text}” is cut, as you asked.`,
       offerMarker: false,
     };
   }
@@ -211,15 +216,24 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
   if (!strong) {
     // Near the start of every episode — at 0:00 in some and behind a pre-roll in
     // others is exactly the shape of a jingle worth teaching as the boundary.
+    // The end first: on a short episode the closing tag also sits within the first
+    // minute and a half, and it is the end that it belongs to.
+    const atEnd = positionLabel === 'At the very end of every episode';
     const starts = occurrences.map((row) => row.start_ms ?? row.startMs ?? 0);
     const nearStart =
-      positionLabel === 'At the very start of every episode' ||
-      (starts.length > 0 && Math.max(...starts) < 90_000);
+      !atEnd &&
+      (positionLabel === 'At the very start of every episode' ||
+        (starts.length > 0 && Math.max(...starts) < 90_000));
+    const offer = nearStart
+      ? '. If this is where the programme starts, say so and SelfPod will cut everything before it, whatever it is'
+      : atEnd
+        ? '. If this is where the adverts start, say so and SelfPod will cut from these words to the end, whatever follows them'
+        : '';
     return {
       verdict: 'asking',
       key: 'repeats_no_cues',
-      sentence: `${capitalise(repetitionPhrase(segment, positionLabel))}, but nothing in them sounds like a sponsor read. That is usually the host's standing intro${nearStart ? '. If this is where the programme starts, say so and SelfPod will cut everything before it, whatever it is' : ''}.`,
-      offerMarker: nearStart,
+      sentence: `${capitalise(repetitionPhrase(segment, positionLabel))}, but nothing in them sounds like a sponsor read. That is usually the host's standing ${atEnd ? 'sign-off' : 'intro'}${offer}.`,
+      offerMarker: nearStart ? 'programme_starts' : atEnd ? 'tail_starts' : false,
     };
   }
   if (segment.hold_reason) {
@@ -302,10 +316,15 @@ export function describeAdvertStage({ episode, show, row, spoken, markers, pendi
   const waiting = spoken.filter((entry) => entry.status === 'candidate');
   const boundary = cut.find((entry) => String(entry.signature).startsWith('marker:'));
   if (boundary) {
-    const at = boundary.start_ms === 0 ? `the ${formatClock(boundary.end_ms)} before` : `everything from ${formatClock(boundary.start_ms)}, after`;
+    const atStart = boundary.start_ms === 0;
+    const sentence = atStart
+      ? `Cut the ${formatClock(boundary.end_ms)} before “${boundary.raw_text}”, as you asked.`
+      : boundary.marker_inclusive
+        ? `Cut everything from ${formatClock(boundary.start_ms)} — “${boundary.raw_text}” and what follows it — as you asked.`
+        : `Cut everything from ${formatClock(boundary.start_ms)}, after “${boundary.raw_text}”, as you asked.`;
     return {
-      stage: 'cut_before_marker',
-      sentence: `Cut ${at} “${boundary.raw_text}”, as you asked.`,
+      stage: atStart ? 'cut_before_marker' : 'cut_after_marker',
+      sentence,
       at: `${formatClock(boundary.start_ms)}–${formatClock(boundary.end_ms)}`,
       segmentId: boundary.id,
     };

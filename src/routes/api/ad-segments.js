@@ -211,12 +211,18 @@ export default async function adSegmentRoutes(fastify, services) {
       const result = await adPipeline.processShow(show.id);
       return { segment: presentSegment(adDetect.listSegments(show.id).find((row) => row.id === segment.id), { episodes }), trimmed: result.trimmed?.trimmed ?? 0 };
     }
-    if (verdict === 'programme_starts' || verdict === 'programme_ends') {
-      const marker = adDetect.addMarker({ showId: show.id, role: verdict, rawText: range.rawText, language: range.language });
+    if (verdict === 'programme_starts' || verdict === 'programme_ends' || verdict === 'tail_starts') {
+      const marker = adDetect.addMarker({
+        showId: show.id,
+        role: verdict === 'tail_starts' ? 'programme_ends' : verdict,
+        inclusive: verdict === 'tail_starts',
+        rawText: range.rawText,
+        language: range.language,
+      });
       const result = await adPipeline.processShow(show.id);
       return { marker: presentMarker(marker), trimmed: result.trimmed?.trimmed ?? 0 };
     }
-    throw badRequest('Say what those words are: an advert, not an advert, or where the programme starts or ends.', 'unknown_verdict');
+    throw badRequest('Say what those words are: an advert, not an advert, where the programme starts or ends, or where the closing adverts begin.', 'unknown_verdict');
   });
 
   fastify.post('/shows/:id/ad-detect', { preHandler: [fastify.rateLimit(DETECT_LIMIT)] }, async (request) => {

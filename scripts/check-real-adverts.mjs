@@ -10,6 +10,7 @@
  * teach is heard where they say it is.
  *
  *     node scripts/check-real-adverts.mjs <feed-url> [--episodes 4] [--marker "Vous écoutez RMC"]
+ *         [--tail-marker "C'était votre émission"]
  *         [--head 300] [--tail 240] [--whisper /opt/homebrew/bin/whisper-cli]
  *         [--model ~/models/ggml-base-q5_1.bin] [--keep DIR]
  *
@@ -49,6 +50,7 @@ const tailMs = Number(option('tail', 240)) * 1000;
 const binary = option('whisper', process.env.WHISPER_CLI ?? 'whisper-cli');
 const model = option('model', process.env.WHISPER_MODEL);
 const marker = option('marker', null);
+const tailMarker = option('tail-marker', null);
 const keep = option('keep', null);
 if (!model) {
   console.error('Say where the model is: --model path/to/ggml-base-q5_1.bin (or WHISPER_MODEL).');
@@ -166,6 +168,22 @@ if (marker) {
     const window = episode.windows.find((candidate) => hit.startMs >= candidate.fromMs && hit.startMs <= candidate.toMs);
     const cutEnd = window ? snapToDip(hit.startMs, window.envelope, { fromMs: window.fromMs, direction: 'before' }) : hit.startMs;
     console.log(`   ${episode.id}: heard at ${clock(hit.startMs)}–${clock(hit.endMs)} (${hit.errors} ${hit.errors === 1 ? 'error' : 'errors'}) → cut 0:00.0–${clock(cutEnd)}${cutEnd < 2000 ? ' (nothing before it)' : ''}`);
+  }
+}
+
+if (tailMarker) {
+  console.log(`\n== Closing tag: "${tailMarker}" (cut from these words to the end)`);
+  const phrase = normaliseText(tailMarker);
+  for (const episode of episodes) {
+    const last = episode.windows[episode.windows.length - 1];
+    const first = episode.tokens.findIndex((token) => token.window === episode.windows.length - 1);
+    const hit = first < 0 ? null : locatePhrase(episode.tokens.slice(first), phrase);
+    if (!hit) {
+      console.log(`   ${episode.id}: NOT HEARD in the closing window`);
+      continue;
+    }
+    const cutStart = snapToDip(hit.startMs, last.envelope, { fromMs: last.fromMs, direction: 'after' });
+    console.log(`   ${episode.id}: heard at ${clock(hit.startMs)}–${clock(hit.endMs)} (${hit.errors} ${hit.errors === 1 ? 'error' : 'errors'}) → cut ${clock(cutStart)}–${clock(episode.durationMs)} (${((episode.durationMs - cutStart) / 1000).toFixed(1)} s)`);
   }
 }
 
