@@ -55,7 +55,7 @@ export function createAdvertsView({ adDetect, transcriber, episodes, shows }) {
         if (presented.isMarker) {
           const marker = markers.get(String(row.signature).slice('marker:'.length));
           presented.markerId = marker?.id ?? null;
-          presented.why = describeVerdict({ ...row, marker_role: marker?.role }, { mode: show.ad_trim_mode });
+          presented.why = describeVerdict({ ...row, marker_role: marker?.role, marker_inclusive: marker?.inclusive }, { mode: show.ad_trim_mode });
         }
         return presented;
       });
@@ -146,7 +146,7 @@ export function createAdvertsView({ adDetect, transcriber, episodes, shows }) {
             atLabel: `${formatClock(row.start_ms)}–${formatClock(row.end_ms)}`,
             startWord: inRegion[0].index,
             endWord: inRegion[inRegion.length - 1].index,
-            why: describeVerdict({ ...row, marker_role: marker?.role }, { mode: show.ad_trim_mode }),
+            why: describeVerdict({ ...row, marker_role: marker?.role, marker_inclusive: marker?.inclusive }, { mode: show.ad_trim_mode }),
             autoApproved: Boolean(row.auto_approved),
           });
         }
@@ -211,13 +211,17 @@ export function createAdvertsView({ adDetect, transcriber, episodes, shows }) {
     advertsFor(episode, show) {
       if (!episode || !show) return null;
       const row = transcriber?.rowFor?.(episode.id) ?? null;
-      const spoken = adDetect.spokenIn(episode.id);
+      const markers = adDetect.listMarkers(show.id);
+      const spoken = adDetect.spokenIn(episode.id).map((entry) => {
+        const marker = markers.find((candidate) => entry.signature === `marker:${candidate.id}`);
+        return marker ? { ...entry, marker_role: marker.role, marker_inclusive: marker.inclusive } : entry;
+      });
       return describeAdvertStage({
         episode,
         show,
         row,
         spoken,
-        markers: adDetect.listMarkers(show.id),
+        markers,
         pending: engineState() === 'ready' && Boolean(episode.publish_hold) && Boolean(transcriber?.needsTranscript?.(episode, show)),
         engineMissing: engineState() === 'missing' || engineState() === 'failing',
         listenLabel: describeListenScope(show),

@@ -100,9 +100,10 @@
               <% } %>
               <% if (region.key !== 'head') { %>
                 <button class="btn btn-ghost btn-sm" type="submit" name="verdict" value="programme_ends" title="Everything after these words is cut, in every episode where SelfPod hears them">The programme ends here</button>
+                <button class="btn btn-ghost btn-sm" type="submit" name="verdict" value="tail_starts" title="These words and everything after them are cut, in every episode where SelfPod hears them">Cut from these words to the end</button>
               <% } %>
             </div>
-            <div class="hint">A boundary keeps the words you pick and cuts everything on the far side of them — the way to remove a pre-roll that is a different advert every day.</div>
+            <div class="hint">A boundary is heard again in every later episode. “Starts here” and “ends here” keep the words you pick and cut everything on the far side of them — the way to remove a pre-roll that is a different advert every day. “Cut from these words to the end” takes the words too, for a closing sponsor tag that is itself the advert.</div>
           </form>
         </details>
       </details>
