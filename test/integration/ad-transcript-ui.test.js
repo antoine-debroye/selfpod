@@ -168,7 +168,10 @@ describe('what SelfPod heard, on the episode page', () => {
 
     const again = await server.get(`/shows/${show.slug}/episodes/${first.id}`);
     assert.match(again.body, /tx__w--approved/, 'the taught words are not struck through');
-    assert.match(again.body, /Cut 0:1\d–0:20/);
+    // The cut itself is listed in the Adverts card above the words.
+    assert.match(again.body, /Removed from this episode/);
+    assert.match(again.body, /ep-ad__at mono">0:1\d–0:20/);
+    assert.match(again.body, /removed<\/strong> from what your subscribers download/);
   });
 
   it('turns chosen words into a boundary, and shows the boundary on the review page', async () => {
@@ -431,5 +434,118 @@ describe('one read, one row', () => {
     assert.ok(ids.includes('kept-tag'), 'a rejected read was folded into an approved one');
     assert.ok(ids.includes('cut-tag'));
     assert.ok(ids.includes('jingle'), 'the jingle was swallowed by the tag it follows');
+  });
+});
+
+describe('the Adverts card on an episode page', () => {
+  const READS = {
+    'episode-1.mp3': opening(READ, 1),
+    'episode-2.mp3': opening(READ_AGAIN, 2),
+  };
+
+  it('plays the copy subscribers get, rather than a URL the media route refuses', async () => {
+    // The version in the URL is checked, and its absence is itself the claim "the
+    // untrimmed one" — so a page linking a trimmed episode without it got a 404 and
+    // a player that silently did nothing.
+    const show = await setUp({ canned: READS });
+    const [read] = spoken(show.id);
+    await post(`/ui/shows/${show.slug}/ad-segments/${read.id}`, { status: 'approved' });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    assert.ok(server.episodes.get(episode.id).trimmed_filename, 'nothing was trimmed to test with');
+
+    const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
+    const src = page.body.match(/class="file-facts__player" controls preload="none" src="([^"]+)"/)[1];
+    const hop = await server.get(src);
+    assert.equal(hop.statusCode, 307, 'the preview does not resolve the published copy');
+    const played = await server.get(hop.headers.location.replace(/&amp;/g, '&'));
+    assert.equal(played.statusCode, 200, 'the audio preview does not play');
+    assert.equal(played.headers['content-type'], 'audio/mpeg');
+    // And it is the shorter copy, not the file on the share.
+    assert.ok(played.rawPayload.length < server.episodes.get(episode.id).file_size_bytes);
+    assert.match(page.body, /the published copy, with the adverts cut out/);
+
+    /*
+     * The point of the hop. A page drawn now goes stale the moment the cut list
+     * changes: the URL it printed is refused, deliberately, because a podcast app
+     * resuming a download must never be handed half of one cut and half of another.
+     * The owner pressing play on that page should still hear something.
+     */
+    const stale = hop.headers.location;
+    server.adDetect.decide(read.id, SEGMENT_STATUS.REJECTED);
+    await server.adPipeline.processShow(show.id);
+    assert.equal(server.episodes.get(episode.id).trimmed_filename, null, 'the audio was not put back');
+
+    assert.equal((await server.get(stale)).statusCode, 404, 'a stale version is no longer refused');
+    const now = await server.get(src);
+    assert.equal(now.statusCode, 307, 'the preview stopped resolving');
+    assert.notEqual(now.headers.location, stale);
+    assert.equal((await server.get(now.headers.location)).statusCode, 200, 'the preview died after the audio changed');
+  });
+
+  it('says what was taken out of this episode, how much shorter it is, and why', async () => {
+    const show = await setUp({ canned: READS });
+    const [read] = spoken(show.id);
+    await post(`/ui/shows/${show.slug}/ad-segments/${read.id}`, { status: 'approved' });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+
+    const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
+    assert.match(page.body, /removed<\/strong> from what your subscribers download/);
+    assert.match(page.body, /On your share/);
+    assert.match(page.body, /Published/);
+    assert.match(page.body, /Removed from this episode/);
+    // The identity of the cut, its reason, and a way to hear it — the same wording the
+    // show's page uses for the same decision.
+    assert.match(page.body, /heard in the words/);
+    assert.match(page.body, /brought to you by/);
+    assert.match(page.body, /sample\.mp3\?context=3/);
+    assert.match(page.body, /Put it back/);
+    assert.match(page.body, /and stop cutting these words/);
+    assert.match(page.body, /All adverts in this show/);
+  });
+
+  it('says why an episode is being held out of the feed', async () => {
+    const show = await setUp({ canned: READS });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    assert.ok(server.episodes.get(episode.id).publish_hold, 'nothing is held to test with');
+    const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
+    assert.match(page.body, /Not in your feed yet: SelfPod is waiting for you to decide/);
+    assert.match(page.body, /Waiting for you/);
+    // And it can be decided from here, without going to the show's page.
+    assert.match(page.body, /name="status" value="approved"/);
+    assert.match(page.body, /returnTo" value="episode:/);
+  });
+
+  it('decides from the episode page and re-renders the whole card', async () => {
+    const show = await setUp({ canned: READS });
+    const [read] = spoken(show.id);
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    const response = await post(
+      `/ui/shows/${show.slug}/ad-segments/${read.id}`,
+      { status: 'approved', returnTo: `episode:${episode.id}` },
+      htmx,
+    );
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /id="episode-adverts"/, 'the card did not come back');
+    assert.match(response.body, /Removed from this episode/);
+    assert.match(response.body, /What SelfPod heard/, 'the words came back without the card');
+    assert.equal(server.adDetect.getSegment(read.id).status, SEGMENT_STATUS.APPROVED);
+  });
+
+  it('tells an episode nothing was found from one nobody has looked at', async () => {
+    const show = await setUp({ canned: { 'episode-1.mp3': opening('Just the programme today, nothing else to report at all', 1), 'episode-2.mp3': opening('A different programme entirely, with different words in it', 2) } });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
+    assert.match(page.body, /Nothing was removed\./);
+    assert.match(page.body, /heard no sponsor read/);
+    assert.doesNotMatch(page.body, /Not looked at yet/);
+  });
+
+  it('says the show is not using the feature rather than showing an empty card', async () => {
+    const show = await setUp({ canned: READS });
+    server.db.prepare("UPDATE shows SET ad_trim_mode = 'off' WHERE id = ?").run(show.id);
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
+    assert.match(page.body, /SelfPod is not looking for adverts in this show/);
+    assert.doesNotMatch(page.body, /Waiting for you/);
   });
 });

@@ -2207,3 +2207,40 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   text-underline-offset: 2px; font: inherit;
 }
 .btn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+/* The Adverts card on an episode page: what was taken out of this one episode,
+   what is still to decide, and the words underneath it. Same vocabulary as the
+   show's review page — a second set of names for one idea is how the two drift. */
+.ep-ad__hold { margin-bottom: 14px; }
+.ep-ad__summary { margin-bottom: 18px; }
+.ep-ad__headline { font-size: 14px; line-height: 1.5; }
+.ep-ad__figures { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 10px 0 6px; }
+.ep-ad__figures div { min-width: 0; }
+.ep-ad__figures dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.ep-ad__figures dd { margin: 2px 0 0; font-size: 13.5px; }
+.ep-ad__group { margin-bottom: 18px; }
+.ep-ad__group .ds-caption { margin-bottom: 6px; }
+.ep-ad__list { list-style: none; }
+.ep-ad__list li {
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 12px 0; border-top: 1px solid var(--line);
+}
+.ep-ad__main { flex: 1; min-width: 0; }
+.ep-ad__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 9px; }
+.ep-ad__at { font-size: 12.5px; color: var(--ink); font-weight: 600; }
+.ep-ad__fact { font-size: 12.5px; color: var(--ink-soft); }
+.ep-ad__fact::before { content: '·'; margin-right: 9px; color: var(--line-2); }
+.ep-ad__words { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.ep-ad__why { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
+.ep-ad__main audio { width: 100%; margin-top: 8px; }
+.ep-ad__act { flex: none; width: 150px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ep-ad__act form { margin: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ep-ad__more { margin-top: 4px; }
+/* The words are evidence for the card above them, not a card of their own. */
+.ep-ad__heard { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+@media (max-width: 640px) {
+  .ep-ad__list li { flex-wrap: wrap; gap: 8px; }
+  .ep-ad__main { flex: 1 1 100%; }
+  .ep-ad__act { width: auto; flex-direction: row; align-items: baseline; gap: 8px; }
+}

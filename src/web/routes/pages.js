@@ -465,7 +465,7 @@ export default async function pageRoutes(fastify, services) {
         ],
         show: presentShow(show),
         episode: presentEpisode(episode, show),
-        transcript: await services.advertsView.episodeTranscript(episode, show),
+        adverts: await services.advertsView.episodeAdverts(episode, show),
         episodeLog: services.stats.list({ episodeId: episode.id, limit: 15 }),
         episodeLogTotal: services.stats.count({ episodeId: episode.id }),
       }),

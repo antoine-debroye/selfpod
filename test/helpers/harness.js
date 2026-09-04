@@ -128,7 +128,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false, whis
   const trimmer = createTrimmer({
     config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
-  const advertsView = createAdvertsView({ adDetect, transcriber, episodes, shows });
+  const advertsView = createAdvertsView({ db, adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
     db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
   });

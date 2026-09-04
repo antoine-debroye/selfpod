@@ -9,7 +9,22 @@ changes what your listeners see, it says so.
 
 ## 1.8.1 — 2026-09-04
 
+### Added
+
+- **An episode says what was taken out of it.** Clicking an episode now shows how much
+  shorter the published copy is than the file on your share, every stretch that was
+  removed with the words and the reason for each, anything still waiting for you — which
+  you can decide right there — and why the episode is being held out of the feed if it
+  is. The words SelfPod heard sit underneath as the evidence, and every decision uses
+  the same sentences as the show's Adverts page.
+
 ### Fixed
+
+- **The audio preview on a trimmed episode played nothing at all.** The page linked the
+  original file while the media route serves the published copy and checks its content
+  version, so the player got a refusal and did nothing — silently. The preview now
+  resolves the published copy when you press play rather than when the page was drawn,
+  so it also survives the audio being cut again while the page is open.
 
 - **“Already decided” was unreadable.** The row was a single line of flex carrying six
   things, so the position label was squeezed to no width at all and printed straight
