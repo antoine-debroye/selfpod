@@ -22,6 +22,8 @@ import { resolvePublishHold } from '../lib/publish-hold.js';
 export function createAdPipeline({ db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber = null }) {
   let chain = Promise.resolve();
   let active = null;
+  /** Whether a pass over every show is already under way. See `processAll`. */
+  let sweeping = false;
 
   /** Queues work behind everything already queued. Failures do not break the chain. */
   function serialise(label, work) {
@@ -282,13 +284,38 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     },
 
     /** Every show that has the feature on. Used at boot and on the scheduler's tick. */
+    /**
+     * Every show that has the feature on. Used at boot and on the scheduler's tick.
+     *
+     * One pass at a time, and a tick that arrives while the last one is still going is
+     * dropped rather than queued. The scheduler fires this every few minutes without
+     * waiting for it, which was harmless while the work was arithmetic on frame
+     * headers and is not harmless now: reading the words takes minutes an episode, a
+     * pass over a real library takes hours, and every tick was adding another whole
+     * pass to a chain that runs one thing at a time. The backlog grew for as long as
+     * the app was up, and the show at the end of it waited behind every repeat of the
+     * shows in front.
+     *
+     * Dropping is right rather than merely cheap: a pass has no per-tick state to
+     * catch up on. It looks at what is owed when it runs, so the next one to start
+     * does everything the skipped ones would have.
+     */
     async processAll() {
-      const rows = db
-        .prepare("SELECT id FROM shows WHERE ad_trim_mode IS NOT NULL AND ad_trim_mode != 'off'")
-        .all();
-      const results = [];
-      for (const row of rows) results.push(await api.processShow(row.id));
-      return results;
+      if (sweeping) {
+        logger?.debug('skipped a pass over every show: the last one has not finished');
+        return { skipped: 'already_running' };
+      }
+      sweeping = true;
+      try {
+        const rows = db
+          .prepare("SELECT id FROM shows WHERE ad_trim_mode IS NOT NULL AND ad_trim_mode != 'off'")
+          .all();
+        const results = [];
+        for (const row of rows) results.push(await api.processShow(row.id));
+        return results;
+      } finally {
+        sweeping = false;
+      }
     },
 
     /**
@@ -308,7 +335,12 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
 
     /** What the chain is doing, for the status endpoint. */
     status() {
-      return { busy: active !== null, doing: active, listening: transcriber?.status().active ?? null };
+      return {
+        busy: active !== null,
+        doing: active,
+        sweeping,
+        listening: transcriber?.status().active ?? null,
+      };
     },
   };
 

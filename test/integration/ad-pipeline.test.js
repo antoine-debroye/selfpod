@@ -490,3 +490,30 @@ describe('what the trimmed audio actually is', () => {
     );
   });
 });
+
+describe('a pass over every show', () => {
+  it('drops a tick that arrives while the last pass is still running', async () => {
+    /*
+     * The scheduler fires this every few minutes and does not wait for it. That was
+     * harmless while the work was arithmetic on frame headers; reading the words takes
+     * minutes an episode, so every tick was adding another whole pass to a chain that
+     * runs one thing at a time, and the backlog grew for as long as the app was up.
+     */
+    const show = await makeShow({ mode: 'review', count: 1 });
+    assert.equal(server.adPipeline.status().sweeping, false);
+
+    const first = server.adPipeline.processAll();
+    // Queued while the first is still going: dropped, not stacked behind it.
+    const second = await server.adPipeline.processAll();
+    assert.deepEqual(second, { skipped: 'already_running' });
+
+    const done = await first;
+    assert.ok(Array.isArray(done), 'the first pass did not run');
+    assert.equal(server.adPipeline.status().sweeping, false, 'the flag outlived the pass');
+
+    // And the next one runs normally, doing whatever the dropped one would have.
+    const third = await server.adPipeline.processAll();
+    assert.ok(Array.isArray(third));
+    void show;
+  });
+});

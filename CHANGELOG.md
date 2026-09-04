@@ -23,6 +23,15 @@ changes what your listeners see, it says so.
   again. It works on the words already stored, and now runs before anything else.
 - A segment whose episodes have all gone claimed an episode count as well: "not in an
   episode you have any more · 8 episodes".
+- **Advert passes piled up.** The scheduler starts a pass over every show every few
+  minutes and does not wait for it to finish. That was harmless while the work was
+  arithmetic on frame headers, and stopped being harmless once reading the words took
+  minutes an episode: a pass over a real library takes hours, and every tick was adding
+  another whole pass to a chain that runs one thing at a time. The backlog grew for as
+  long as the app was up, and a show at the end of it waited behind every repeat of the
+  shows in front — on one instance, one episode read in an hour with thirty-one owed. A
+  tick arriving while a pass is still running is now dropped, which loses nothing: a
+  pass looks at what is owed when it starts.
 
 ## 1.8.3 — 2026-09-04
 
