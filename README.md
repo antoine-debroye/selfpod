@@ -338,7 +338,10 @@ episode is long. Reading speech is the expensive part: a small NAS runs the defa
 minute or two of work behind the publish hold; a desktop is many times faster. The
 page quotes the measured speed once it has heard something. `WHISPER_MODEL=small`
 selects the larger model that ships alongside — roughly twice the work, and markedly
-better in French.
+better in French. A CPU without AVX2 (most Celerons) gets a build that is around ten
+times slower again: keep the default model and short windows there, and if it still
+cannot keep up SelfPod says so in the health banner and publishes episodes as they
+arrive rather than holding them.
 
 **Your files are never touched.** The trimmed copy lives with SelfPod's other
 derived data and can be deleted at any time; the originals in your show folders are
