@@ -332,3 +332,43 @@ describe('a pre-roll first found by ear', () => {
     assert.equal(preRoll.hold_reason, null, 'the theme-tune guard closed again on the next run');
   });
 });
+
+describe('changing the speech recogniser', () => {
+  it('reads every episode again, rather than leaving them on the old model', async () => {
+    /*
+     * The reason for pointing WHISPER_MODEL at a better model is that it hears words
+     * the smaller one gets wrong. Keeping the transcripts the old one made would have
+     * meant the owner made the change, waited, and watched the same words stay wrong,
+     * with nothing anywhere saying why.
+     */
+    const whisper = cannedWhisper({ 'episode-1.mp3': opening(READ, 1), 'episode-2.mp3': opening(READ_AGAIN, 2) });
+    const { show, dir } = await makeShow({ mode: 'review', whisper, minEpisodes: 2 });
+    await addEpisode(dir, 1);
+    await addEpisode(dir, 2);
+    await server.adPipeline.processShow(show.id);
+
+    const before = server.db.prepare('SELECT episode_id, model FROM episode_transcripts').all();
+    assert.equal(before.length, 2);
+    assert.ok(before.every((row) => /base/.test(row.model)), JSON.stringify(before));
+    const fresh = server.shows.get(show.id);
+    assert.ok(
+      server.episodes.listByShow(show.id).every((episode) => !server.transcriber.needsTranscript(episode, fresh)),
+      'an episode was owed a transcript before the model changed',
+    );
+
+    // The same instance, pointed at the other model the image ships.
+    const listening = await createTestServer({
+      whisper: cannedWhisper({}),
+      env: { DATA_DIR: server.config.dataDir, WHISPER_MODEL: 'small' },
+    });
+    try {
+      const show2 = listening.shows.getBySlug('spoken');
+      const owed = listening.episodes
+        .listByShow(show2.id)
+        .filter((episode) => listening.transcriber.needsTranscript(episode, show2));
+      assert.equal(owed.length, 2, 'changing the model left the old transcripts in place');
+    } finally {
+      await listening.cleanup();
+    }
+  });
+});
