@@ -71,6 +71,8 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     ? join(DEFAULT_DIR, `ggml-${config.whisperModel.replace(/^ggml-|\.bin$/g, '')}${/-q\d/.test(config.whisperModel) ? '' : '-q5_1'}.bin`)
     : (config.whisperModel ?? join(DEFAULT_DIR, DEFAULT_MODEL));
   const threads = config.whisperThreads ?? 2;
+  /** What goes in the `model` column, and what a stored transcript is judged against. */
+  const modelName = modelPath.slice(modelPath.lastIndexOf('/') + 1);
 
   /** 'unknown' | 'ready' | 'missing' | 'failing' */
   let state = 'unknown';
@@ -207,6 +209,14 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     const fingerprint = selectFingerprint.get(episode.id);
     if (fingerprint && fingerprint.sha256 !== row.sha256) return true;
     if (row.algorithm_version !== TRANSCRIPT_VERSION) return true;
+    /*
+     * A different recogniser hears different words, which is the entire reason for
+     * changing one: `small` catches a jingle over music that `base` drops. Without
+     * this, pointing WHISPER_MODEL at a better model changed nothing about any episode
+     * already read — the owner would have made the change, waited, and watched the
+     * same words stay wrong, with nothing anywhere saying why.
+     */
+    if (row.status === 'ok' && row.model !== modelName) return true;
     const scopeName = scope.mode === 'whole' ? 'whole' : 'edges';
     if (row.status === 'ok' && (row.scope !== scopeName || row.head_ms !== scope.headMs || row.tail_ms !== scope.tailMs)) {
       // A whole-episode transcript already covers any pair of edges.
@@ -319,7 +329,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     const base = {
       episode_id: episode.id,
       algorithm_version: TRANSCRIPT_VERSION,
-      model: modelPath.slice(modelPath.lastIndexOf('/') + 1),
+      model: modelName,
       scope: scopeName,
       head_ms: scope.headMs,
       tail_ms: scope.tailMs,

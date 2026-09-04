@@ -7,6 +7,19 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.3 — 2026-09-04
+
+### Fixed
+
+- **Changing `WHISPER_MODEL` did nothing to episodes already read.** The reason for
+  pointing it at a larger model is that the larger one hears words the smaller one gets
+  wrong — `small` catches a jingle over music that `base` drops. But a stored transcript
+  recorded which model made it and nothing ever compared that, so every episode kept the
+  words the old model heard. The owner would have made the change, waited, and watched
+  the same words stay wrong. An episode whose transcript was made by a different model
+  is now read again, newest first, as a backfill that never holds anything already
+  published out of the feed.
+
 ## 1.8.2 — 2026-09-04
 
 ### Fixed
