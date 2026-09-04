@@ -475,7 +475,17 @@ describe('the Adverts card on an episode page', () => {
     await server.adPipeline.processShow(show.id);
     assert.equal(server.episodes.get(episode.id).trimmed_filename, null, 'the audio was not put back');
 
-    assert.equal((await server.get(stale)).statusCode, 404, 'a stale version is no longer refused');
+    /*
+     * The old address still plays for a client starting the file from the beginning —
+     * an enclosure URL lives in a subscriber's app long after a re-cut, and killing it
+     * is what left podcast apps showing "Download Failed" over an error body. A client
+     * resuming into the middle of the cut it was holding is still refused, because
+     * that is the one that could join two different cuts together.
+     */
+    assert.equal((await server.get(stale)).statusCode, 200, 'an old address stopped playing');
+    const resuming = await server.request({ method: 'GET', url: stale, headers: { range: 'bytes=5000-' } });
+    assert.equal(resuming.statusCode, 404, 'a client resuming into an older cut was not refused');
+
     const now = await server.get(src);
     assert.equal(now.statusCode, 307, 'the preview stopped resolving');
     assert.notEqual(now.headers.location, stale);

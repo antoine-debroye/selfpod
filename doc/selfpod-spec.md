@@ -1097,8 +1097,23 @@ route that resolves from the episode id alone serves whatever is current
 whichever version was asked for, which is the hazard again with a longer
 URL. The absence of a version is a claim in its own right — "the untrimmed
 one" — which is what lets an episode that has never been cut keep the URL
-it has always had, and still be refused once it has been. A refusal is the
-right answer here: a download that fails is one the app retries.
+it has always had.
+
+**Amended in 1.8.2.** Refusing every other version was too blunt, and it
+made the feed brittle in a way nothing downstream could recover from. An
+enclosure address lives in a subscriber's app for as long as that app keeps
+the episode, and a re-cut mints a new one — so every decision changed, edge
+moved or pair of variants folded together killed every address already out
+there, and the app showed a failed download over a hundred-byte error body
+with no way back.
+
+What the check is really about is narrower than the version: only a client
+*assembling a file out of parts* can join two cuts into an episode that
+never existed. A client with no range, or one asking from byte zero,
+receives a whole consistent file whichever cut it gets. So an address from
+an earlier cut is served when the request starts at the beginning, and
+refused when it resumes from the middle or asks for a suffix. The refusal
+is kept exactly where the hazard is, and nowhere else.
 
 A trim that fails publishes the original and says so loudly. An advert
 that survives explains itself the moment it is heard; an episode that

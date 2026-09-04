@@ -7,6 +7,33 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.2 — 2026-09-04
+
+### Fixed
+
+- **An episode already in a podcast app stopped downloading after it was re-cut.** An
+  enclosure address carries the content version of the audio it names, and the media
+  route refuses any other — it must, or an app resuming a half-finished download would
+  be handed part of one cut and part of another and would join them into an episode
+  that never existed. But an enclosure address lives in a subscriber's app for as long
+  as that app keeps the episode, so every re-cut — a decision changed, an edge moved,
+  two spellings of one read folded together — killed every address already out there.
+  The app showed "Download Failed" over a hundred-byte error body, and retrying could
+  not help, because the address it held could never work again.
+
+  An address from an earlier cut now plays, provided the client is starting the file
+  from the beginning: it receives a whole, consistent episode whichever cut it gets.
+  Only a client assembling a file out of parts — resuming from the middle, or asking
+  for the last few bytes — is still refused, because that is the one that could join
+  two cuts together.
+- **A missing cut copy no longer takes the whole feed down.** `/data/.trimmed` holds
+  nothing that cannot be made again, which is what makes it safe to clear — and made
+  clearing it answer 404 for every episode until each had been cut afresh. The episode
+  you actually have is served instead, adverts and all, with a warning saying so and
+  with nothing allowed to cache it. This is the trade §19.5 already makes for a trim
+  that fails: an advert that survives explains itself the moment it is heard, and an
+  episode that silently never appears does not.
+
 ## 1.8.1 — 2026-09-04
 
 ### Added
