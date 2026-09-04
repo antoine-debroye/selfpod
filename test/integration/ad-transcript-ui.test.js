@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { SEGMENT_STATUS } from '../../src/constants.js';
+import { normaliseText } from '../../src/lib/text-normalise.js';
 import { createTestServer } from '../helpers/http.js';
 import { FRAME_MS, segment, stitch } from '../helpers/mp3.js';
 import { cannedWhisper, whisperJson } from '../helpers/whisper.js';
@@ -92,7 +93,9 @@ describe('the review card for words', () => {
     assert.equal(typeof read.heardClearly, 'boolean');
     const page = await server.get(`/shows/${show.slug}/adverts`);
     assert.match(page.body, /Removed automatically/);
-    assert.match(page.body, /Put it back and stop cutting these words/);
+    // The button says the small thing; the line under it says what else it undoes.
+    assert.match(page.body, /<button[^>]*>Put it back<\/button>/);
+    assert.match(page.body, /and stop cutting these words/);
   });
 
   it('moves the edges to the words you chose, and the words follow', async () => {
@@ -196,7 +199,8 @@ describe('what SelfPod heard, on the episode page', () => {
     const page = await server.get(`/shows/${show.slug}/adverts`);
     assert.match(page.body, /The boundary you set/);
     assert.match(page.body, /Everything before “Vous écoutez RMC” is cut, as you asked/);
-    assert.match(page.body, /Forget this boundary/);
+    assert.match(page.body, /<button[^>]*>Forget it<\/button>/);
+    assert.match(page.body, /and put back everything it cut/);
     const episodePage = await server.get(`/shows/${show.slug}/episodes/${first.id}`);
     assert.match(episodePage.body, /tx__w--approved/);
     assert.match(episodePage.body, /Everything before/);
@@ -340,5 +344,92 @@ describe('adverts at the end', () => {
     for (const occurrence of boundary.occurrences) {
       assert.ok(occurrence.start_ms >= 19_400, `the sign-off was cut too: starts at ${occurrence.start_ms}`);
     }
+  });
+});
+
+describe('one read, one row', () => {
+  /**
+   * The same closing tag as the owner's live page had it: four ways the recogniser
+   * wrote one read, each of which had become a decision of its own.
+   */
+  const VARIANTS = [
+    "C'était votre émission sur RMC avec Bank Populaire, engagé au côté de ce qui entreprenne. Bank Populaire, la réussite est en vous.",
+    "au côté de ce qui entreprenne. Bank Populaire, la réussite est en vous. Vous vous écoutez? RMC.",
+    "votre émission sur RMC avec Banque Populaire, engagée au côté de ce qui entreprenne. Banque Populaire, la réussite est en vous.",
+    "C'était votre émission sur RMC avec Bank Populaire, engagé au côté de ce qui entreprenne. Et voilà pour aujourd'hui.",
+  ];
+  /* The episodes all say the same tag — the variants are how it was written down on
+     earlier days, not different things that were said. */
+  const closing = (n) =>
+    whisperJson(
+      [
+        { from: 500, to: 16_000, text: PROGRAMME[n % 3].join(' ') },
+        { from: 19_000, to: 27_500, text: VARIANTS[0] },
+      ],
+      { language: 'fr' },
+    );
+
+  it('folds the ways one read was written down into a single decision', async () => {
+    const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
+    // Seed the state the owner arrived at: four approved segments, one per variant.
+    const ids = VARIANTS.map((text, i) => {
+      const id = `dup-${i}`;
+      server.db
+        .prepare(
+          `INSERT INTO ad_segments (id, show_id, signature, source, status, auto_approved, duration_ms,
+             episode_count, occurrence_count, first_seen_at, decided_at, created_at, updated_at, text, raw_text, language)
+           VALUES (?, ?, ?, 'transcript', 'approved', 0, 8500, 1, 1, ?, ?, ?, ?, ?, ?, 'fr')`,
+        )
+        .run(id, show.id, `tx:dup${i}`, `2026-08-2${i}T09:00:00.000Z`, `2026-08-2${i}T09:00:00.000Z`, `2026-08-2${i}T09:00:00.000Z`, `2026-08-2${i}T09:00:00.000Z`, normaliseText(text).join(' '), text);
+      return id;
+    });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    for (const [i, id] of ids.entries()) {
+      server.db
+        .prepare(
+          `INSERT INTO ad_segment_occurrences (segment_id, episode_id, start_frame, end_frame, start_ms, end_ms)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, episode.id, 700 + i, 1000 + i, 19_000 + i, 27_500 + i);
+    }
+    // Four seeded, plus the one the run before them already found for itself.
+    assert.equal(spoken(show.id).length, 5, 'the duplicates were not seeded');
+
+    await server.adPipeline.processShow(show.id);
+
+    const after = spoken(show.id).filter((row) => !row.signature.startsWith('marker:'));
+    assert.equal(after.length, 1, `still ${after.length} rows: ${JSON.stringify(after.map((row) => row.raw_text))}`);
+    const [kept] = after;
+    // The oldest wins the words, because those are the ones that were decided about.
+    assert.equal(kept.id, 'dup-0');
+    assert.equal(kept.status, SEGMENT_STATUS.APPROVED);
+    assert.match(kept.raw_text, /^C'était votre émission sur RMC avec Bank Populaire/);
+    // And it goes on doing its job: it is heard in both episodes and both are cut.
+    assert.equal(kept.episode_count, 2, JSON.stringify(kept.occurrences));
+    assert.ok(server.adDetect.cutListFor(episode.id).length >= 1);
+    assert.equal(server.episodes.get(episode.id).trim_status, 'trimmed');
+  });
+
+  it('never folds two reads the owner decided differently, nor a phrase they share', async () => {
+    const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
+    const seed = (id, text, status) =>
+      server.db
+        .prepare(
+          `INSERT INTO ad_segments (id, show_id, signature, source, status, auto_approved, duration_ms,
+             episode_count, occurrence_count, first_seen_at, decided_at, created_at, updated_at, text, raw_text, language)
+           VALUES (?, ?, ?, 'transcript', ?, 0, 8500, 1, 1, '2026-08-20T09:00:00.000Z', '2026-08-20T09:00:00.000Z',
+             '2026-08-20T09:00:00.000Z', '2026-08-20T09:00:00.000Z', ?, ?, 'fr')`,
+        )
+        .run(id, show.id, `tx:${id}`, status, normaliseText(text).join(' '), text);
+    seed('kept-tag', VARIANTS[0], SEGMENT_STATUS.REJECTED);
+    seed('cut-tag', VARIANTS[2], SEGMENT_STATUS.APPROVED);
+    seed('jingle', "Vous vous écoutez? RMC. RMC, Apolline Matin. C'est tous les jours Demanche.", SEGMENT_STATUS.APPROVED);
+
+    await server.adPipeline.processShow(show.id);
+
+    const ids = spoken(show.id).map((row) => row.id);
+    assert.ok(ids.includes('kept-tag'), 'a rejected read was folded into an approved one');
+    assert.ok(ids.includes('cut-tag'));
+    assert.ok(ids.includes('jingle'), 'the jingle was swallowed by the tag it follows');
   });
 });

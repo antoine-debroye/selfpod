@@ -65,7 +65,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
           ? segment.episode_count > 1
             ? `The same words in ${segment.episode_count} episodes`
             : 'Sounds like a sponsor read, heard once'
-          : `Repeats across ${segment.episode_count} episodes`,
+          : `Repeats across ${segment.episode_count} ${segment.episode_count === 1 ? 'episode' : 'episodes'}`,
     durationSeconds,
     durationLabel: formatDuration(segment.duration_ms ?? 0),
     episodeCount: segment.episode_count,

@@ -22,7 +22,7 @@ import { findRepeatedAudio } from '../lib/repeated-audio.js';
 import { safeToApproveAutomatically } from '../lib/auto-approve.js';
 import { newId } from '../lib/tokens.js';
 import { normaliseText, normaliseTokens } from '../lib/text-normalise.js';
-import { MIN_SIMILARITY, findRepeatedText, locatePhrase, signatureOf, tokenSimilarity } from '../lib/repeated-text.js';
+import { MIN_SIMILARITY, findRepeatedText, locatePhrase, sameSpokenRead, signatureOf, tokenSimilarity } from '../lib/repeated-text.js';
 import { scoreAdvertCues } from '../lib/advert-cues.js';
 import { snapToDip } from '../lib/snap-edges.js';
 import { meanConfidence, rawTextOf } from '../lib/transcript.js';
@@ -471,9 +471,71 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     const phrase = text.split(' ');
     for (const row of selectTranscriptSegments.all(showId)) {
       if (!row.text || row.signature.startsWith('marker:') || row.id === except) continue;
-      if (tokenSimilarity(phrase, row.text.split(' ')) >= MIN_SIMILARITY) return row;
+      const known = row.text.split(' ');
+      // Whole against whole first, then the shorter aligned inside the longer: the
+      // second is what recognises the same read heard a word early or a word late.
+      if (tokenSimilarity(phrase, known) >= MIN_SIMILARITY) return row;
+      if (sameSpokenRead(phrase, known)) return row;
     }
     return null;
+  }
+
+  /**
+   * Folds variants of one read back into a single segment.
+   *
+   * The catalogue is keyed on a hash of the words, so every way the recogniser wrote
+   * the same closing tag became a row of its own: the owner was asked about one read
+   * four times, and their page listed four decisions that were all the same decision.
+   * Same words, same decision, one row — and never across a disagreement, because two
+   * segments the owner decided differently are two decisions whatever they say.
+   *
+   * The oldest wins the words, since those are the ones that were decided about.
+   */
+  function mergeDuplicateReads(showId) {
+    const rows = selectTranscriptSegments
+      .all(showId)
+      .filter((row) => row.text && !row.signature.startsWith('marker:'))
+      .sort((a, b) => String(a.first_seen_at).localeCompare(String(b.first_seen_at)));
+    const gone = new Set();
+    let merged = 0;
+
+    for (const keep of rows) {
+      if (gone.has(keep.id)) continue;
+      const moved = new Set();
+      for (const drop of rows) {
+        if (drop.id === keep.id || gone.has(drop.id)) continue;
+        if (drop.status !== keep.status) continue;
+        if (!sameSpokenRead(keep.text, drop.text)) continue;
+
+        // Read the occurrences before the delete: they go with it, by cascade.
+        const carried = selectOccurrencesOf.all(drop.id);
+        const insert = db.prepare(
+          `INSERT OR IGNORE INTO ad_segment_occurrences
+             (segment_id, episode_id, start_frame, end_frame, start_ms, end_ms)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        db.transaction(() => {
+          db.prepare('DELETE FROM ad_segments WHERE id = ?').run(drop.id);
+          for (const row of carried) {
+            insert.run(keep.id, row.episode_id, row.start_frame, row.end_frame, row.start_ms, row.end_ms);
+            moved.add(row.episode_id);
+          }
+        })();
+        gone.add(drop.id);
+        merged += 1;
+      }
+      if (!moved.size) continue;
+
+      const all = selectOccurrencesOf.all(keep.id);
+      db.prepare(
+        'UPDATE ad_segments SET episode_count = ?, occurrence_count = ?, updated_at = ? WHERE id = ?',
+      ).run(new Set(all.map((row) => row.episode_id)).size, all.length, nowIso(), keep.id);
+      // The cut list of every episode that gained a range has changed, and the audio
+      // it already has was cut from a list that no longer exists.
+      if (keep.status === SEGMENT_STATUS.APPROVED) markForRecut(keep.id, moved);
+    }
+    if (merged) logger?.info({ showId, merged }, 'folded variants of the same read together');
+    return merged;
   }
 
   function cuesFor(entry, tokenStart, tokenEnd) {
@@ -726,10 +788,14 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const heard = await hearShow(show);
       if (!heard.length) return { segments: 0, skipped: 'nothing_heard' };
 
+      // Before anything is matched: one read, one row, however many ways it has been
+      // written down.
+      const foldedIn = mergeDuplicateReads(show.id);
+
       const durations = Object.fromEntries(heard.map((entry) => [entry.episode.id, entry.durationMs]));
       const byId = new Map(heard.map((entry) => [entry.episode.id, entry]));
       const claimed = new Map();
-      const counts = { segments: 0, newSegments: 0, markerCuts: 0, rememberedCuts: 0, heard: heard.length };
+      const counts = { segments: 0, newSegments: 0, markerCuts: 0, rememberedCuts: 0, heard: heard.length, foldedIn };
       const auto = show.ad_trim_mode === 'auto';
 
       /* 0. Boundaries the owner taught. */
@@ -787,8 +853,18 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         if (stored.isNew) counts.newSegments += 1;
       }
 
-      /* 1. Reads already decided about — or already offered — matched by their words. */
-      for (const known of selectTranscriptSegments.all(show.id)) {
+      /*
+       * 1. Reads already decided about — or already offered — matched by their words.
+       *
+       * Decided first, undecided after. Both claim the ground they are heard on, and
+       * whichever gets there first owns it: with a candidate going first, a question
+       * the owner had already answered elsewhere took the words away from their own
+       * decision, and the answer stopped being applied.
+       */
+      const knownFirst = selectTranscriptSegments
+        .all(show.id)
+        .sort((a, b) => (a.status === SEGMENT_STATUS.CANDIDATE ? 1 : 0) - (b.status === SEGMENT_STATUS.CANDIDATE ? 1 : 0));
+      for (const known of knownFirst) {
         if (!known.text || known.signature.startsWith('marker:')) continue;
         const phrase = known.text.split(' ');
         const existing = selectOccurrencesOf.all(known.id);

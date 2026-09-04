@@ -226,41 +226,72 @@
       <div class="ftitle">Already decided</div>
       <ul class="seg-decided">
         <% for (const found of decided) { %>
+          <%
+            /* What this row is *about* leads: the words for anything SelfPod heard,
+               and for audio it never had words for, where and how long it is. The
+               decision, the facts and the reason stack under it rather than sitting in
+               five columns across it — five columns is how the position label came to
+               be squeezed to nothing and printed over the word beside it. */
+            const removed = found.status === 'approved';
+            /* The occurrences it actually has, not the count it was recorded with:
+               deleting an episode takes its occurrences with it, and a segment left
+               pointing at none of them used to describe its position as "Varies"
+               rather than saying it is no longer in anything. It is kept all the same
+               — a segment is how SelfPod remembers a decision, and the same audio or
+               the same words can arrive again tomorrow. */
+            const gone = !found.occurrences.length;
+            const facts = [found.durationLabel];
+            if (gone) facts.push('not in an episode you have any more');
+            else if (found.positionLabel) facts.push(found.positionLabel.charAt(0).toLowerCase() + found.positionLabel.slice(1));
+            /* One count, not two: for audio SelfPod never had words for, the source
+               label already says how many episodes it repeats across. */
+            if (found.rawText && found.episodeCount) facts.push(`${found.episodeCount} ${found.episodeCount === 1 ? 'episode' : 'episodes'}`);
+            else if (!found.rawText && !gone) facts.push(found.sourceLabel.charAt(0).toLowerCase() + found.sourceLabel.slice(1));
+          %>
           <li>
-            <span class="seg-decided__len mono"><%= found.durationLabel %></span>
-            <span class="seg-decided__where"><%= found.positionLabel ?? 'Varies' %></span>
-            <span class="seg-decided__state seg-decided__state--<%= found.status === 'approved' ? 'cut' : 'kept' %>">
-              <%= found.status === 'approved' ? 'Removed' : 'Kept' %><%
-              %><% if (found.autoApproved) { %> automatically<% } %>
-            </span>
-            <% if (found.rawText) { %>
-              <span class="seg-decided__words muted" title="<%= found.rawText %>"><%= found.isMarker ? found.sourceLabel + ': ' : '' %>“<%= found.rawText.length > 90 ? found.rawText.slice(0, 90) + '…' : found.rawText %>”</span>
-            <% } %>
-            <% if (found.why) { %>
-              <span class="seg-decided__why muted"><%= found.why.sentence %></span>
-            <% } %>
+            <div class="seg-decided__main">
+              <div class="seg-decided__head">
+                <span class="seg-decided__state seg-decided__state--<%= removed ? 'cut' : 'kept' %>"><%= removed ? 'Removed' : 'Kept' %><% if (found.autoApproved) { %> automatically<% } %></span>
+                <% for (const fact of facts) { %><span class="seg-decided__fact"><%= fact %></span><% } %>
+              </div>
+              <% if (found.rawText) { %>
+                <p class="seg-decided__words" title="<%= found.rawText %>"><% if (found.isMarker) { %><span class="seg-decided__kind"><%= found.sourceLabel %>:</span> <% } %>“<%= found.rawText.length > 150 ? found.rawText.slice(0, 150) + '…' : found.rawText %>”</p>
+              <% } %>
+              <% if (found.why) { %>
+                <p class="seg-decided__why"><%= found.why.sentence %></p>
+              <% } %>
+            </div>
             <%
               /* The reverse of whatever was decided, so changing your mind is one click
                  rather than a hunt for where the decision lives. A boundary is undone
-                 by forgetting it, which puts back everything it cut. */
-              const reverse = found.status === 'approved' ? 'rejected' : 'approved';
+                 by forgetting it, which puts back everything it cut.
+
+                 The button says the small thing and the line under it says the large
+                 one: putting a remembered read back also stops SelfPod cutting those
+                 words out of every later episode, which is not something to discover
+                 from a flash message afterwards. */
+              const reverse = removed ? 'rejected' : 'approved';
             %>
-            <% if (found.isMarker) { %>
-              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
-                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
-                    hx-target="#ad-segments" hx-swap="outerHTML">
-                <button class="btn btn-ghost btn-xs" type="submit">Forget this boundary</button>
-              </form>
-            <% } else { %>
-              <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-                    hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
-                    hx-target="#ad-segments" hx-swap="outerHTML">
-                <input type="hidden" name="status" value="<%= reverse %>">
-                <button class="btn btn-ghost btn-xs" type="submit">
-                  <%= found.status === 'approved' ? (found.spoken ? 'Put it back and stop cutting these words' : 'Put it back') : 'Remove it' %>
-                </button>
-              </form>
-            <% } %>
+            <div class="seg-decided__act">
+              <% if (found.isMarker) { %>
+                <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
+                      hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-markers/<%= found.markerId %>/remove"
+                      hx-target="#ad-segments" hx-swap="outerHTML">
+                  <button class="btn btn-ghost btn-xs" type="submit">Forget it</button>
+                </form>
+                <small class="seg-decided__note">and put back everything it cut</small>
+              <% } else { %>
+                <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                      hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-segments/<%= found.id %>"
+                      hx-target="#ad-segments" hx-swap="outerHTML">
+                  <input type="hidden" name="status" value="<%= reverse %>">
+                  <button class="btn btn-ghost btn-xs" type="submit"><%= removed ? 'Put it back' : 'Remove it' %></button>
+                </form>
+                <% if (removed && found.spoken) { %>
+                  <small class="seg-decided__note">and stop cutting these words</small>
+                <% } %>
+              <% } %>
+            </div>
           </li>
         <% } %>
       </ul>
