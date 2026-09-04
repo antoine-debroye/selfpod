@@ -64,6 +64,10 @@
   </div>
 </div>
 
+<% if (it.transcript) { %>
+  <%~ include('../partials/episode-transcript.eta', { transcript: it.transcript, show, episode, helpers: it.helpers }) %>
+<% } %>
+
 <%~ include('../partials/episode-form', { episode, show, helpers: it.helpers }) %>
 
 <%

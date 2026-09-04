@@ -84,9 +84,25 @@ export default async function eventRoutes(fastify, { events, logger }) {
       if (payload.scope === 'all') send('scan-finished-all', 'done');
     };
 
+    /* Listening for words, the same shape: a strip while it runs, a trigger when done. */
+    const onTranscribeProgress = (payload) => {
+      const label = transcribeLabel(payload);
+      send(`transcribe-progress-${payload.showId}`, transcribeHtml(payload.showId, payload.slug, label));
+    };
+    const onTranscribeFinished = (payload) => {
+      send(`transcribe-progress-${payload.showId}`, '');
+      send(`transcribe-finished-${payload.showId}`, 'done');
+    };
+    const onTranscriptReady = (payload) => {
+      send(`transcript-${payload.episodeId}`, 'ready');
+    };
+
     events.on(EVENTS.SCAN_STARTED, onScanStarted);
     events.on(EVENTS.SCAN_PROGRESS, onScanProgress);
     events.on(EVENTS.SCAN_FINISHED, onScanFinished);
+    events.on(EVENTS.TRANSCRIBE_PROGRESS, onTranscribeProgress);
+    events.on(EVENTS.TRANSCRIBE_FINISHED, onTranscribeFinished);
+    events.on(EVENTS.TRANSCRIPT_READY, onTranscriptReady);
 
     const heartbeat = setInterval(() => {
       if (reply.raw.writableEnded) return;
@@ -102,6 +118,9 @@ export default async function eventRoutes(fastify, { events, logger }) {
       events.off(EVENTS.SCAN_STARTED, onScanStarted);
       events.off(EVENTS.SCAN_PROGRESS, onScanProgress);
       events.off(EVENTS.SCAN_FINISHED, onScanFinished);
+      events.off(EVENTS.TRANSCRIBE_PROGRESS, onTranscribeProgress);
+      events.off(EVENTS.TRANSCRIBE_FINISHED, onTranscribeFinished);
+      events.off(EVENTS.TRANSCRIPT_READY, onTranscriptReady);
       logger?.debug('SSE client disconnected');
     };
 
@@ -117,6 +136,30 @@ function progressHtml(scope, label) {
   return `<div class="scan-progress" id="scan-progress" role="status" aria-live="polite" sse-swap="scan-progress-${escapeHtml(
     String(scope),
   )}" hx-swap="outerHTML"><span class="scan-progress__dot" aria-hidden="true"></span><span class="scan-progress__status">${escapeHtml(
+    label,
+  )}</span><span class="scan-progress__bar" aria-hidden="true"><i></i></span></div>`;
+}
+
+/** "Listened to 12 of 50, newest first — about 40 s each so far, roughly 25 minutes to go." */
+export function transcribeLabel({ done = 0, total = 0, rate = null, title = null }) {
+  const parts = [`Listened to ${done} of ${total}, newest first`];
+  if (rate && done > 0) {
+    // `rate` is audio seconds per second of work; an episode's windows are about nine
+    // minutes, so the cost of one is estimated from that.
+    const secondsEach = Math.round(540 / rate);
+    const remaining = Math.max(0, total - done) * secondsEach;
+    parts.push(`about ${secondsEach} s each so far`);
+    if (remaining > 90) parts.push(`roughly ${Math.round(remaining / 60)} minutes to go`);
+  } else if (title) {
+    parts.push(`hearing “${title}”`);
+  }
+  return `${parts.join(' — ')}…`;
+}
+
+function transcribeHtml(showId, slug, label) {
+  return `<div class="scan-progress transcribe-progress" id="transcribe-progress" role="status" aria-live="polite" sse-swap="transcribe-progress-${escapeHtml(
+    String(showId),
+  )}" hx-get="/ui/shows/${encodeURIComponent(String(slug ?? ''))}/transcribe-status" hx-trigger="load delay:5s" hx-swap="outerHTML"><span class="scan-progress__dot" aria-hidden="true"></span><span class="scan-progress__status">${escapeHtml(
     label,
   )}</span><span class="scan-progress__bar" aria-hidden="true"><i></i></span></div>`;
 }

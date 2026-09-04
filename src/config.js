@@ -128,6 +128,7 @@ export function loadConfig(env = process.env) {
     episodeArtDir: join(dataDir, DIRECTORY_NAMES.EPISODE_ART),
     fingerprintDir: join(dataDir, DIRECTORY_NAMES.FINGERPRINTS),
     trimmedDir: join(dataDir, DIRECTORY_NAMES.TRIMMED),
+    transcriptDir: join(dataDir, DIRECTORY_NAMES.TRANSCRIPTS),
     databasePath: join(dataDir, FILE_NAMES.DATABASE),
     configPath: join(dataDir, FILE_NAMES.CONFIG),
 
@@ -198,6 +199,16 @@ export function loadConfig(env = process.env) {
         name: 'REMOTE_POLL_INTERVAL_SECONDS',
       }),
     ),
+
+    /**
+     * The speech recogniser (spec §19.6). The image ships whisper.cpp under
+     * /app/whisper and picks the binary for the CPU at boot; these exist so an operator
+     * can point at a different build or a larger model mounted under /data. Unset on a
+     * dev machine means "none", which the transcriber reports rather than assumes.
+     */
+    whisperBinary: env.WHISPER_CLI?.trim() || null,
+    whisperModel: env.WHISPER_MODEL?.trim() || null,
+    whisperThreads: collect(readInt(env.WHISPER_THREADS, 2, { min: 1, max: 16, name: 'WHISPER_THREADS' })),
 
     /** Set by the entrypoint when its own /data read+write test failed. */
     entrypointSelfTestFailed: env.SELFPOD_DATA_SELFTEST === 'failed',

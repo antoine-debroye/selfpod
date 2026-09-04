@@ -58,6 +58,22 @@
           <%= entry.lookAgain.charAt(0).toLowerCase() + entry.lookAgain.slice(1) %>
         </div>
       <% } %>
+      <% if (entry.adverts) { %>
+        <%
+          /* What the words said about this one (spec §19.6): heard, cut, waiting, or
+             could not be read. One line, the same sentence the episode page uses. */
+        %>
+        <div class="ledger-why <%= entry.adverts.stage === 'heard_waiting' || entry.adverts.stage === 'failed' ? 'ledger-why--warn' : '' %>">
+          <%= entry.adverts.sentence %>
+          <% if (entry.adverts.stage === 'heard_waiting') { %>
+            <a href="/shows/<%= encodeURIComponent(it.show.slug) %>/adverts">Decide</a>
+          <% } else if (entry.adverts.reversible && entry.adverts.segmentId) { %>
+            <button class="btn-link" type="submit" name="status" value="rejected"
+                    formaction="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/ad-segments/<%= entry.adverts.segmentId %>"
+                    formmethod="post">Put it back</button>
+          <% } %>
+        </div>
+      <% } %>
       <% if (entry.lookedAgain) { %>
         <div class="ledger-why">
           <% if (entry.lookedAgain === 'differs') { %>

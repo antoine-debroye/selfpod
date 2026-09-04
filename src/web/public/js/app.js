@@ -227,6 +227,97 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-ledger-select]'), refreshLedgerSelection);
   });
 
+  /* ------------------------------------------------------ transcript edges */
+
+  /**
+   * Tap-to-set edges on a run of transcript words.
+   *
+   * The two selects under the words are the real edges and post with or without this
+   * running. What script adds is the obvious gesture: tap the first word to remove,
+   * tap the last, and the selects and the tint follow. Delegated from the document,
+   * because the cards are swapped by htmx after every decision.
+   */
+  function txScope(node) {
+    var form = node.closest('form') || node.closest('details') || document;
+    return {
+      form: form,
+      words: node.closest('[data-tx-edit]') || form.querySelector('[data-tx-edit]'),
+      start: form.querySelector('[data-tx-start]'),
+      end: form.querySelector('[data-tx-end]'),
+      range: form.querySelector('[data-tx-range]'),
+    };
+  }
+
+  function txPaint(scope) {
+    if (!scope.words || !scope.start || !scope.end) return;
+    var from = Number(scope.start.value);
+    var to = Number(scope.end.value);
+    if (from > to) { var swap = from; from = to; to = swap; }
+    var chosen = [];
+    Array.prototype.forEach.call(scope.words.querySelectorAll('[data-tx-word]'), function (word) {
+      var index = Number(word.getAttribute('data-tx-word'));
+      var inside = index >= from && index <= to;
+      word.classList.toggle('tx__w--cut', inside);
+      word.classList.toggle('tx__w--start', index === from);
+      word.classList.toggle('tx__w--end', index === to);
+      word.setAttribute('aria-pressed', inside ? 'true' : 'false');
+      if (inside) chosen.push(word.textContent);
+    });
+    if (scope.range) {
+      var text = chosen.join(' ');
+      if (text.length > 120) text = text.slice(0, 58) + ' … ' + text.slice(-58);
+      scope.range.textContent = chosen.length ? 'Removing ' + chosen.length + ' words: “' + text + '”' : '';
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    var word = event.target.closest('[data-tx-word]');
+    if (word) {
+      var scope = txScope(word);
+      if (!scope.start || !scope.end) return;
+      var index = Number(word.getAttribute('data-tx-word'));
+      var from = Number(scope.start.value);
+      var to = Number(scope.end.value);
+      // First tap below the current start moves the start; anything else moves the
+      // end — two taps, first word then last, is the whole gesture.
+      if (scope.words.getAttribute('data-tx-armed') !== '1' || index < from) {
+        scope.start.value = String(index);
+        scope.end.value = String(Math.max(index, to));
+        scope.words.setAttribute('data-tx-armed', '1');
+      } else {
+        scope.end.value = String(index);
+        scope.words.removeAttribute('data-tx-armed');
+      }
+      txPaint(scope);
+      return;
+    }
+    var reset = event.target.closest('[data-tx-reset]');
+    if (reset) {
+      var scopeReset = txScope(reset);
+      if (scopeReset.words && scopeReset.start && scopeReset.end) {
+        scopeReset.start.value = scopeReset.words.getAttribute('data-tx-default-start') || scopeReset.start.value;
+        scopeReset.end.value = scopeReset.words.getAttribute('data-tx-default-end') || scopeReset.end.value;
+        scopeReset.words.removeAttribute('data-tx-armed');
+        txPaint(scopeReset);
+      }
+    }
+  });
+
+  document.addEventListener('change', function (event) {
+    var select = event.target.closest('[data-tx-start], [data-tx-end]');
+    if (select) txPaint(txScope(select));
+  });
+
+  // A swap brings in new words; the range sentence describes what is on screen now.
+  function txPaintAll() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-tx-edit]'), function (words) {
+      var scope = txScope(words);
+      if (scope.start && scope.end && scope.start.value !== '' && words.hasAttribute('data-tx-default-start') && words.getAttribute('data-tx-default-start') !== '') txPaint(scope);
+    });
+  }
+  document.addEventListener('htmx:afterSettle', txPaintAll);
+  txPaintAll();
+
   /* --------------------------------------------------------------- toggles */
 
   document.addEventListener('change', function (event) {

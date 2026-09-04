@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  CUE_OFFER_ALONE,
   FINGERPRINTABLE_EXTENSIONS,
   FINGERPRINT_VERSION,
   HOLD_REASONS,
@@ -20,6 +21,11 @@ import { frameProfile } from '../lib/mp3-frames.js';
 import { findRepeatedAudio } from '../lib/repeated-audio.js';
 import { safeToApproveAutomatically } from '../lib/auto-approve.js';
 import { newId } from '../lib/tokens.js';
+import { normaliseText, normaliseTokens } from '../lib/text-normalise.js';
+import { MIN_SIMILARITY, findRepeatedText, locatePhrase, signatureOf, tokenSimilarity } from '../lib/repeated-text.js';
+import { scoreAdvertCues } from '../lib/advert-cues.js';
+import { snapToDip } from '../lib/snap-edges.js';
+import { meanConfidence, rawTextOf } from '../lib/transcript.js';
 
 /**
  * Cataloguing the audio a show repeats (spec §19).
@@ -39,7 +45,7 @@ import { newId } from '../lib/tokens.js';
  * which is fast enough to be uninteresting: an hour-long episode fingerprints in well
  * under a second.
  */
-export function createAdDetect({ db, config, events, logger, shows, episodes }) {
+export function createAdDetect({ db, config, events, logger, shows, episodes, transcriber = null }) {
   const selectFingerprint = db.prepare('SELECT * FROM episode_fingerprints WHERE episode_id = ?');
   const upsertFingerprint = db.prepare(
     `INSERT INTO episode_fingerprints
@@ -211,12 +217,26 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     const now = nowIso();
 
     if (existing) {
+      // A candidate that automatic mode now finds safe — it reached the threshold, or
+      // its words turned up — is approved here. A decided segment is never touched.
+      const promote =
+        existing.status === SEGMENT_STATUS.CANDIDATE &&
+        segment.status === SEGMENT_STATUS.APPROVED &&
+        segment.autoApproved;
       db.prepare(
         `UPDATE ad_segments SET
             episode_count = @episode_count,
             occurrence_count = @occurrence_count,
             duration_ms = @duration_ms,
             hold_reason = CASE WHEN status = 'candidate' THEN @hold_reason ELSE hold_reason END,
+            status = CASE WHEN @promote THEN 'approved' ELSE status END,
+            auto_approved = CASE WHEN @promote THEN 1 ELSE auto_approved END,
+            decided_at = CASE WHEN @promote THEN @now ELSE decided_at END,
+            text = COALESCE(@text, text),
+            raw_text = COALESCE(@raw_text, raw_text),
+            cue_score = COALESCE(@cue_score, cue_score),
+            cues = COALESCE(@cues, cues),
+            language = COALESCE(@language, language),
             updated_at = @now
           WHERE id = @id`,
       ).run({
@@ -224,27 +244,34 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
         episode_count: segment.episodeCount,
         occurrence_count: segment.occurrenceCount,
         duration_ms: segment.durationMs,
-        hold_reason: segment.holdReason ?? null,
+        hold_reason: promote ? null : segment.holdReason ?? null,
+        promote: promote ? 1 : 0,
+        text: segment.text ?? null,
+        raw_text: segment.rawText ?? null,
+        cue_score: segment.cueScore ?? null,
+        cues: segment.cues ? JSON.stringify(segment.cues) : null,
+        language: segment.language ?? null,
         now,
       });
       const moved = replaceOccurrences(existing.id, segment.occurrences);
       // Only what actually moved, so a tick that finds the same thing again rewrites
       // no audio, and an episode whose cut list genuinely grew is not left behind.
-      if (existing.status === SEGMENT_STATUS.APPROVED && moved.size) markForRecut(existing.id, moved);
-      return { ...selectSegment.get(existing.id), isNew: false };
+      if (promote) markForRecut(existing.id);
+      else if (existing.status === SEGMENT_STATUS.APPROVED && moved.size) markForRecut(existing.id, moved);
+      return { ...selectSegment.get(existing.id), isNew: false, promoted: promote };
     }
 
     const id = newId();
-    const exemplar = segment.occurrences[0] ?? null;
+    const exemplar = segment.exemplar ?? segment.occurrences[0] ?? null;
     db.prepare(
       `INSERT INTO ad_segments
          (id, show_id, signature, source, status, auto_approved, hold_reason, duration_ms,
           episode_count, occurrence_count, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms,
-          first_seen_at, decided_at, created_at, updated_at)
+          first_seen_at, decided_at, created_at, updated_at, text, raw_text, cue_score, cues, language)
        VALUES
          (@id, @show_id, @signature, @source, @status, @auto_approved, @hold_reason, @duration_ms,
           @episode_count, @occurrence_count, @exemplar_episode_id, @exemplar_start_ms, @exemplar_end_ms,
-          @now, @decided_at, @now, @now)`,
+          @now, @decided_at, @now, @now, @text, @raw_text, @cue_score, @cues, @language)`,
     ).run({
       id,
       show_id: showId,
@@ -259,8 +286,13 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       exemplar_episode_id: exemplar?.episodeId ?? null,
       exemplar_start_ms: exemplar?.startMs ?? null,
       exemplar_end_ms: exemplar?.endMs ?? null,
-      decided_at: segment.status === SEGMENT_STATUS.APPROVED ? nowIso() : null,
+      decided_at: segment.status === SEGMENT_STATUS.APPROVED || segment.status === SEGMENT_STATUS.REJECTED ? nowIso() : null,
       now,
+      text: segment.text ?? null,
+      raw_text: segment.rawText ?? null,
+      cue_score: segment.cueScore ?? null,
+      cues: segment.cues ? JSON.stringify(segment.cues) : null,
+      language: segment.language ?? null,
     });
     replaceOccurrences(id, segment.occurrences);
     if ((segment.status ?? SEGMENT_STATUS.CANDIDATE) === SEGMENT_STATUS.APPROVED) markForRecut(id);
@@ -314,6 +346,193 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
     });
     apply();
     return changed;
+  }
+
+  /* ---- the words ------------------------------------------------------------ */
+
+  const selectTranscriptSegments = db.prepare(
+    `SELECT * FROM ad_segments WHERE show_id = ? AND source = '${SEGMENT_SOURCES.TRANSCRIPT}'`,
+  );
+  const selectOccurrencesOf = db.prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ?');
+  const selectCorpusOccurrencesIn = db.prepare(
+    `SELECT o.*, s.id AS segment_id, s.status, s.text
+       FROM ad_segment_occurrences o
+       JOIN ad_segments s ON s.id = o.segment_id
+      WHERE o.episode_id = ? AND s.source = '${SEGMENT_SOURCES.CORPUS}'`,
+  );
+  const selectMarkers = db.prepare('SELECT * FROM ad_markers WHERE show_id = ? ORDER BY created_at');
+  const selectMarker = db.prepare('SELECT * FROM ad_markers WHERE id = ?');
+
+  /** The outward bias at a cut edge: better a breath of programme lost than a syllable of advert kept. */
+  const START_BIAS_MS = 40;
+  const END_BIAS_MS = 80;
+  /** A pre-roll shorter than this is a lead-in, not an advert. */
+  const MIN_MARKER_CUT_MS = 2000;
+  /** How much of an acoustic occurrence a spoken one has to cover to be the same thing. */
+  const SAME_THING_OVERLAP = 0.7;
+
+  /**
+   * Everything known about a heard episode, in one shape: the words, the tokens the
+   * matcher reads, and what is needed to turn a millisecond into a frame.
+   */
+  async function hearShow(show) {
+    const heard = [];
+    for (const episode of episodes.listByShow(show.id)) {
+      const transcript = await transcriber.loadTranscript(episode);
+      if (!transcript) continue;
+      const words = [];
+      const sentences = [];
+      transcript.windows.forEach((window, index) => {
+        for (const sentence of window.sentences) {
+          const wordStart = words.length;
+          for (const word of sentence.words) words.push({ ...word, window: index });
+          sentences.push({ ...sentence, window: index, wordStart, wordEnd: words.length - 1 });
+        }
+      });
+      const tokens = normaliseTokens(words);
+      // First and last token of each word, so a range of words is a range of tokens.
+      const tokenRange = new Map();
+      tokens.forEach((token, index) => {
+        const range = tokenRange.get(token.word);
+        if (range) range[1] = index;
+        else tokenRange.set(token.word, [index, index]);
+      });
+      heard.push({
+        episode,
+        transcript,
+        words,
+        tokens,
+        sentences,
+        tokenRange,
+        durationMs: transcript.durationMs,
+        timing: { sampleRate: transcript.sampleRate, samplesPerFrame: transcript.samplesPerFrame },
+      });
+    }
+    return heard;
+  }
+
+  /** The envelope window that contains a moment, for snapping an edge to a pause. */
+  function envelopeAt(entry, ms) {
+    for (const window of entry.transcript.windows) {
+      if (ms >= window.fromMs && ms <= window.toMs && window.envelopeBytes) return window;
+    }
+    return null;
+  }
+
+  function snapped(entry, ms, edge, { direction = 'both', bias = true } = {}) {
+    const window = envelopeAt(entry, ms);
+    const at = window
+      ? snapToDip(ms, window.envelopeBytes, { fromMs: window.fromMs, hopMs: window.hopMs ?? 10, direction })
+      : ms;
+    const biased = !bias ? at : edge === 'start' ? at - START_BIAS_MS : at + END_BIAS_MS;
+    return Math.max(0, Math.min(entry.durationMs, biased));
+  }
+
+  /**
+   * A cut from words: edges on pauses, then frames, rounded outwards.
+   *
+   * `keepStart` / `keepEnd` say the far side of that edge is programme the owner has
+   * pointed at — a boundary's words — so the edge may only move away from it and gets
+   * no outward bias: a syllable of advert left behind is a complaint, a syllable of
+   * the jingle removed is a different complaint, and here the second one wins.
+   */
+  function occurrenceFrom(entry, startMs, endMs, { snapStart = true, snapEnd = true, keepStart = false, keepEnd = false } = {}) {
+    const start = snapStart ? snapped(entry, startMs, 'start', keepStart ? { direction: 'after', bias: false } : {}) : startMs;
+    const end = snapEnd ? snapped(entry, endMs, 'end', keepEnd ? { direction: 'before', bias: false } : {}) : endMs;
+    return {
+      episodeId: entry.episode.id,
+      startMs: start,
+      endMs: end,
+      start: msToFrame(start, entry.timing),
+      end: msToFrame(end, entry.timing) + 1,
+    };
+  }
+
+  function tokensOfWords(entry, wordStart, wordEnd) {
+    const first = entry.tokenRange.get(wordStart)?.[0];
+    let last = entry.tokenRange.get(wordEnd)?.[1];
+    if (first === undefined) return [];
+    if (last === undefined) last = entry.tokens.length - 1;
+    return entry.tokens.slice(first, last + 1);
+  }
+
+  function claimRange(claimed, episodeId, start, end) {
+    let ranges = claimed.get(episodeId);
+    if (!ranges) claimed.set(episodeId, (ranges = []));
+    ranges.push([start, end]);
+  }
+
+  function isClaimed(claimed, episodeId, start, end) {
+    return (claimed.get(episodeId) ?? []).some(([a, b]) => start <= b && end >= a);
+  }
+
+  /** The segment of this show whose words are these, allowing for a recogniser's variation. */
+  function knownSegmentFor(showId, text, { except = null } = {}) {
+    const phrase = text.split(' ');
+    for (const row of selectTranscriptSegments.all(showId)) {
+      if (!row.text || row.signature.startsWith('marker:') || row.id === except) continue;
+      if (tokenSimilarity(phrase, row.text.split(' ')) >= MIN_SIMILARITY) return row;
+    }
+    return null;
+  }
+
+  function cuesFor(entry, tokenStart, tokenEnd) {
+    const tokens = entry.tokens.slice(tokenStart, tokenEnd + 1);
+    const words = entry.words.slice(tokens[0]?.word ?? 0, (tokens[tokens.length - 1]?.word ?? -1) + 1);
+    const scored = scoreAdvertCues(tokens, { rawText: rawTextOf(words) });
+    return { ...scored, rawText: rawTextOf(words), confidence: meanConfidence(words) };
+  }
+
+  /**
+   * Whether an acoustic segment already covers this stretch of this episode. If so the
+   * words are attached to *that* segment rather than offered again under a new name —
+   * and a pre-roll first found by ear and held as "always at the start" is re-judged
+   * with its words known.
+   */
+  function annotateCorpus(entry, occurrence, cues, show, durations, threshold) {
+    for (const row of selectCorpusOccurrencesIn.all(entry.episode.id)) {
+      const overlap = Math.min(row.end_ms, occurrence.endMs) - Math.max(row.start_ms, occurrence.startMs);
+      const span = Math.min(row.end_ms - row.start_ms, occurrence.endMs - occurrence.startMs);
+      if (span <= 0 || overlap / span < SAME_THING_OVERLAP) continue;
+      const segment = selectSegment.get(row.segment_id);
+      if (!segment) continue;
+      if (!segment.text) {
+        db.prepare(
+          `UPDATE ad_segments SET text = @text, raw_text = @raw_text, cue_score = @cue_score, cues = @cues,
+                  language = @language, updated_at = @now WHERE id = @id`,
+        ).run({
+          id: segment.id,
+          text: cues.text,
+          raw_text: cues.rawText,
+          cue_score: cues.score,
+          cues: JSON.stringify(cues.cues),
+          language: entry.transcript.language ?? null,
+          now: nowIso(),
+        });
+      }
+      if (segment.status === SEGMENT_STATUS.CANDIDATE) {
+        const occurrences = selectOccurrencesOf.all(segment.id).map((o) => ({
+          episodeId: o.episode_id, start: o.start_frame, end: o.end_frame, startMs: o.start_ms, endMs: o.end_ms,
+        }));
+        const verdict = safeToApproveAutomatically(
+          { ...segment, durationMs: segment.duration_ms, episodeCount: segment.episode_count, occurrences, cueScore: Math.max(segment.cue_score ?? 0, cues.score) },
+          { episodeDurations: durations, minEpisodes: threshold, source: SEGMENT_SOURCES.CORPUS },
+        );
+        const auto = show.ad_trim_mode === 'auto' && verdict.safe;
+        db.prepare(
+          `UPDATE ad_segments SET
+              hold_reason = @hold_reason,
+              status = CASE WHEN @promote THEN 'approved' ELSE status END,
+              auto_approved = CASE WHEN @promote THEN 1 ELSE auto_approved END,
+              decided_at = CASE WHEN @promote THEN @now ELSE decided_at END,
+              updated_at = @now
+            WHERE id = @id AND status = 'candidate'`,
+        ).run({ id: segment.id, hold_reason: verdict.safe ? null : verdict.reason, promote: auto ? 1 : 0, now: nowIso() });
+        if (auto) markForRecut(segment.id);
+      }
+      return true;
+    }
+    return false;
   }
 
   const countFingerprints = db.prepare(
@@ -417,8 +636,12 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
         });
         const durationMs = segment.durationMs;
 
+        // The words attached to this audio on an earlier run, if any: they are what
+        // lets a pre-roll past the theme-tune guard, and the guard must not close again
+        // on the next tick just because this detector has never heard them.
+        const known = selectBySignature.get(show.id, segment.signature);
         const verdict = safeToApproveAutomatically(
-          { ...segment, durationMs, occurrences },
+          { ...segment, durationMs, occurrences, cueScore: known?.cue_score ?? 0 },
           { episodeDurations: durations, minEpisodes: threshold, source: SEGMENT_SOURCES.CORPUS },
         );
         const auto = show.ad_trim_mode === 'auto' && verdict.safe;
@@ -489,6 +712,400 @@ export function createAdDetect({ db, config, events, logger, shows, episodes }) 
       void timing;
       events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
       return { segments: recorded };
+    },
+
+    /**
+     * Everything the words say about a show, in the order that matters (spec §19.6):
+     * the boundaries the owner taught, then the reads it already knows, then what
+     * repeats, then what sounds like a sponsor read in a single episode.
+     */
+    async detectFromTranscripts(showId) {
+      const show = shows.getOrThrow(showId);
+      if (show.ad_trim_mode === 'off' || !transcriber) return { segments: 0, skipped: 'mode_off' };
+      const threshold = show.ad_auto_min_episodes ?? 3;
+      const heard = await hearShow(show);
+      if (!heard.length) return { segments: 0, skipped: 'nothing_heard' };
+
+      const durations = Object.fromEntries(heard.map((entry) => [entry.episode.id, entry.durationMs]));
+      const byId = new Map(heard.map((entry) => [entry.episode.id, entry]));
+      const claimed = new Map();
+      const counts = { segments: 0, newSegments: 0, markerCuts: 0, rememberedCuts: 0, heard: heard.length };
+      const auto = show.ad_trim_mode === 'auto';
+
+      /* 0. Boundaries the owner taught. */
+      for (const marker of selectMarkers.all(show.id)) {
+        const phrase = marker.text.split(' ');
+        const atStart = marker.role === 'programme_starts';
+        const occurrences = [];
+        const before = selectBySignature.get(show.id, `marker:${marker.id}`);
+        const already = new Set(before ? selectOccurrencesOf.all(before.id).map((row) => row.episode_id) : []);
+        for (const entry of heard) {
+          // Only the window the marker belongs to: the opening for a start, the closing
+          // for an end. "Vous écoutez RMC" said again at minute forty is not the start.
+          const windowIndex = atStart ? 0 : entry.transcript.windows.length - 1;
+          const first = entry.tokens.findIndex((token) => token.window === windowIndex);
+          if (first < 0) continue;
+          let last = entry.tokens.length - 1;
+          while (last > first && entry.tokens[last].window !== windowIndex) last -= 1;
+          const hit = locatePhrase(entry.tokens.slice(first, last + 1), phrase);
+          if (!hit) continue;
+          const hitStart = first + hit.start;
+          const hitEnd = first + hit.end;
+          let occurrence;
+          if (atStart) {
+            const cutEndMs = marker.inclusive ? hit.endMs : hit.startMs;
+            claimRange(claimed, entry.episode.id, 0, hitEnd);
+            if (cutEndMs < MIN_MARKER_CUT_MS) continue;
+            occurrence = occurrenceFrom(entry, 0, cutEndMs, { snapStart: false, keepEnd: !marker.inclusive });
+            occurrence.start = 0;
+            occurrence.startMs = 0;
+          } else {
+            const cutStartMs = marker.inclusive ? hit.startMs : hit.endMs;
+            claimRange(claimed, entry.episode.id, hitStart, entry.tokens.length - 1);
+            if (entry.durationMs - cutStartMs < MIN_MARKER_CUT_MS) continue;
+            occurrence = occurrenceFrom(entry, cutStartMs, entry.durationMs, { snapEnd: false, keepStart: !marker.inclusive });
+            occurrence.end = msToFrame(entry.durationMs, entry.timing) + 1;
+          }
+          occurrences.push(occurrence);
+        }
+        const lengths = occurrences.map((o) => o.endMs - o.startMs).sort((a, b) => a - b);
+        const stored = upsertSegment(show.id, {
+          signature: `marker:${marker.id}`,
+          source: SEGMENT_SOURCES.TRANSCRIPT,
+          status: SEGMENT_STATUS.APPROVED,
+          autoApproved: false,
+          durationMs: lengths.length ? lengths[Math.floor(lengths.length / 2)] : 0,
+          episodeCount: occurrences.length,
+          occurrenceCount: occurrences.length,
+          occurrences,
+          text: marker.text,
+          rawText: marker.raw_text,
+          language: marker.language,
+        });
+        counts.markerCuts += occurrences.filter((o) => !already.has(o.episodeId)).length;
+        counts.segments += 1;
+        if (stored.isNew) counts.newSegments += 1;
+      }
+
+      /* 1. Reads already decided about — or already offered — matched by their words. */
+      for (const known of selectTranscriptSegments.all(show.id)) {
+        if (!known.text || known.signature.startsWith('marker:')) continue;
+        const phrase = known.text.split(' ');
+        const existing = selectOccurrencesOf.all(known.id);
+        const occurrences = [];
+        let attached = 0;
+        for (const entry of heard) {
+          const hit = locatePhrase(entry.tokens, phrase);
+          if (!hit || isClaimed(claimed, entry.episode.id, hit.start, hit.end)) continue;
+          claimRange(claimed, entry.episode.id, hit.start, hit.end);
+          if (!existing.some((row) => row.episode_id === entry.episode.id)) attached += 1;
+          occurrences.push(occurrenceFrom(entry, hit.startMs, hit.endMs));
+        }
+        // Episodes not heard this time keep the occurrence they had.
+        for (const row of existing) {
+          if (byId.has(row.episode_id) && occurrences.some((o) => o.episodeId === row.episode_id)) continue;
+          if (byId.has(row.episode_id)) continue;
+          occurrences.push({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms });
+        }
+        if (!occurrences.length) {
+          // Every place these words were heard is now spoken for by something else —
+          // a boundary, usually. A candidate nobody has decided about is withdrawn
+          // rather than left on the page describing a cut that would never be made.
+          if (known.status === SEGMENT_STATUS.CANDIDATE) {
+            db.prepare('DELETE FROM ad_segments WHERE id = ?').run(known.id);
+          }
+          continue;
+        }
+        const episodeCount = new Set(occurrences.map((o) => o.episodeId)).size;
+        const verdict = safeToApproveAutomatically(
+          { durationMs: known.duration_ms, episodeCount, occurrences, cueScore: known.cue_score ?? 0 },
+          { episodeDurations: durations, minEpisodes: threshold, source: SEGMENT_SOURCES.TRANSCRIPT },
+        );
+        upsertSegment(show.id, {
+          signature: known.signature,
+          source: SEGMENT_SOURCES.TRANSCRIPT,
+          status: auto && verdict.safe ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.CANDIDATE,
+          autoApproved: auto && verdict.safe,
+          holdReason: verdict.safe ? null : verdict.reason,
+          durationMs: known.duration_ms,
+          episodeCount,
+          occurrenceCount: occurrences.length,
+          occurrences,
+        });
+        if (attached && known.status === SEGMENT_STATUS.APPROVED) counts.rememberedCuts += attached;
+        if (attached && known.status === SEGMENT_STATUS.REJECTED) {
+          // Visible rather than silent: the page says the words were heard and kept.
+          db.prepare(`UPDATE ad_segments SET hold_reason = 'matches_kept_words', updated_at = ? WHERE id = ?`).run(nowIso(), known.id);
+        }
+        counts.segments += 1;
+      }
+
+      /* 2. What repeats. */
+      const found = findRepeatedText(
+        heard.map((entry) => ({ id: entry.episode.id, tokens: entry.tokens })),
+        { claimed },
+      );
+      for (const segment of found) {
+        const exemplar = byId.get(segment.exemplar.episodeId);
+        const cues = cuesFor(exemplar, segment.exemplar.start, segment.exemplar.end);
+        const text = segment.canonicalText;
+        const occurrences = [];
+        for (const occurrence of segment.occurrences) {
+          const entry = byId.get(occurrence.episodeId);
+          const cut = occurrenceFrom(entry, occurrence.startMs, occurrence.endMs);
+          if (annotateCorpus(entry, cut, { ...cues, text }, show, durations, threshold)) continue;
+          occurrences.push(cut);
+        }
+        if (occurrences.length < 2) continue;
+        for (const o of segment.occurrences) claimRange(claimed, o.episodeId, o.start, o.end);
+        const known = knownSegmentFor(show.id, text);
+        const episodeCount = new Set(occurrences.map((o) => o.episodeId)).size;
+        const verdict = safeToApproveAutomatically(
+          { durationMs: segment.durationMs, episodeCount, occurrences, cueScore: cues.score },
+          { episodeDurations: durations, minEpisodes: threshold, source: SEGMENT_SOURCES.TRANSCRIPT },
+        );
+        const stored = upsertSegment(show.id, {
+          signature: known?.signature ?? segment.signature,
+          source: SEGMENT_SOURCES.TRANSCRIPT,
+          status: auto && verdict.safe ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.CANDIDATE,
+          autoApproved: auto && verdict.safe,
+          holdReason: verdict.safe ? null : verdict.reason,
+          durationMs: segment.durationMs,
+          episodeCount,
+          occurrenceCount: occurrences.length,
+          occurrences,
+          exemplar: occurrences.find((o) => o.episodeId === exemplar.episode.id) ?? occurrences[0],
+          text,
+          rawText: cues.rawText,
+          cueScore: cues.score,
+          cues: cues.cues,
+          language: exemplar.transcript.language,
+        });
+        counts.segments += 1;
+        if (stored.isNew) counts.newSegments += 1;
+      }
+
+      /* 3. What sounds like a sponsor read, heard once. Offered, never cut. */
+      for (const entry of heard) {
+        let block = null;
+        const blocks = [];
+        // A block ends at the last sentence that sounded like an advert. The quiet
+        // sentences that may have followed were only ever kept in case another cue
+        // came along; if none did, they are the programme starting.
+        const flush = () => {
+          if (block && block.raw >= 4 && block.cueEndMs - block.startMs >= 10_000) {
+            blocks.push({ ...block, endMs: block.cueEndMs, tokenEnd: block.cueTokenEnd });
+          }
+          block = null;
+        };
+        for (const sentence of entry.sentences) {
+          const [tokenStart] = entry.tokenRange.get(sentence.wordStart) ?? [];
+          const tokenEnd = entry.tokenRange.get(sentence.wordEnd)?.[1];
+          if (tokenStart === undefined || tokenEnd === undefined) continue;
+          if (isClaimed(claimed, entry.episode.id, tokenStart, tokenEnd)) {
+            flush();
+            continue;
+          }
+          const scored = scoreAdvertCues(entry.tokens.slice(tokenStart, tokenEnd + 1), { rawText: sentence.text });
+          if (block && (sentence.startMs - block.endMs > 6000 || sentence.endMs - block.startMs > 120_000 || sentence.window !== block.window)) flush();
+          if (!block) {
+            if (!scored.raw) continue;
+            block = {
+              startMs: sentence.startMs, endMs: sentence.endMs, tokenStart, tokenEnd,
+              cueEndMs: sentence.endMs, cueTokenEnd: tokenEnd, raw: 0, quiet: 0, window: sentence.window,
+            };
+          }
+          block.endMs = sentence.endMs;
+          block.tokenEnd = tokenEnd;
+          if (scored.raw) {
+            block.raw += scored.raw;
+            block.quiet = 0;
+            block.cueEndMs = sentence.endMs;
+            block.cueTokenEnd = tokenEnd;
+          } else {
+            block.quiet += 1;
+            if (block.quiet >= 3) flush();
+          }
+        }
+        flush();
+        for (const candidate of blocks) {
+          const cues = cuesFor(entry, candidate.tokenStart, candidate.tokenEnd);
+          if (cues.score < CUE_OFFER_ALONE) continue;
+          const text = entry.tokens.slice(candidate.tokenStart, candidate.tokenEnd + 1).map((t) => t.t).join(' ');
+          const cut = occurrenceFrom(entry, candidate.startMs, candidate.endMs);
+          if (annotateCorpus(entry, cut, { ...cues, text }, show, durations, threshold)) continue;
+          claimRange(claimed, entry.episode.id, candidate.tokenStart, candidate.tokenEnd);
+          const stored = upsertSegment(show.id, {
+            signature: knownSegmentFor(show.id, text)?.signature ?? signatureOf(text),
+            source: SEGMENT_SOURCES.TRANSCRIPT,
+            status: SEGMENT_STATUS.CANDIDATE,
+            autoApproved: false,
+            holdReason: 'only_heard_once',
+            durationMs: cut.endMs - cut.startMs,
+            episodeCount: 1,
+            occurrenceCount: 1,
+            occurrences: [cut],
+            text,
+            rawText: cues.rawText,
+            cueScore: cues.score,
+            cues: cues.cues,
+            language: entry.transcript.language,
+          });
+          counts.segments += 1;
+          if (stored.isNew) counts.newSegments += 1;
+        }
+      }
+
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
+      logger?.info({ showId: show.id, ...counts }, 'looked for spoken adverts');
+      return counts;
+    },
+
+    /* ---- what the owner teaches ---------------------------------------------- */
+
+    listMarkers(showId) {
+      return selectMarkers.all(showId);
+    },
+
+    getMarker(id) {
+      return selectMarker.get(id) ?? null;
+    },
+
+    /**
+     * "The programme starts when it says this." Recorded, and applied on the next run:
+     * the caller queues one, so the owner sees the cuts land rather than wait a tick.
+     */
+    addMarker({ showId, role, inclusive = false, rawText, language = null }) {
+      const text = normaliseText(rawText).join(' ');
+      if (!text) throw notFound('Those words have nothing SelfPod can listen for.', 'empty_marker');
+      const id = newId();
+      db.prepare(
+        `INSERT INTO ad_markers (id, show_id, role, inclusive, text, raw_text, language, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, showId, role, inclusive ? 1 : 0, text, rawText.trim(), language, nowIso());
+      events?.emit(EVENTS.SHOW_CHANGED, { showId });
+      return selectMarker.get(id);
+    },
+
+    /** Forgets a boundary and puts back everything it cut. */
+    removeMarker(id) {
+      const marker = selectMarker.get(id);
+      if (!marker) throw notFound('That boundary no longer exists.', 'marker_not_found');
+      const segment = selectBySignature.get(marker.show_id, `marker:${id}`);
+      if (segment) {
+        markForRecut(segment.id);
+        db.prepare('DELETE FROM ad_segments WHERE id = ?').run(segment.id);
+      }
+      db.prepare('DELETE FROM ad_markers WHERE id = ?').run(id);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: marker.show_id });
+      return marker;
+    },
+
+    /**
+     * "These words are an advert" (or "are not"), pointed at in one episode.
+     *
+     * Becomes a segment with that decision already taken and one occurrence; the next
+     * run matches the words in every other episode and attaches those. Approving is
+     * remembering: there is no separate list of phrases to keep in step.
+     */
+    async teachSegment({ showId, episodeId, startMs, endMs, rawText, status, language = null }) {
+      const show = shows.getOrThrow(showId);
+      const episode = episodes.get?.(episodeId) ?? episodes.getOrThrow(episodeId);
+      const text = normaliseText(rawText).join(' ');
+      if (!text) throw notFound('Those words have nothing SelfPod can listen for.', 'empty_phrase');
+      const transcript = await transcriber.loadTranscript(episode);
+      const entry = transcript
+        ? (await hearShow(show)).find((candidate) => candidate.episode.id === episodeId)
+        : null;
+      const occurrence = entry
+        ? occurrenceFrom(entry, startMs, endMs)
+        : { episodeId, startMs, endMs, start: 0, end: 0 };
+      const known = knownSegmentFor(showId, text);
+      const stored = upsertSegment(showId, {
+        signature: known?.signature ?? signatureOf(text),
+        source: SEGMENT_SOURCES.TRANSCRIPT,
+        status,
+        autoApproved: false,
+        durationMs: occurrence.endMs - occurrence.startMs,
+        episodeCount: 1,
+        occurrenceCount: 1,
+        occurrences: [occurrence],
+        text,
+        rawText: rawText.trim(),
+        language,
+      });
+      // upsertSegment never changes a decision on its own; this *is* the decision.
+      if (stored.status !== status) return api.decide(stored.id, status);
+      return stored;
+    },
+
+    /**
+     * The transcripts the review page needs: one per exemplar episode of every segment
+     * that carries words. A handful of small files, read once per render.
+     */
+    async exemplarTranscripts(showId) {
+      const wanted = new Set();
+      for (const row of selectSegments.all(showId)) {
+        if (row.exemplar_episode_id && (row.source === SEGMENT_SOURCES.TRANSCRIPT || row.text)) wanted.add(row.exemplar_episode_id);
+      }
+      const transcripts = new Map();
+      for (const episodeId of wanted) {
+        const episode = episodes.get(episodeId);
+        if (!episode || !transcriber) continue;
+        const transcript = await transcriber.loadTranscript(episode);
+        if (transcript) transcripts.set(episodeId, transcript);
+      }
+      return transcripts;
+    },
+
+    /** Every spoken segment that touches an episode, with the occurrence in it. */
+    spokenIn(episodeId) {
+      return db
+        .prepare(
+          `SELECT s.*, o.start_ms, o.end_ms, o.start_frame, o.end_frame
+             FROM ad_segment_occurrences o
+             JOIN ad_segments s ON s.id = o.segment_id
+            WHERE o.episode_id = ? AND (s.source = '${SEGMENT_SOURCES.TRANSCRIPT}' OR s.text IS NOT NULL)
+            ORDER BY o.start_ms`,
+        )
+        .all(episodeId);
+    },
+
+    /**
+     * Moves the edges of a spoken segment to the words the owner chose.
+     *
+     * The words *are* the segment: changing them changes what every later episode is
+     * matched against, so the text is rewritten along with this episode's cut and the
+     * next run re-finds the new words everywhere else.
+     */
+    async reshapeSegment(segmentId, { episodeId, startMs, endMs, rawText }) {
+      const segment = selectSegment.get(segmentId);
+      if (!segment) throw notFound('That segment no longer exists.', 'segment_not_found');
+      const show = shows.getOrThrow(segment.show_id);
+      const entry = (await hearShow(show)).find((candidate) => candidate.episode.id === episodeId);
+      const occurrence = entry ? occurrenceFrom(entry, startMs, endMs) : { episodeId, startMs, endMs, start: 0, end: 0 };
+      const text = normaliseText(rawText).join(' ');
+      const others = selectOccurrencesOf
+        .all(segmentId)
+        .filter((row) => row.episode_id !== episodeId)
+        .map((row) => ({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms }));
+      db.prepare(
+        `UPDATE ad_segments SET text = @text, raw_text = @raw_text, duration_ms = @duration_ms,
+                exemplar_episode_id = @episode_id, exemplar_start_ms = @start_ms, exemplar_end_ms = @end_ms, updated_at = @now
+          WHERE id = @id`,
+      ).run({
+        id: segmentId,
+        text: text || segment.text,
+        raw_text: rawText.trim() || segment.raw_text,
+        duration_ms: occurrence.endMs - occurrence.startMs,
+        episode_id: episodeId,
+        start_ms: occurrence.startMs,
+        end_ms: occurrence.endMs,
+        now: nowIso(),
+      });
+      const moved = replaceOccurrences(segmentId, [occurrence, ...others]);
+      if (segment.status === SEGMENT_STATUS.APPROVED && moved.size) markForRecut(segmentId, moved);
+      return selectSegment.get(segmentId);
     },
 
     listSegments(showId) {

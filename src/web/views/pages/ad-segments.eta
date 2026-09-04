@@ -4,7 +4,7 @@
 %>
 <div class="page-title">
   <div>
-    <div class="sub">Repeated audio in <%= show.title %></div>
+    <div class="sub">Sponsor reads and repeated audio in <%= show.title %></div>
     <h1>Adverts</h1>
   </div>
   <div class="actions">
@@ -28,37 +28,80 @@
           <span class="choice__body">
             <strong>Nothing</strong>
             <small>Your episodes are published exactly as they arrive. SelfPod does not
-              read them looking for repeats.</small>
+              listen to them or read them.</small>
           </span>
         </label>
 
         <label class="choice">
           <input type="radio" name="mode" value="review" <%= mode === 'review' ? 'checked' : '' %>>
           <span class="choice__body">
-            <strong>Show me what repeats, and wait</strong>
-            <small>New episodes are held back until you have decided about them. Nothing
-              is removed that you have not asked for.</small>
+            <strong>Listen, tell me what it heard, and wait</strong>
+            <small>SelfPod reads the opening and closing minutes of each episode and holds
+              the episode until you have decided about anything that sounds like a sponsor
+              read or repeats across episodes. Once you have removed a read, the same
+              words are cut from later episodes without asking — that decision was yours.</small>
           </span>
         </label>
 
         <label class="choice">
           <input type="radio" name="mode" value="auto" <%= mode === 'auto' ? 'checked' : '' %>>
           <span class="choice__body">
-            <strong>Remove repeats without asking</strong>
-            <small>SelfPod cuts what it is confident about and publishes. It still will
-              not touch anything that looks like a theme tune or credits — those are
-              listed for you instead.</small>
+            <strong>Remove what it is sure about, without asking</strong>
+            <small>It cuts a stretch when the words say sponsor read — a promo code,
+              “brought to you by”, a web address — and the same words come back in
+              other episodes, or when you have removed that read before. Anything it is
+              unsure of is listed here and the episode is published untouched. It still
+              will not touch a theme tune or credits on its own.</small>
           </span>
         </label>
       </fieldset>
 
+      <fieldset class="listen-scope">
+        <legend class="ds-caption">Where to listen</legend>
+        <div class="form-row">
+          <div class="field">
+            <label for="listen-head">First</label>
+            <div class="field-unit">
+              <input id="listen-head" type="number" name="listenHeadMinutes" min="0" max="15" step="1"
+                     value="<%= it.listen?.headMinutes ?? 5 %>"> <span class="muted">minutes</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="listen-tail">Last</label>
+            <div class="field-unit">
+              <input id="listen-tail" type="number" name="listenTailMinutes" min="0" max="15" step="1"
+                     value="<%= it.listen?.tailMinutes ?? 4 %>"> <span class="muted">minutes</span>
+            </div>
+          </div>
+        </div>
+        <label class="choice choice--inline">
+          <input type="checkbox" name="listenWhole" value="1" <%= it.listen?.whole ? 'checked' : '' %>>
+          <span class="choice__body">
+            <strong>The whole episode</strong>
+            <small>Catches mid-roll reads too. Costs as much work as the episode is long.</small>
+          </span>
+        </label>
+        <div class="hint">
+          <% if (it.listen?.rateLabel) { %>
+            Reading speech is the expensive part. On this machine it runs at about
+            <%= it.listen.rateLabel %>, so <%= it.listen.costLabel %>.
+          <% } else { %>
+            Reading speech is the expensive part of this feature. On a small NAS it runs
+            at roughly real time, so the first 5 and last 4 minutes of an episode is a
+            few minutes of work; a desktop is many times faster. SelfPod measures its
+            own speed and says so here once it has listened to something.
+          <% } %>
+        </div>
+      </fieldset>
+
       <div class="field">
-        <label for="min-episodes">Episodes to compare before deciding anything</label>
+        <label for="min-episodes">Episodes a read must appear in before SelfPod cuts it unasked</label>
         <input id="min-episodes" type="number" name="minEpisodes" min="2" max="20"
                value="<%= it.minEpisodes ?? 3 %>">
         <div class="hint">
-          Audio has to appear in this many episodes before SelfPod will offer it. Fewer
-          finds sponsor reads sooner, and finds more things that are not sponsor reads.
+          Audio has to appear in this many episodes before SelfPod will act on it alone.
+          Words that sound like a sponsor read need only two. Fewer finds reads sooner,
+          and finds more things that are not reads.
         </div>
       </div>
 
@@ -88,6 +131,10 @@
       segments: it.segments,
       mode,
       held: it.held,
+      listening: it.listening,
+      lookedAndFoundNothing: it.lookedAndFoundNothing,
+      comparableEpisodes: it.comparableEpisodes,
+      helpers: it.helpers,
     }) %>
   </div>
 </div>

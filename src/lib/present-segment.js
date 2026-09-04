@@ -1,4 +1,7 @@
 import { HOLD_REASONS, SEGMENT_SOURCES } from '../constants.js';
+import { describeVerdict, flattenTranscript, parseCues, presentExcerpt, LOW_CONFIDENCE } from './present-transcript.js';
+import { describeCues } from './advert-cues.js';
+import { meanConfidence } from './transcript.js';
 
 /**
  * How a repeated segment is described to the person deciding about it (spec §19.9).
@@ -14,11 +17,33 @@ import { HOLD_REASONS, SEGMENT_SOURCES } from '../constants.js';
  * everything that would let a person tell in two seconds: how long it is, how many
  * episodes carry it, where in an episode it sits, and a way to listen to it.
  */
-export function presentSegment(segment, { episodes } = {}) {
+export function presentSegment(segment, { episodes, transcripts = null, mode = 'review' } = {}) {
   if (!segment) return null;
 
   const occurrences = segment.occurrences ?? [];
   const durationSeconds = Math.round((segment.duration_ms ?? 0) / 10) / 100;
+  const positionLabel = describePosition(occurrences, episodes);
+  const spoken = segment.source === SEGMENT_SOURCES.TRANSCRIPT || Boolean(segment.text);
+  const isMarker = String(segment.signature ?? '').startsWith('marker:');
+  const cues = parseCues(segment.cues);
+
+  /*
+   * The words, when there are any. The exemplar occurrence is shown with a few
+   * seconds of context either side, so the owner reads what will go and what stays.
+   */
+  let excerpt = null;
+  let confidence = null;
+  const exemplarOccurrence =
+    occurrences.find((row) => row.episode_id === segment.exemplar_episode_id) ?? occurrences[0] ?? null;
+  const transcript = exemplarOccurrence ? transcripts?.get?.(exemplarOccurrence.episode_id) : null;
+  if (transcript && exemplarOccurrence) {
+    const words = flattenTranscript(transcript);
+    excerpt = presentExcerpt(words, { startMs: exemplarOccurrence.start_ms, endMs: exemplarOccurrence.end_ms }, { cues });
+    if (excerpt) {
+      excerpt.episodeId = exemplarOccurrence.episode_id;
+      confidence = meanConfidence(words.slice(excerpt.cutStartWord, excerpt.cutEndWord + 1));
+    }
+  }
 
   return {
     id: segment.id,
@@ -32,10 +57,15 @@ export function presentSegment(segment, { episodes } = {}) {
      * construction. Something that merely repeats might be anything the show does
      * every week.
      */
-    sourceLabel:
-      segment.source === SEGMENT_SOURCES.DIFF
+    sourceLabel: isMarker
+      ? 'The boundary you set'
+      : segment.source === SEGMENT_SOURCES.DIFF
         ? 'Changed between two downloads of the same episode'
-        : `Repeats across ${segment.episode_count} episodes`,
+        : segment.source === SEGMENT_SOURCES.TRANSCRIPT
+          ? segment.episode_count > 1
+            ? `The same words in ${segment.episode_count} episodes`
+            : 'Sounds like a sponsor read, heard once'
+          : `Repeats across ${segment.episode_count} episodes`,
     durationSeconds,
     durationLabel: formatDuration(segment.duration_ms ?? 0),
     episodeCount: segment.episode_count,
@@ -45,7 +75,23 @@ export function presentSegment(segment, { episodes } = {}) {
     /** Why automatic mode declined to take this one unasked, in the owner's language. */
     holdMessage: segment.hold_reason ? (HOLD_REASONS[segment.hold_reason] ?? null) : null,
     /** Always the same position within its episode, or "it moves about". */
-    positionLabel: describePosition(occurrences, episodes),
+    positionLabel,
+    /* ---- the words (spec §19.6) ---- */
+    spoken,
+    isMarker,
+    text: segment.text ?? null,
+    rawText: segment.raw_text ?? null,
+    language: segment.language ?? null,
+    cueScore: segment.cue_score ?? null,
+    cues: cues.map((cue) => ({ id: cue.id, phrase: cue.phrase, weight: cue.weight })),
+    cuesLabel: describeCues(cues),
+    // The recogniser's confidence in the *words*, never in a verdict — the API has a
+    // test that refuses a key called "confidence" for exactly that reason.
+    heardClearly: confidence === null ? null : confidence >= LOW_CONFIDENCE,
+    /** What SelfPod is going to do, and why, in one sentence. Only for what was heard. */
+    why: spoken ? describeVerdict(segment, { mode, positionLabel, confidence, occurrences }) : null,
+    excerpt,
+    contextSampleUrl: exemplarOccurrence ? `/api/ad-segments/${segment.id}/sample.mp3?context=3` : null,
     exemplar: segment.exemplar_episode_id
       ? {
           episodeId: segment.exemplar_episode_id,

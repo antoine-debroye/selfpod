@@ -1,3 +1,5 @@
+import { CUE_STRONG } from '../constants.js';
+
 /**
  * Whether automatic mode may cut a segment without being asked (spec §19.5).
  *
@@ -29,6 +31,29 @@
  */
 const DIFF_MAX_SECONDS = 150;
 
+/**
+ * Whether every occurrence hugs the start or the end of its episode — the shape of a
+ * theme tune and of credits. Shared by the corpus and transcript branches, and in both
+ * it yields to the words: "Welcome to the show, I'm X" opens every episode at 0:00, and
+ * so does "This episode is brought to you by…", and only the second is an advert.
+ */
+function positionGuard(segment, episodeDurations) {
+  const durations = episodeDurations ?? {};
+  const positions = segment.occurrences.map((occurrence) => {
+    const total = durations[occurrence.episodeId];
+    if (!total) return null;
+    return { fromStartMs: occurrence.startMs ?? null, fromEndMs: total - (occurrence.endMs ?? 0) };
+  });
+  const known = positions.filter(Boolean);
+  if (known.length && known.every((position) => position.fromStartMs !== null && position.fromStartMs < 5000)) {
+    return 'always_at_the_start';
+  }
+  if (known.length && known.every((position) => position.fromEndMs < 15000)) {
+    return 'always_at_the_end';
+  }
+  return null;
+}
+
 export function safeToApproveAutomatically(
   segment,
   { episodeDurations, minEpisodes = 3, source = 'corpus' } = {},
@@ -57,6 +82,27 @@ export function safeToApproveAutomatically(
     return { safe: true, reason: null };
   }
 
+  /*
+   * Found by the words. Repetition is still the evidence — a stretch heard once is
+   * offered and never cut, whatever it says — but the wording is the tie-breaker the
+   * acoustic branch never had: two readings of the same sponsor script on two days is
+   * the campaign the owner described, and sponsor wording at the very start of an
+   * episode is a pre-roll, not a theme tune.
+   */
+  if (source === 'transcript') {
+    const seconds = segment.durationMs ? segment.durationMs / 1000 : null;
+    if (seconds !== null && seconds < 6) return { safe: false, reason: 'too_short_to_be_an_advert' };
+    if (seconds !== null && seconds > 150) return { safe: false, reason: 'too_long_to_be_an_advert' };
+    if (segment.episodeCount < 2) return { safe: false, reason: 'only_heard_once' };
+    const strong = (segment.cueScore ?? 0) >= CUE_STRONG;
+    if (segment.episodeCount < minEpisodes && !strong) return { safe: false, reason: 'seen_too_few_times' };
+    if (!strong) {
+      const position = positionGuard(segment, episodeDurations);
+      if (position) return { safe: false, reason: position };
+    }
+    return { safe: true, reason: null };
+  }
+
   if (segment.episodeCount < minEpisodes) {
     return { safe: false, reason: 'seen_too_few_times' };
   }
@@ -70,19 +116,12 @@ export function safeToApproveAutomatically(
     return { safe: false, reason: 'too_long_to_be_an_advert' };
   }
 
-  // The intro/outro signature: every occurrence hugging the start or the end.
-  const durations = episodeDurations ?? {};
-  const positions = segment.occurrences.map((occurrence) => {
-    const total = durations[occurrence.episodeId];
-    if (!total) return null;
-    return { fromStartMs: occurrence.startMs ?? null, fromEndMs: total - (occurrence.endMs ?? 0) };
-  });
-  const known = positions.filter(Boolean);
-  if (known.length && known.every((position) => position.fromStartMs !== null && position.fromStartMs < 5000)) {
-    return { safe: false, reason: 'always_at_the_start' };
-  }
-  if (known.length && known.every((position) => position.fromEndMs < 15000)) {
-    return { safe: false, reason: 'always_at_the_end' };
+  // The intro/outro signature — unless the words attached to this audio say sponsor,
+  // which is how a pre-roll first found by ear and held here is let go once it has
+  // been heard.
+  if ((segment.cueScore ?? 0) < CUE_STRONG) {
+    const position = positionGuard(segment, episodeDurations);
+    if (position) return { safe: false, reason: position };
   }
 
   return { safe: true, reason: null };

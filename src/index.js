@@ -28,6 +28,8 @@ import { createRemoteFeeds } from './services/remote-feeds.js';
 import { createAdPipeline } from './services/ad-pipeline.js';
 import { createTrimmer } from './services/trimmer.js';
 import { createAdDetect } from './services/ad-detect.js';
+import { createAdvertsView } from './services/adverts-view.js';
+import { createTranscriber } from './services/transcriber.js';
 
 import { createShows } from './services/shows.js';
 import { createTimeline } from './services/timeline.js';
@@ -75,6 +77,7 @@ async function main() {
     await mkdir(config.episodeArtDir, { recursive: true });
     await mkdir(config.fingerprintDir, { recursive: true });
     await mkdir(config.trimmedDir, { recursive: true });
+    await mkdir(config.transcriptDir, { recursive: true });
   } catch (err) {
     logger.error({ err }, 'could not prepare the data directory');
   }
@@ -120,7 +123,8 @@ async function main() {
   });
   const stats = createStats({ db, logger });
   const subscriptions = createSubscriptions({ db, config, events, logger });
-  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes });
+  const transcriber = createTranscriber({ db, config, events, logger, health, shows, episodes });
+  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes, transcriber });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
     metadata, activity, health, events, logger, adDetect,
@@ -128,8 +132,9 @@ async function main() {
   const trimmer = createTrimmer({
     config, events, logger, health, shows, episodes, adDetect, metadata,
   });
+  const advertsView = createAdvertsView({ adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
-    db, events, logger, health, shows, episodes, adDetect, trimmer, activity,
+    db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
   });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
@@ -143,7 +148,7 @@ async function main() {
   const services = {
     config, logger, db, events, settings, health, activity, covers, episodeArt, metadata,
     shows, episodes, feeds, scanner, watcher, scheduler, stats, timeline, readiness,
-    subscriptions, remoteFeeds, adDetect, trimmer, adPipeline,
+    subscriptions, remoteFeeds, adDetect, trimmer, adPipeline, transcriber, advertsView,
     ...presenters,
   };
 
@@ -166,6 +171,10 @@ async function main() {
   // the periodic rescan. Deliberately not awaited: a large library must not delay
   // the UI becoming reachable.
   scanner.enqueueAll(SCAN_TRIGGER.STARTUP);
+  // Proves the speech recogniser on a one-second file, so a box where it cannot run
+  // says so in the health banner instead of holding episodes for a transcript that is
+  // never coming. Not awaited: it is a subprocess and the UI must not wait for it.
+  void transcriber.probe();
   await watcher.start();
   scheduler.start({ onSessionCleanup: () => app.cleanupSessions() });
 

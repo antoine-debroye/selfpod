@@ -99,3 +99,23 @@ describe('the hold a new episode arrives with', () => {
     assert.equal(initialPublishHold(null), null);
   });
 });
+
+describe('waiting for the words', () => {
+  it('holds an episode whose transcript is still to come, in both modes', () => {
+    for (const mode of ['review', 'auto']) {
+      assert.equal(
+        resolvePublishHold({ mode, ...settled, transcriptPending: true }),
+        PUBLISH_HOLDS.AWAITING_CORPUS,
+        mode,
+      );
+    }
+  });
+
+  it('never holds a format it could not cut anyway', () => {
+    assert.equal(resolvePublishHold({ mode: 'review', ...settled, transcriptPending: true, canBeTrimmed: false }), null);
+  });
+
+  it('is not the concern of a show with the feature off', () => {
+    assert.equal(resolvePublishHold({ mode: 'off', ...settled, transcriptPending: true }), null);
+  });
+});

@@ -23,6 +23,8 @@ import { createRemoteFeeds } from '../../src/services/remote-feeds.js';
 import { createAdPipeline } from '../../src/services/ad-pipeline.js';
 import { createTrimmer } from '../../src/services/trimmer.js';
 import { createAdDetect } from '../../src/services/ad-detect.js';
+import { createAdvertsView } from '../../src/services/adverts-view.js';
+import { createTranscriber } from '../../src/services/transcriber.js';
 import { createSubscriptions } from '../../src/services/subscriptions.js';
 
 import { createShows } from '../../src/services/shows.js';
@@ -73,7 +75,7 @@ export async function mp3WithEmbeddedArtwork(picture, { mime = 'image/jpeg' } = 
  * exercise the same wiring the app uses rather than mocks, so a behaviour that
  * passes here is a behaviour the running app has.
  */
-export async function createTestInstance({ env = {}, skipBootstrap = false } = {}) {
+export async function createTestInstance({ env = {}, skipBootstrap = false, whisper = null } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'selfpod-test-'));
   const config = loadConfig({
     DATA_DIR: dataDir,
@@ -88,6 +90,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   await mkdir(config.episodeArtDir, { recursive: true });
   await mkdir(config.fingerprintDir, { recursive: true });
   await mkdir(config.trimmedDir, { recursive: true });
+  await mkdir(config.transcriptDir, { recursive: true });
 
   const { db } = openDatabase(config.databasePath, { logger: silentLogger });
   const events = createEventBus();
@@ -115,12 +118,19 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
   });
 
   const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
-  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes });
+  // A stand-in for whisper-cli, when a test wants words: `whisper` is a function of
+  // the runner's options returning `{ json }` in whisper's own JSON shape.
+  const transcriber = createTranscriber({
+    db, config, events, logger: silentLogger, health, shows, episodes,
+    runner: whisper ?? (() => { throw Object.assign(new Error('no recogniser in tests'), { code: 'missing' }); }),
+  });
+  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes, transcriber });
   const trimmer = createTrimmer({
     config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });
+  const advertsView = createAdvertsView({ adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
-    db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity,
+    db, events, logger: silentLogger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
   });
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
@@ -129,7 +139,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false } = {
 
   return {
     config, db, events, settings, health, activity, covers, episodeArt, metadata,
-    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds, adDetect, trimmer, adPipeline,
+    shows, episodes, feeds, scanner, stats, timeline, readiness, subscriptions, remoteFeeds, adDetect, trimmer, adPipeline, transcriber, advertsView,
     dataDir,
 
     /** Copies a fixture into a show folder, optionally under a different name. */
