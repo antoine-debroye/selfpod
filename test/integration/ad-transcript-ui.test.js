@@ -413,6 +413,51 @@ describe('one read, one row', () => {
     assert.equal(server.episodes.get(episode.id).trim_status, 'trimmed');
   });
 
+  it('folds the ladder the acoustic search leaves behind, and does it with no transcripts at all', async () => {
+    /*
+     * Seen on the live instance: eight rows for one ten-second tag, at eight
+     * different episode counts, because the acoustic search produces overlapping
+     * variants of one stretch as a matter of course and the fold only ever looked at
+     * rows found by their words.
+     *
+     * And it had to happen with the transcripts gone, because that is the state a
+     * change of recogniser leaves behind — the moment the duplicates are most in the
+     * way is the moment the fold used to give up.
+     */
+    const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    const text = normaliseText(VARIANTS[0]).join(' ');
+    for (let i = 0; i < 4; i += 1) {
+      server.db
+        .prepare(
+          `INSERT INTO ad_segments (id, show_id, signature, source, status, auto_approved, duration_ms,
+             episode_count, occurrence_count, first_seen_at, decided_at, created_at, updated_at, text, raw_text, language)
+           VALUES (?, ?, ?, 'corpus', 'candidate', 0, 10000, ?, ?, ?, NULL, ?, ?, ?, ?, 'fr')`,
+        )
+        .run(`ear-${i}`, show.id, `aud:${i}`, 14 - i, 14 - i, `2026-08-1${i}T09:00:00.000Z`, `2026-08-1${i}T09:00:00.000Z`, `2026-08-1${i}T09:00:00.000Z`, text, VARIANTS[0]);
+      server.db
+        .prepare(
+          `INSERT INTO ad_segment_occurrences (segment_id, episode_id, start_frame, end_frame, start_ms, end_ms)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(`ear-${i}`, episode.id, 700 + i, 1000 + i, 19_000 + i, 27_500 + i);
+    }
+    // The state a change of recogniser leaves: every transcript invalid.
+    server.db.prepare('DELETE FROM episode_transcripts').run();
+    const withWords = () => server.adDetect.listSegments(show.id).filter((row) => row.text && !row.signature.startsWith('marker:'));
+    assert.ok(withWords().length >= 5, `the ladder was not seeded: ${withWords().length}`);
+
+    const result = await server.adDetect.detectFromTranscripts(show.id);
+
+    assert.equal(result.skipped, 'nothing_heard', 'this test is meant to run with no transcripts');
+    assert.ok(result.foldedIn >= 4, `folded ${result.foldedIn}`);
+    const left = withWords();
+    assert.equal(left.length, 1, JSON.stringify(left.map((row) => [row.id, row.source, row.episode_count])));
+    // The row found by its words survives, so a later episode can still be matched
+    // against them; the ones found by ear fold into it.
+    assert.equal(left[0].source, 'transcript');
+  });
+
   it('never folds two reads the owner decided differently, nor a phrase they share', async () => {
     const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
     const seed = (id, text, status) =>

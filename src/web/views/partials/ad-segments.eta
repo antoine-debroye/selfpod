@@ -244,8 +244,10 @@
             if (gone) facts.push('not in an episode you have any more');
             else if (found.positionLabel) facts.push(found.positionLabel.charAt(0).toLowerCase() + found.positionLabel.slice(1));
             /* One count, not two: for audio SelfPod never had words for, the source
-               label already says how many episodes it repeats across. */
-            if (found.rawText && found.episodeCount) facts.push(`${found.episodeCount} ${found.episodeCount === 1 ? 'episode' : 'episodes'}`);
+               label already says how many episodes it repeats across. And none at all
+               once the episodes are gone — the stored count still says eight, which
+               read as "not in an episode you have any more · 8 episodes". */
+            if (found.rawText && found.episodeCount && !gone) facts.push(`${found.episodeCount} ${found.episodeCount === 1 ? 'episode' : 'episodes'}`);
             else if (!found.rawText && !gone) facts.push(found.sourceLabel.charAt(0).toLowerCase() + found.sourceLabel.slice(1));
           %>
           <li>

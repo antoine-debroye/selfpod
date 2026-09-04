@@ -7,6 +7,23 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.4 — 2026-09-04
+
+### Fixed
+
+- **Eight rows for one advert.** The acoustic search turns up overlapping variants of a
+  single stretch as a matter of course, and folding only ever looked at rows found by
+  their words — so one ten-second closing tag stood on the review page as eight
+  candidates, at eight different episode counts, each asking to be decided. Anything
+  carrying words is now folded, however it was first found; the row found by its words
+  is the one kept, because its signature is what a later episode is matched against.
+- **The folding gave up exactly when it was needed.** It ran after the check for
+  whether there was anything to hear, so a change of recogniser — which invalidates
+  every transcript — left the duplicates on the page until the whole show had been read
+  again. It works on the words already stored, and now runs before anything else.
+- A segment whose episodes have all gone claimed an episode count as well: "not in an
+  episode you have any more · 8 episodes".
+
 ## 1.8.3 — 2026-09-04
 
 ### Fixed
