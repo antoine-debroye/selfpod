@@ -147,7 +147,8 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     if (!activity) return;
     if (
       !counts.found && !counts.trimmed && !counts.failed && !counts.released &&
-      !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts && !counts.transcriptionFailed
+      !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts &&
+      !counts.transcriptionFailed && !counts.foldedIn
     ) return;
 
     const parts = [];
@@ -157,6 +158,9 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     if (counts.found) parts.push(`${counts.found} repeated ${counts.found === 1 ? 'segment' : 'segments'} found`);
     if (counts.heard) parts.push(`${counts.heard} sponsor ${counts.heard === 1 ? 'read' : 'reads'} heard`);
     if (counts.rememberedCuts) parts.push(`${counts.rememberedCuts} cut from memory`);
+    if (counts.foldedIn) {
+      parts.push(`${counts.foldedIn} duplicate ${counts.foldedIn === 1 ? 'row' : 'rows'} folded together`);
+    }
     if (counts.markerCuts) parts.push(`${counts.markerCuts} cut at the boundary you set`);
     if (counts.trimmed) {
       parts.push(`${counts.trimmed} ${counts.trimmed === 1 ? 'episode' : 'episodes'} trimmed`);
@@ -222,6 +226,18 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
         }
 
         const started = Date.now();
+
+        /*
+         * First, because it is the only thing here that costs nothing.
+         *
+         * Everything below reads whole episodes off the disk, and hearing the words is
+         * minutes an episode; a pass over a real library is hours. Folding duplicate
+         * rows together is arithmetic on words already stored, and putting it behind
+         * all of that meant a page full of the same advert stayed that way until the
+         * slow work had finished with every show in front of this one.
+         */
+        const foldedIn = adDetect.foldDuplicateReads(showId);
+
         const fingerprinted = await adDetect.fingerprintShow(showId);
 
         // Hearing the words comes before either detector, so the acoustic one's finds
@@ -255,6 +271,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           transcriptionFailed: transcribed?.failed ?? 0,
           heard: heard?.newSegments ?? 0,
           rememberedCuts: heard?.rememberedCuts ?? 0,
+          foldedIn,
           markerCuts: heard?.markerCuts ?? 0,
           trimmed: trimmed.trimmed,
           failed: trimmed.failed,
@@ -279,7 +296,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           'ran advert detection for a show',
         );
         events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
-        return { ...holds, fingerprinted, transcribed, detected, heard, trimmed };
+        return { ...holds, foldedIn, fingerprinted, transcribed, detected, heard, trimmed };
       });
     },
 

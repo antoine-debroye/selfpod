@@ -458,6 +458,39 @@ describe('one read, one row', () => {
     assert.equal(left[0].source, 'transcript');
   });
 
+  it('folds before it reads anything, so the tidy-up does not wait on the recogniser', async () => {
+    /*
+     * The ordering that kept the owner's page wrong: folding lived inside detection,
+     * which runs after transcription, so a tidy-up costing milliseconds queued behind
+     * hours of recogniser time. Every episode here is owed a transcript, and the rows
+     * must still be folded by the time the run ends.
+     */
+    const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
+    const text = normaliseText(VARIANTS[0]).join(' ');
+    for (let i = 0; i < 4; i += 1) {
+      server.db
+        .prepare(
+          `INSERT INTO ad_segments (id, show_id, signature, source, status, auto_approved, duration_ms,
+             episode_count, occurrence_count, first_seen_at, created_at, updated_at, text, raw_text, language)
+           VALUES (?, ?, ?, 'corpus', 'candidate', 0, 10000, ?, ?, ?, ?, ?, ?, ?, 'fr')`,
+        )
+        .run(`ord-${i}`, show.id, `aud-ord-${i}`, 9 - i, 9 - i, `2026-08-0${i}T09:00:00.000Z`, `2026-08-0${i}T09:00:00.000Z`, `2026-08-0${i}T09:00:00.000Z`, text, VARIANTS[0]);
+    }
+    // Nothing has been heard, and everything is owed a fresh transcript.
+    server.db.prepare('DELETE FROM episode_transcripts').run();
+    const withWords = () => server.adDetect.listSegments(show.id).filter((row) => row.text && !row.signature.startsWith('marker:'));
+    assert.ok(withWords().length >= 5);
+
+    // The fold is available on its own, without touching a single audio file.
+    const folded = server.adDetect.foldDuplicateReads(show.id);
+    assert.ok(folded >= 3, `folded ${folded}`);
+    assert.equal(withWords().length, 1, JSON.stringify(withWords().map((row) => row.id)));
+
+    // And a full pass reports it, so the activity log can say what happened.
+    const result = await server.adPipeline.processShow(show.id);
+    assert.equal(typeof result.foldedIn, 'number');
+  });
+
   it('never folds two reads the owner decided differently, nor a phrase they share', async () => {
     const show = await setUp({ canned: { 'episode-1.mp3': closing(1), 'episode-2.mp3': closing(2) } });
     const seed = (id, text, status) =>
