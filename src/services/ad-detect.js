@@ -492,10 +492,26 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
    * The oldest wins the words, since those are the ones that were decided about.
    */
   function mergeDuplicateReads(showId) {
-    const rows = selectTranscriptSegments
+    const rows = selectSegments
       .all(showId)
+      /*
+       * Anything carrying words, however it was first found. The acoustic search
+       * produces overlapping variants of one stretch as a matter of course — eight
+       * rows for one ten-second tag, at eight different episode counts — and once the
+       * words are attached to them there is nothing to tell those eight apart.
+       */
       .filter((row) => row.text && !row.signature.startsWith('marker:'))
-      .sort((a, b) => String(a.first_seen_at).localeCompare(String(b.first_seen_at)));
+      .sort((a, b) => {
+        /*
+         * A read found by its words wins over the same read found by ear, because its
+         * signature is the hash of those words and that is what a later episode is
+         * matched against. Fold the other way and the words stop being findable, so
+         * the duplicate comes straight back. Within a kind, the oldest wins: those are
+         * the words that were decided about.
+         */
+        const kind = (row) => (row.source === SEGMENT_SOURCES.TRANSCRIPT ? 0 : 1);
+        return kind(a) - kind(b) || String(a.first_seen_at).localeCompare(String(b.first_seen_at));
+      });
     const gone = new Set();
     let merged = 0;
 
@@ -785,12 +801,18 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const show = shows.getOrThrow(showId);
       if (show.ad_trim_mode === 'off' || !transcriber) return { segments: 0, skipped: 'mode_off' };
       const threshold = show.ad_auto_min_episodes ?? 3;
-      const heard = await hearShow(show);
-      if (!heard.length) return { segments: 0, skipped: 'nothing_heard' };
-
-      // Before anything is matched: one read, one row, however many ways it has been
-      // written down.
+      /*
+       * One read, one row, however many ways it has been written down — and before
+       * anything else, including the check for whether there is anything to hear.
+       * This works on the words already stored, not on transcripts, and the moment it
+       * is most needed is exactly when there are no transcripts: a change of
+       * recogniser wipes them all, and leaving the duplicates until the re-read
+       * finishes means the owner stares at eight rows of one advert for an hour.
+       */
       const foldedIn = mergeDuplicateReads(show.id);
+
+      const heard = await hearShow(show);
+      if (!heard.length) return { segments: 0, skipped: 'nothing_heard', foldedIn };
 
       const durations = Object.fromEntries(heard.map((entry) => [entry.episode.id, entry.durationMs]));
       const byId = new Map(heard.map((entry) => [entry.episode.id, entry]));
