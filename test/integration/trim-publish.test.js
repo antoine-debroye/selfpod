@@ -320,12 +320,19 @@ describe('serving the trimmed bytes', () => {
     );
   });
 
-  it('refuses a URL whose version is no longer what is published', async () => {
-    // The failure this exists for: a client holding the first half of one cut asks for
-    // the rest after the audio has been replaced, and joins the second half of a
-    // different file onto it — right total length, no error, nothing to notice. A
-    // download that fails is a download the app retries; a download that silently
-    // splices two files is an episode nobody can explain.
+  it('never hands a fragment of new audio to a client resuming an old cut', async () => {
+    /*
+     * The failure this exists for: a client holding the first half of one cut asks for
+     * the rest after the audio has been replaced, and joins the second half of a
+     * different file onto it — right total length, no error, nothing to notice.
+     *
+     * Until 1.8.6 the answer was to refuse, and the refusal turned out to have its own
+     * silent failure: an app whose download failed holds a hundred-odd bytes of the
+     * refusal itself, believes it has part of the episode, and resumes from there — so
+     * it was refused again, for ever, with no request it could make that would work.
+     * The answer now is the whole current file with a 200, which is what HTTP does for
+     * a validator that no longer matches. What must never happen is unchanged, and is
+     * what this asserts: no *fragment* of the new audio, ever.
     const show = await makeShow();
     await server.adDetect.fingerprintShow(show.id);
     await server.adDetect.detectForShow(show.id);
@@ -346,16 +353,25 @@ describe('serving the trimmed bytes', () => {
     const second = server.episodes.get(episode.id).trimmed_etag;
     assert.notEqual(second, first, 'the fixture did not actually re-cut');
 
+    const current = await media(show, episode, { query: `?v=${second}` });
+    assert.equal(current.statusCode, 200);
+
     const stale = await media(show, episode, { query: `?v=${first}`, range: 'bytes=1000-' });
-    assert.equal(stale.statusCode, 404, 'a superseded version was served the new audio');
-    assert.equal((await media(show, episode, { query: `?v=${second}` })).statusCode, 200);
+    assert.notEqual(stale.statusCode, 206, 'a superseded version was served a fragment of the new audio');
+    assert.equal(stale.statusCode, 200);
+    assert.equal(stale.headers['content-range'], undefined, 'it was answered as a range');
+    assert.equal(
+      Buffer.compare(stale.rawPayload, current.rawPayload),
+      0,
+      'a resuming client got something other than the whole current episode',
+    );
   });
 
-  it('refuses a trimmed episode asked for without any version', async () => {
-    // The first trim is the case a version alone cannot fix: the URL a client already
-    // has carries no version at all, because the episode had never been cut. The
-    // *absence* of a version has to be a claim in its own right — "the untrimmed one"
-    // — or that client resumes straight into a splice.
+  it('gives the whole cut to a client resuming an address from before it was cut', async () => {
+    // The first trim is the case a version alone cannot describe: the URL a client
+    // already has carries no version at all, because the episode had never been cut.
+    // Resuming against it must not splice untrimmed bytes into trimmed ones — so it
+    // gets the whole trimmed file and starts again.
     const show = await makeShow();
     const [episode] = server.episodes.listByShow(show.id);
     assert.equal((await media(show, episode, { query: '' })).statusCode, 200, 'untrimmed is fine');
@@ -364,7 +380,10 @@ describe('serving the trimmed bytes', () => {
     await server.trimmer.trimEpisode(server.episodes.get(episode.id));
 
     const resumed = await media(show, episode, { query: '', range: 'bytes=1000-' });
-    assert.equal(resumed.statusCode, 404, 'a client resumed an untrimmed download into trimmed bytes');
+    assert.equal(resumed.statusCode, 200);
+    assert.equal(resumed.headers['content-range'], undefined, 'it was answered as a range');
+    const current = await media(show, episode);
+    assert.equal(Buffer.compare(resumed.rawPayload, current.rawPayload), 0);
   });
 
   it('stops telling clients to cache while a re-trim is outstanding', async () => {
@@ -425,9 +444,18 @@ describe('serving the trimmed bytes', () => {
     const start = await media(show, episode, { ...old, range: 'bytes=0-999' });
     assert.equal(start.statusCode, 206);
 
-    // These two are assembling a file, and must not be handed a different one.
-    assert.equal((await media(show, episode, { ...old, range: 'bytes=1000-' })).statusCode, 404);
-    assert.equal((await media(show, episode, { ...old, range: 'bytes=-500' })).statusCode, 404);
+    /*
+     * A client resuming against an old address is holding bytes of something else —
+     * in the wild, bytes of the refusal it was sent last time. It gets the whole
+     * current file with a 200, never a fragment to append, and never a refusal it
+     * could only meet by asking again the same way.
+     */
+    for (const header of ['bytes=1000-', 'bytes=-500']) {
+      const resumed = await media(show, episode, { ...old, range: header });
+      assert.equal(resumed.statusCode, 200, `resuming with ${header} was refused`);
+      assert.equal(Buffer.compare(resumed.rawPayload, now.rawPayload), 0, `${header} got a fragment`);
+      assert.equal(resumed.headers['content-range'], undefined, `${header} was answered as a range`);
+    }
 
     // And an address with no version at all, which is what an app that saw this
     // episode before it was ever cut still holds.
@@ -465,8 +493,9 @@ describe('serving the trimmed bytes', () => {
     assert.equal(warning.level, 'warn');
   });
 
-  it('still refuses a client resuming into a cut copy that is missing', async () => {
-    // It holds bytes of the cut; the original's would not join onto them.
+  it('hands a resuming client the whole original when the cut copy is missing', async () => {
+    // It holds bytes of the cut, which the original's would not join onto — so it is
+    // given the whole file rather than a fragment, and starts again.
     const show = await makeShow();
     await approveEverything(show);
     const [episode] = server.episodes.listByShow(show.id);
@@ -476,7 +505,9 @@ describe('serving the trimmed bytes', () => {
 
     const response = await media(show, episode, { range: 'bytes=5000-' });
 
-    assert.equal(response.statusCode, 404);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['content-range'], undefined);
+    assert.equal(Buffer.compare(response.rawPayload, await originalBytes(episode)), 0);
   });
 });
 

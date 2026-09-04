@@ -424,26 +424,39 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     const range = String(request.headers.range ?? '').trim();
     const fromTheStart = range === '' || /^bytes=0-\d*$/.test(range);
 
+    /*
+     * Whether this request is to be answered with the whole file, ignoring the range
+     * it asked for. See below: it is how an address from an earlier cut is answered
+     * when the client is resuming.
+     */
+    let serveWhole = false;
+
     if (asked !== (audio.version ?? null)) {
-      if (!fromTheStart) {
-        throw notFound(
-          'That version of this episode is no longer the one being published.',
-          'stale_version',
-        );
-      }
       /*
-       * An address from an older cut, asked for from the beginning. It is served.
+       * An address from an older cut. It is served — never refused.
        *
-       * Refusing it was making the feed brittle in a way nothing could recover from:
-       * an enclosure URL lives in every subscriber's app for as long as that app keeps
-       * the episode, and every re-cut — a decision changed, an edge moved, two
-       * variants of one read folded together — minted a new one and killed all the
-       * old ones. The app then showed "Download Failed" over a hundred-byte error
-       * body, and no amount of retrying could help it, because the URL it held could
-       * never work again.
+       * An enclosure address lives in a subscriber's app for as long as that app keeps
+       * the episode, and every re-cut mints a new one. Refusing the old ones made the
+       * feed brittle in a way nothing downstream could recover from, so 1.8.2 began
+       * serving them; but only to a client starting at byte zero, on the grounds that
+       * one resuming from the middle could join two different cuts into an episode
+       * that never existed.
+       *
+       * That left the very client this was meant to rescue with no way out. An app
+       * whose download failed is holding a hundred-odd bytes of the refusal itself,
+       * believes it has part of the file, and asks to resume from there — so it was
+       * refused again, stored the refusal again, and showed "Download Failed" for
+       * ever. Retrying could not help: the only request it knew how to make was the
+       * one being refused.
+       *
+       * The answer is the one HTTP already has for a validator that no longer matches:
+       * hand over the *whole* current representation with a 200, rather than a
+       * fragment to append. Nothing can be stitched together from a complete file, so
+       * the hazard the refusal guarded against is gone with it.
        */
+      serveWhole = !fromTheStart;
       request.log.info(
-        { show: show.slug, episodeId: episode.id, asked, current: audio.version ?? null },
+        { show: show.slug, episodeId: episode.id, asked, current: audio.version ?? null, serveWhole },
         'served the current audio for an enclosure address from an earlier cut',
       );
     }
@@ -469,10 +482,11 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      * safe to clear — and made clearing it take the whole feed down with it, every
      * episode answering 404 until each one had been cut afresh. The episode the owner
      * actually has is served instead, adverts and all, loudly enough that they can see
-     * why it is suddenly longer. Only for a client starting from the beginning: one
-     * resuming is holding bytes of the cut copy and must not be handed the original's.
+     * why it is suddenly longer. A client resuming is holding bytes of the cut copy,
+     * so it is handed the whole original with a 200 rather than a fragment of it to
+     * append — the same answer a stale address gets, and for the same reason.
      */
-    if (!resolved.path && audio.isTrimmed && fromTheStart && isSafeFilename(episode.filename)) {
+    if (!resolved.path && audio.isTrimmed && isSafeFilename(episode.filename)) {
       const original = await resolveContained(shows.dirFor(show), episode.filename);
       if (original.path) {
         request.log.warn(
@@ -487,6 +501,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
         });
         resolved = original;
         fellBack = true;
+        serveWhole = serveWhole || !fromTheStart;
         serving = {
           ...audio,
           isTrimmed: false,
@@ -549,6 +564,13 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
         err.code,
       );
     }
+
+    /*
+     * Dropping the range is what turns this into a 200 with the whole file: the static
+     * handler reads it from the request. A client that asked to resume gets the
+     * complete representation instead, which is what tells it to start again.
+     */
+    if (serveWhole) delete request.headers.range;
 
     reply
       // Always from the shared MIME map, never sniffed. Left to itself the static

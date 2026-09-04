@@ -561,8 +561,11 @@ describe('the Adverts card on an episode page', () => {
      * that is the one that could join two different cuts together.
      */
     assert.equal((await server.get(stale)).statusCode, 200, 'an old address stopped playing');
-    const resuming = await server.request({ method: 'GET', url: stale, headers: { range: 'bytes=5000-' } });
-    assert.equal(resuming.statusCode, 404, 'a client resuming into an older cut was not refused');
+    // An app whose download failed holds part of the refusal and asks to resume from
+    // there. It gets the whole file, so it can actually recover.
+    const resuming = await server.request({ method: 'GET', url: stale, headers: { range: 'bytes=59-' } });
+    assert.equal(resuming.statusCode, 200, 'a resuming client was left with no way out');
+    assert.equal(resuming.headers['content-range'], undefined);
 
     const now = await server.get(src);
     assert.equal(now.statusCode, 307, 'the preview stopped resolving');

@@ -7,6 +7,25 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.6 — 2026-09-04
+
+### Fixed
+
+- **An app whose download failed could never recover.** 1.8.2 made an enclosure address
+  from an earlier cut keep working, but only for a client starting at byte zero: one
+  resuming from the middle was still refused, because a fragment of a different cut
+  spliced onto what it held would make an episode that never existed. That left the
+  very client the change was meant to rescue with no way out. An app whose download
+  failed is holding a hundred-odd bytes of the refusal itself, believes it has part of
+  the episode, and asks to resume from there — so it was refused again, stored the
+  refusal again, and showed "Download Failed" for ever. Retrying could not help,
+  because the only request it knew how to make was the one being refused.
+
+  A resuming client is now given the *whole* current episode with a 200, which is what
+  HTTP does for a validator that no longer matches, rather than a fragment to append or
+  a refusal. Nothing can be spliced out of a complete file, so the hazard the refusal
+  guarded against goes with it, and the app recovers on its next attempt.
+
 ## 1.8.5 — 2026-09-04
 
 ### Fixed
