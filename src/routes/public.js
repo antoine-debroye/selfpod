@@ -408,10 +408,43 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      * that had not changed, and some apps re-download on that alone.
      */
     const asked = request.query?.v ?? null;
+    /*
+     * Whether this client is starting the file from the beginning.
+     *
+     * This is the whole of the distinction the check above is really about. Only a
+     * client holding the first part of one cut and asking for the rest can join two
+     * different cuts into an episode that never existed. A client with no range, or
+     * one asking from byte zero, receives a whole consistent file whichever cut it
+     * gets — so for it a version that has moved on is not a hazard, it is just an old
+     * address.
+     *
+     * Anything else is refused: a suffix range (`bytes=-500`) and a mid-file range
+     * both describe a client assembling a file out of parts.
+     */
+    const range = String(request.headers.range ?? '').trim();
+    const fromTheStart = range === '' || /^bytes=0-\d*$/.test(range);
+
     if (asked !== (audio.version ?? null)) {
-      throw notFound(
-        'That version of this episode is no longer the one being published.',
-        'stale_version',
+      if (!fromTheStart) {
+        throw notFound(
+          'That version of this episode is no longer the one being published.',
+          'stale_version',
+        );
+      }
+      /*
+       * An address from an older cut, asked for from the beginning. It is served.
+       *
+       * Refusing it was making the feed brittle in a way nothing could recover from:
+       * an enclosure URL lives in every subscriber's app for as long as that app keeps
+       * the episode, and every re-cut — a decision changed, an edge moved, two
+       * variants of one read folded together — minted a new one and killed all the
+       * old ones. The app then showed "Download Failed" over a hundred-byte error
+       * body, and no amount of retrying could help it, because the URL it held could
+       * never work again.
+       */
+      request.log.info(
+        { show: show.slug, episodeId: episode.id, asked, current: audio.version ?? null },
+        'served the current audio for an enclosure address from an earlier cut',
       );
     }
 
@@ -425,7 +458,44 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     // trimmed directory is SelfPod's own and holds no symlinks, but it is on the same
     // volume as the share, and the check costs one `realpath`.
     const showDir = sourceDir;
-    const resolved = await resolveContained(sourceDir, audio.filename);
+    let serving = audio;
+    let fellBack = false;
+    let resolved = await resolveContained(sourceDir, audio.filename);
+
+    /*
+     * The cut copy is gone, and the original is right there.
+     *
+     * `/data/.trimmed` holds nothing that cannot be made again, which is what makes it
+     * safe to clear — and made clearing it take the whole feed down with it, every
+     * episode answering 404 until each one had been cut afresh. The episode the owner
+     * actually has is served instead, adverts and all, loudly enough that they can see
+     * why it is suddenly longer. Only for a client starting from the beginning: one
+     * resuming is holding bytes of the cut copy and must not be handed the original's.
+     */
+    if (!resolved.path && audio.isTrimmed && fromTheStart && isSafeFilename(episode.filename)) {
+      const original = await resolveContained(shows.dirFor(show), episode.filename);
+      if (original.path) {
+        request.log.warn(
+          { show: show.slug, episodeId: episode.id, missing: audio.filename },
+          'the cut copy of this episode is missing, so the original was served with its adverts in',
+        );
+        health?.set(`trimmed_missing_${show.id}`, {
+          level: 'warn',
+          message: `SelfPod is serving “${show.title}” with its adverts back in.`,
+          detail:
+            'The cut copies of one or more episodes are missing from /data/.trimmed, so subscribers are being sent the original files. SelfPod makes them again on its next pass; if this keeps happening, check that /data has room and is writable.',
+        });
+        resolved = original;
+        fellBack = true;
+        serving = {
+          ...audio,
+          isTrimmed: false,
+          filename: episode.filename,
+          sizeBytes: episode.file_size_bytes ?? null,
+          durationSeconds: episode.duration_seconds ?? null,
+        };
+      }
+    }
 
     /**
      * One place to record a file that could not be served, in the owner's language.
@@ -433,7 +503,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      * used to be invisible here.
      */
     const refuse = (error, code) => {
-      request.log.warn({ file: audio.filename, show: show.slug, code }, error);
+      request.log.warn({ file: serving.filename, show: show.slug, code }, error);
       if (!isOwnRequest(request)) {
         stats?.record({
           kind: ACCESS_KIND.DOWNLOAD,
@@ -454,17 +524,17 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     if (!resolved.path) {
       if (resolved.reason === 'escapes') {
         throw refuse(
-          `${audio.filename} does not resolve to a file inside this show's folder, so SelfPod refused to serve it. If it is a symlink pointing elsewhere on the host, replace it with the real file — SelfPod only serves what is genuinely in the folder.`,
+          `${serving.filename} does not resolve to a file inside this show's folder, so SelfPod refused to serve it. If it is a symlink pointing elsewhere on the host, replace it with the real file — SelfPod only serves what is genuinely in the folder.`,
           null,
         );
       }
       if (resolved.code === 'EACCES') {
         throw refuse(
-          `Permission denied reading ${audio.filename} as UID ${config.runtimeUid ?? config.puid}.`,
+          `Permission denied reading ${serving.filename} as UID ${config.runtimeUid ?? config.puid}.`,
           'EACCES',
         );
       }
-      throw refuse(`${audio.filename} is not on disk.`, resolved.code);
+      throw refuse(`${serving.filename} is not on disk.`, resolved.code);
     }
 
     const absolute = resolved.path;
@@ -474,8 +544,8 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     } catch (err) {
       throw refuse(
         err.code === 'EACCES'
-          ? `Permission denied reading ${audio.filename} as UID ${config.runtimeUid ?? config.puid}.`
-          : `${audio.filename} is not on disk.`,
+          ? `Permission denied reading ${serving.filename} as UID ${config.runtimeUid ?? config.puid}.`
+          : `${serving.filename} is not on disk.`,
         err.code,
       );
     }
@@ -495,9 +565,15 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       // already told SelfPod to remove.
       .header(
         'cache-control',
-        episode.trim_status === TRIM_STATUS.PENDING || episode.trim_status === TRIM_STATUS.TRIMMING
-          ? 'private, no-cache'
-          : 'private, max-age=86400',
+        // Nothing keeps a fallback. These bytes carry adverts under an address whose
+        // version says they are gone, and the copy that says otherwise is being made
+        // again right now; a day in a client's cache is how that answer outlives the
+        // problem.
+        fellBack
+          ? 'private, no-store'
+          : episode.trim_status === TRIM_STATUS.PENDING || episode.trim_status === TRIM_STATUS.TRIMMING
+            ? 'private, no-cache'
+            : 'private, max-age=86400',
       )
       // Named after the original either way: a listener saving the file wants the
       // episode's name, not SelfPod's internal one for the copy.
@@ -512,7 +588,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       episodeId: episode.id,
       showId: show.id,
       totalBytes: fileStats.size,
-      name: audio.filename,
+      name: serving.filename,
     });
 
     // Range handling (206 responses, `Accept-Ranges`, 416 for an unsatisfiable

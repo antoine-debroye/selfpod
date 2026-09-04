@@ -393,9 +393,61 @@ describe('serving the trimmed bytes', () => {
     assert.equal(Buffer.compare(response.rawPayload, await originalBytes(episode)), 0);
   });
 
-  it('refuses rather than serving the original when the copy is missing', async () => {
-    // Silently falling back would publish the adverts under a URL whose version says
-    // they are gone, and every cache in between would keep that answer.
+  it('still plays an enclosure address from an earlier cut, and still refuses a resume', async () => {
+    /*
+     * The failure this prevents, seen on a real instance: an enclosure URL lives in a
+     * subscriber's app for as long as that app keeps the episode, and every re-cut —
+     * a decision changed, an edge moved, two spellings of one read folded together —
+     * minted a new address and killed every old one. The app showed "Download Failed"
+     * over a hundred-byte error body and could never recover, because retrying fetched
+     * the same dead address.
+     *
+     * Only a client assembling a file out of parts can join two different cuts
+     * together. One starting at the beginning gets a whole, consistent episode
+     * whichever cut it is, so for it an address that has moved on is merely old.
+     */
+    const show = await makeShow();
+    await approveEverything(show);
+    const [episode] = server.episodes.listByShow(show.id);
+    await server.trimmer.trimEpisode(episode);
+    const current = server.episodes.get(episode.id).trimmed_etag;
+    assert.ok(current, 'nothing was cut to make an old address from');
+    const old = { query: '?v=1a2b3c4d5e6f' };
+
+    const fresh = await media(show, episode, old);
+    assert.equal(fresh.statusCode, 200, 'an address from an earlier cut no longer plays');
+    assert.equal(fresh.headers['content-type'], 'audio/mpeg');
+    // It is the audio being published now, whole — not the cut the address named.
+    const now = await media(show, episode);
+    assert.equal(Buffer.compare(fresh.rawPayload, now.rawPayload), 0);
+
+    // A range that starts at the beginning is the same client, asking for it in pieces.
+    const start = await media(show, episode, { ...old, range: 'bytes=0-999' });
+    assert.equal(start.statusCode, 206);
+
+    // These two are assembling a file, and must not be handed a different one.
+    assert.equal((await media(show, episode, { ...old, range: 'bytes=1000-' })).statusCode, 404);
+    assert.equal((await media(show, episode, { ...old, range: 'bytes=-500' })).statusCode, 404);
+
+    // And an address with no version at all, which is what an app that saw this
+    // episode before it was ever cut still holds.
+    assert.equal((await media(show, episode, { query: '' })).statusCode, 200);
+  });
+
+  it('serves the original, loudly and uncached, when the cut copy is missing', async () => {
+    /*
+     * This used to refuse, on the grounds that falling back publishes the adverts
+     * under a URL whose version says they are gone, and that caches would keep that
+     * answer. The first half is true and is the reason for the warning and the log
+     * line; the second is answered by refusing to let anything store it.
+     *
+     * What decided it is that `/data/.trimmed` holds nothing that cannot be made
+     * again — which is what makes it safe to clear, and made clearing it take the
+     * whole feed down, every episode answering 404 until each had been cut afresh.
+     * §19.5 already settles the same trade the same way for a trim that fails: an
+     * advert that survives explains itself the moment it is heard, and an episode
+     * that silently never appears does not.
+     */
     const show = await makeShow();
     await approveEverything(show);
     const [episode] = server.episodes.listByShow(show.id);
@@ -404,6 +456,25 @@ describe('serving the trimmed bytes', () => {
     await rm(server.trimmer.pathFor(server.episodes.get(episode.id)));
 
     const response = await media(show, episode);
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(Buffer.compare(response.rawPayload, await originalBytes(episode)), 0);
+    assert.match(response.headers['cache-control'], /no-store/, 'a fallback was left cacheable');
+    const warning = server.health.list().find((issue) => issue.key.startsWith('trimmed_missing_'));
+    assert.ok(warning, 'nothing told the owner their subscribers are getting the adverts back');
+    assert.equal(warning.level, 'warn');
+  });
+
+  it('still refuses a client resuming into a cut copy that is missing', async () => {
+    // It holds bytes of the cut; the original's would not join onto them.
+    const show = await makeShow();
+    await approveEverything(show);
+    const [episode] = server.episodes.listByShow(show.id);
+    await server.trimmer.trimEpisode(episode);
+    const { rm } = await import('node:fs/promises');
+    await rm(server.trimmer.pathFor(server.episodes.get(episode.id)));
+
+    const response = await media(show, episode, { range: 'bytes=5000-' });
 
     assert.equal(response.statusCode, 404);
   });
