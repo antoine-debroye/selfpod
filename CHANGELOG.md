@@ -7,6 +7,17 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.5 — 2026-09-04
+
+### Fixed
+
+- **Folding duplicate rows waited on the recogniser.** It lived inside detection, which
+  runs after transcription, so a tidy-up costing milliseconds queued behind hours of
+  audio work — on a real instance a page showing one advert eight times stayed that way
+  all afternoon while the show was read again. It is arithmetic on words already
+  stored, reads no audio and decodes nothing, so it now runs first, before a single
+  episode is opened. The activity log says how many rows were folded.
+
 ## 1.8.4 — 2026-09-04
 
 ### Fixed

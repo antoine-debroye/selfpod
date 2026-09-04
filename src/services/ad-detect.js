@@ -793,6 +793,19 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     },
 
     /**
+     * One read, one row, however many ways it has been written down.
+     *
+     * Separate from detection and called before it, because it is arithmetic on words
+     * already stored — no audio is read and nothing is decoded — while everything else
+     * in a pass is minutes of work an episode. Folded in with detection, a tidy-up that
+     * takes milliseconds queued behind hours of recogniser time, and the owner watched
+     * eight rows of one advert sit there for an afternoon while the show was re-read.
+     */
+    foldDuplicateReads(showId) {
+      return mergeDuplicateReads(showId);
+    },
+
+    /**
      * Everything the words say about a show, in the order that matters (spec §19.6):
      * the boundaries the owner taught, then the reads it already knows, then what
      * repeats, then what sounds like a sponsor read in a single episode.
@@ -801,14 +814,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const show = shows.getOrThrow(showId);
       if (show.ad_trim_mode === 'off' || !transcriber) return { segments: 0, skipped: 'mode_off' };
       const threshold = show.ad_auto_min_episodes ?? 3;
-      /*
-       * One read, one row, however many ways it has been written down — and before
-       * anything else, including the check for whether there is anything to hear.
-       * This works on the words already stored, not on transcripts, and the moment it
-       * is most needed is exactly when there are no transcripts: a change of
-       * recogniser wipes them all, and leaving the duplicates until the re-read
-       * finishes means the owner stares at eight rows of one advert for an hour.
-       */
+      // Already done by the pipeline before any of the slow stages, and cheap enough
+      // to repeat here for anything that calls this directly.
       const foldedIn = mergeDuplicateReads(show.id);
 
       const heard = await hearShow(show);
