@@ -5,12 +5,12 @@
   const timeline = it.timeline;
 %>
 <% for (const bar of timeline.episodes) { %>
-  <%~ include('./cut-bar.eta', { bar, target: '#ad-panel', returnTo: null }) %>
+  <%~ include('./cut-bar.eta', { bar, target: '#cuts-panel', returnTo: null }) %>
 <% } %>
 <% if (timeline.nextBefore) { %>
-  <div class="ad-timeline__more" id="ad-timeline-more">
-    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/adverts?before=<%= encodeURIComponent(timeline.nextBefore) %>#ad-timeline"
+  <div class="cuts-timeline__more" id="cuts-timeline-more">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/adverts?before=<%= encodeURIComponent(timeline.nextBefore) %>#cuts-timeline"
        hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-timeline?before=<%= encodeURIComponent(timeline.nextBefore) %>"
-       hx-target="#ad-timeline-more" hx-swap="outerHTML">Show older</a>
+       hx-target="#cuts-timeline-more" hx-swap="outerHTML">Show older</a>
   </div>
 <% } %>

@@ -1562,7 +1562,7 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   .ep-table--pinned .dur,
   .ep-table--pinned .size,
   .ep-table--pinned .ep-reach,
-  .ep-table--pinned .ep-adverts,
+  .ep-table--pinned .ep-cuts,
   .ep-table--pinned .ep-status {
     display: inline-block;
     vertical-align: middle;
@@ -2140,28 +2140,28 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
    cut is solid, waiting is hatched, restored is an outline. The word beside
    each stretch says the same thing again.
    ═══════════════════════════════════════════════════════════════════════════ */
-.ad-work:empty { display: none; }
-.ad-work {
+.cuts-work:empty { display: none; }
+.cuts-work {
   display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
   padding: 9px 14px; border-radius: var(--r-sm);
   background: var(--teal-soft); color: #1E547A; font-size: 13.5px;
 }
-.ad-work::before {
+.cuts-work::before {
   content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teal);
   animation: sp-pulse 1.6s ease-in-out infinite;
 }
 
-.ad-totals {
+.cuts-totals {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 14px;
 }
-.ad-totals__item {
+.cuts-totals__item {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
   padding: 12px 14px; box-shadow: var(--shadow); min-width: 0;
 }
-.ad-totals dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
-.ad-totals dd { margin: 2px 0 0; font-family: var(--serif); font-size: 26px; font-weight: 600; color: var(--ink); }
-.ad-note { font-size: 13px; margin: -4px 0 14px; color: var(--ink-soft); }
-.ad-note--warn { color: #8A5E10; }
+.cuts-totals dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.cuts-totals dd { margin: 2px 0 0; font-family: var(--serif); font-size: 26px; font-weight: 600; color: var(--ink); }
+.cuts-note { font-size: 13px; margin: -4px 0 14px; color: var(--ink-soft); }
+.cuts-note--warn { color: #8A5E10; }
 
 .rules { list-style: none; margin: 8px 0 0; }
 .rule {
@@ -2234,36 +2234,36 @@ a.cut-pill:hover { text-decoration: underline; }
 }
 .stretch__play:hover { background: var(--paper-2); }
 .stretch__play.is-playing { background: var(--accent); border-color: var(--accent); color: #fff; }
-.ad-timeline__more { margin-top: 12px; }
-.ad-settings > summary { cursor: pointer; margin-bottom: 0; }
-.ad-settings[open] > summary { margin-bottom: 14px; }
-.ad-settings__check { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
-.meta--adverts { margin-top: 2px; }
-.ep-adverts { white-space: nowrap; }
-.ep-table--pinned .ep-adverts:empty { display: none; }
+.cuts-timeline__more { margin-top: 12px; }
+.cuts-settings > summary { cursor: pointer; margin-bottom: 0; }
+.cuts-settings[open] > summary { margin-bottom: 14px; }
+.cuts-settings__check { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.meta--cuts { margin-top: 2px; }
+.ep-cuts { white-space: nowrap; }
+.ep-table--pinned .ep-cuts:empty { display: none; }
 
 /* The episode page's Adverts card. */
-.ep-ad__hold { margin-bottom: 14px; }
-.ep-ad__summary { margin-bottom: 12px; }
-.ep-ad__headline { font-size: 14px; line-height: 1.5; }
-.ep-ad__figures { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 10px 0 6px; }
-.ep-ad__figures div { min-width: 0; }
-.ep-ad__figures dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
-.ep-ad__figures dd { margin: 2px 0 0; font-size: 13.5px; }
-.ep-ad__players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
-.ep-ad__player { min-width: 0; }
-.ep-ad__player audio { width: 100%; margin-top: 4px; }
+.ep-cuts__hold { margin-bottom: 14px; }
+.ep-cuts__summary { margin-bottom: 12px; }
+.ep-cuts__headline { font-size: 14px; line-height: 1.5; }
+.ep-cuts__figures { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 10px 0 6px; }
+.ep-cuts__figures div { min-width: 0; }
+.ep-cuts__figures dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.ep-cuts__figures dd { margin: 2px 0 0; font-size: 13.5px; }
+.ep-cuts__players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.ep-cuts__player { min-width: 0; }
+.ep-cuts__player audio { width: 100%; margin-top: 4px; }
 .teach-range { margin: 6px 0 4px; padding: 12px 14px; background: var(--paper-2); border-radius: var(--r-sm); }
 .teach-range__time { width: 88px; flex: none; }
-.ep-ad__more { margin-top: 8px; }
+.ep-cuts__more { margin-top: 8px; }
 /* The words are evidence for the card above them, not a card of their own. */
-.ep-ad__heard { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ep-cuts__heard { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 @media (max-width: 640px) {
-  .ad-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cuts-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rule, .stretch { flex-wrap: wrap; gap: 8px; }
   .rule__main, .stretch__main { flex: 1 1 100%; }
   .rule__act, .stretch__act { justify-content: flex-start; }
-  .ep-ad__players { grid-template-columns: 1fr; }
+  .ep-cuts__players { grid-template-columns: 1fr; }
   .rule-teach select, .tx__teach-row select, .teach-range__row select { flex: 1 1 100%; }
 }

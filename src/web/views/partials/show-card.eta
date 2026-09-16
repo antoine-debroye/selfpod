@@ -42,7 +42,7 @@
         <% } %>
       </div>
       <% if (show.advertsCaption) { %>
-        <div class="meta meta--adverts"><span><%= show.advertsCaption %></span></div>
+        <div class="meta meta--cuts"><span><%= show.advertsCaption %></span></div>
       <% } %>
     </div>
   </a>

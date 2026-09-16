@@ -9,13 +9,13 @@
   const rules = it.rules ?? { rows: [], kept: [] };
   const timeline = it.timeline ?? { episodes: [], nextBefore: null };
 %>
-<div id="ad-panel" class="ad-panel"
+<div id="cuts-panel" class="cuts-panel"
      hx-get="/ui/shows/<%= slug %>/ad-panel"
      hx-trigger="sse:ad-changed-<%= show.id %> from:body"
      hx-swap="outerHTML">
 
-  <div id="ad-work" class="ad-work" role="status" aria-live="polite"
-       sse-swap="ad-work-<%= show.id %>" hx-swap="innerHTML"><%~ it.workHtml ?? '' %></div>
+  <div id="cuts-work" class="cuts-work" role="status" aria-live="polite"
+       sse-swap="cuts-work-<%= show.id %>" hx-swap="innerHTML"><%~ it.workHtml ?? '' %></div>
 
   <% if (it.formError) { %>
     <div class="notice warn" role="alert"><%= it.formError %></div>
@@ -27,16 +27,16 @@
     </div>
   <% } else { %>
 
-    <dl class="ad-totals">
+    <dl class="cuts-totals">
       <% for (const figure of it.totals ?? []) { %>
-        <div class="ad-totals__item"><dt><%= figure.label %></dt><dd><%= figure.value %></dd></div>
+        <div class="cuts-totals__item"><dt><%= figure.label %></dt><dd><%= figure.value %></dd></div>
       <% } %>
     </dl>
-    <% if (it.heldSentence) { %><p class="ad-note ad-note--warn"><%= it.heldSentence %></p><% } %>
-    <% if (it.failedSentence) { %><p class="ad-note ad-note--warn"><%= it.failedSentence %></p><% } %>
-    <% if (it.engineSentence) { %><p class="ad-note ad-note--warn"><%= it.engineSentence %></p><% } %>
+    <% if (it.heldSentence) { %><p class="cuts-note cuts-note--warn"><%= it.heldSentence %></p><% } %>
+    <% if (it.failedSentence) { %><p class="cuts-note cuts-note--warn"><%= it.failedSentence %></p><% } %>
+    <% if (it.engineSentence) { %><p class="cuts-note cuts-note--warn"><%= it.engineSentence %></p><% } %>
 
-    <section class="form-card" id="ad-rules">
+    <section class="form-card" id="cuts-rules">
       <div class="ftitle">What SelfPod cuts</div>
       <% if (rules.rows.length) { %>
         <ul class="rules">
@@ -49,7 +49,7 @@
               </div>
               <div class="rule__act">
                 <% for (const action of rule.actions) { %>
-                  <%~ include('./ad-action.eta', { action, target: '#ad-panel', returnTo: null }) %>
+                  <%~ include('./ad-action.eta', { action, target: '#cuts-panel', returnTo: null }) %>
                 <% } %>
               </div>
             </li>
@@ -60,7 +60,7 @@
       <% } %>
 
       <form class="rule-teach" method="post" action="/ui/shows/<%= slug %>/ad-markers"
-            hx-post="/ui/shows/<%= slug %>/ad-markers" hx-target="#ad-panel" hx-swap="outerHTML">
+            hx-post="/ui/shows/<%= slug %>/ad-markers" hx-target="#cuts-panel" hx-swap="outerHTML">
         <label class="rule-teach__lead" for="boundary-position">The programme</label>
         <select id="boundary-position" name="position">
           <option value="starts">starts when it says</option>
@@ -84,7 +84,7 @@
                 </div>
                 <div class="rule__act">
                   <% for (const action of rule.actions) { %>
-                    <%~ include('./ad-action.eta', { action, target: '#ad-panel', returnTo: null }) %>
+                    <%~ include('./ad-action.eta', { action, target: '#cuts-panel', returnTo: null }) %>
                   <% } %>
                 </div>
               </li>
@@ -94,16 +94,16 @@
       <% } %>
     </section>
 
-    <section class="form-card" id="ad-timeline">
+    <section class="form-card" id="cuts-timeline">
       <div class="ftitle">Episode by episode</div>
       <%~ include('./ad-timeline-items.eta', { show, timeline }) %>
     </section>
   <% } %>
 
-  <details class="form-card ad-settings" <%= mode === 'off' ? 'open' : '' %>>
+  <details class="form-card cuts-settings" <%= mode === 'off' ? 'open' : '' %>>
     <summary class="ftitle">Settings</summary>
     <form method="post" action="/ui/shows/<%= slug %>/ad-trim"
-          hx-post="/ui/shows/<%= slug %>/ad-trim" hx-target="#ad-panel" hx-swap="outerHTML">
+          hx-post="/ui/shows/<%= slug %>/ad-trim" hx-target="#cuts-panel" hx-swap="outerHTML">
       <fieldset class="modal__choices">
         <legend class="sr-only">What should SelfPod do about adverts?</legend>
         <label class="choice">
@@ -170,8 +170,8 @@
     </form>
 
     <% if (mode !== 'off') { %>
-      <form class="ad-settings__check" method="post" action="/ui/shows/<%= slug %>/ad-detect"
-            hx-post="/ui/shows/<%= slug %>/ad-detect" hx-target="#ad-panel" hx-swap="outerHTML">
+      <form class="cuts-settings__check" method="post" action="/ui/shows/<%= slug %>/ad-detect"
+            hx-post="/ui/shows/<%= slug %>/ad-detect" hx-target="#cuts-panel" hx-swap="outerHTML">
         <span class="muted">SelfPod checks after every scan.</span>
         <button class="btn btn-ghost btn-sm" type="submit">Check now</button>
       </form>

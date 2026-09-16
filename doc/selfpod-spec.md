@@ -1228,6 +1228,10 @@ states (Cut, Waiting, Kept, Restored here). Boundaries are taught by typing thei
 stretches by time on an episode page, as well as by words in its transcript. The episode page
 plays the original beside the published copy.
 
+**Amended in 1.9.1.** No class or id on these pages may contain *ad*, *ads*, *advert*,
+*sponsor* or *promo* as a word: ad blockers hide elements by those names whatever the server
+sends (`test/integration/adblock-names.test.js`).
+
 **What it costs.** Measured on the owner's French show on a desktop: the `base`
 model at about 40× real time and `small` at about 20×; on a two-thread Core-class
 NAS expect several times real time for `base`. The image grows by about 260 MB for
