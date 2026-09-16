@@ -6,6 +6,7 @@ import { resolveContained } from '../../lib/contained-path.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { cutFrames } from '../../lib/mp3-cut.js';
 import { frameProfile } from '../../lib/mp3-frames.js';
+import { msToFrame } from '../../lib/fingerprint-file.js';
 import { presentSegment } from '../../lib/present-segment.js';
 import { isSafeFilename } from '../../lib/slug.js';
 
@@ -73,6 +74,8 @@ export default async function adSegmentRoutes(fastify, services) {
       listening: context.listening,
       listen: context.listen,
       markers: adDetect.listMarkers(show.id).map(presentMarker),
+      /* ---- the sound of a jingle (spec §19.6) ---- */
+      anchor: services.advertsView.presentAnchor(services.advertsView.currentAnchorFor(show.id)),
     };
   });
 
@@ -339,6 +342,99 @@ export default async function adSegmentRoutes(fastify, services) {
       .header('content-type', 'audio/mpeg')
       .header('content-length', String(sample.buffer.length))
       // Derived from files that can change, and only ever a few seconds long.
+      .header('cache-control', 'private, no-store')
+      .send(sample.buffer);
+  });
+
+  /* ---- the sound of a jingle (spec §19.6) ---- */
+
+  /** "Yes, that's the jingle" — confirmed, and cut for on the very next run. */
+  fastify.post('/shows/:id/ad-anchors/:anchorId/confirm', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    const anchor = adDetect.getAnchor(request.params.anchorId);
+    if (!anchor || anchor.show_id !== show.id) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+    adDetect.confirmAnchor(anchor.id);
+    const result = await adPipeline.processShow(show.id);
+    return { anchor: services.advertsView.presentAnchor(adDetect.getAnchor(anchor.id)), trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  /** "No, that's not the jingle" — a proposal only; nothing was ever cut by it. */
+  fastify.post('/shows/:id/ad-anchors/:anchorId/dismiss', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    const anchor = adDetect.getAnchor(request.params.anchorId);
+    if (!anchor || anchor.show_id !== show.id) throw notFound('That proposal no longer exists.', 'anchor_not_found');
+    if (anchor.confirmed_at) throw badRequest('That jingle is already confirmed — remove it instead of dismissing it.', 'anchor_confirmed');
+    adDetect.dismissAnchor(anchor.id);
+    return { anchor: services.advertsView.presentAnchor(adDetect.getAnchor(anchor.id)) };
+  });
+
+  /** Forgets a confirmed jingle and puts back everything it cut. */
+  fastify.delete('/ad-anchors/:id', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const anchor = adDetect.getAnchor(request.params.id);
+    if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+    adDetect.removeAnchor(anchor.id);
+    await adPipeline.processShow(anchor.show_id);
+    return { removed: true };
+  });
+
+  /** "This is the jingle" — pointed at by hand, on an episode SelfPod has fingerprinted. */
+  fastify.post('/episodes/:id/ad-anchor', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const episode = episodes.getOrThrow(request.params.id);
+    const show = shows.getOrThrow(episode.show_id);
+    const body = request.body ?? {};
+    const startMs = Number(body.startMs);
+    const endMs = Number(body.endMs);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      throw badRequest('Say a first and a last moment, in that order.', 'invalid_range');
+    }
+    const anchor = await adDetect.addAnchorFromRange({ showId: show.id, episodeId: episode.id, startMs, endMs });
+    const result = await adPipeline.processShow(show.id);
+    return { anchor: services.advertsView.presentAnchor(anchor), trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  /**
+   * The jingle's own exemplar clip, as audio, so a proposal can be heard before it is
+   * confirmed. Built the same way a segment's sample is: everything but the
+   * exemplar range cut away from a whole episode, never an arbitrary range chosen by
+   * the request.
+   */
+  fastify.get('/ad-anchors/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, async (request, reply) => {
+    const anchor = adDetect.getAnchor(request.params.id);
+    if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+
+    const episode = anchor.exemplar_episode_id ? episodes.get(anchor.exemplar_episode_id) : null;
+    if (!episode) throw notFound('There is no episode to play this from.', 'no_exemplar');
+
+    if (!isSafeFilename(episode.filename)) throw notFound('No episode here.', 'not_found');
+    const resolved = await resolveContained(shows.dirFor(shows.getOrThrow(episode.show_id)), episode.filename);
+    if (!resolved.path) throw notFound('That episode is not readable right now.', 'file_missing');
+
+    let buffer;
+    try {
+      buffer = await readFile(resolved.path);
+    } catch {
+      throw notFound('That episode is not readable right now.', 'file_missing');
+    }
+
+    const profile = frameProfile(buffer);
+    if (!profile) throw notFound('That episode could not be played.', 'not_playable');
+    const timing = { sampleRate: profile.frames[0]?.sampleRate, samplesPerFrame: profile.frames[0]?.samplesPerFrame };
+    const total = profile.frameCount ?? 0;
+    const contextSeconds = Math.max(0, Math.min(10, Number(request.query?.context) || 0));
+    const contextFrames = timing.sampleRate
+      ? Math.round((contextSeconds * 1000 * timing.sampleRate) / (timing.samplesPerFrame * 1000))
+      : 0;
+    const from = Math.max(0, msToFrame(anchor.exemplar_start_ms, timing) - contextFrames);
+    const to = Math.min(total, msToFrame(anchor.exemplar_end_ms, timing) + 1 + contextFrames);
+    const sample = cutFrames(buffer, [
+      { startFrame: 0, endFrame: from },
+      { startFrame: to, endFrame: total },
+    ]);
+    if (!sample) throw notFound('That jingle could not be played.', 'not_playable');
+
+    return reply
+      .header('content-type', 'audio/mpeg')
+      .header('content-length', String(sample.buffer.length))
       .header('cache-control', 'private, no-store')
       .send(sample.buffer);
   });

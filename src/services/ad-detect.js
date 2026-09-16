@@ -12,13 +12,22 @@ import {
   TRIM_STATUS,
 } from '../constants.js';
 import { nowIso } from '../lib/dates.js';
-import { notFound } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
 import { decodeFingerprint, encodeFingerprint, msToFrame } from '../lib/fingerprint-file.js';
 import { createFingerprinter } from '../lib/acoustic-fingerprint.js';
 import { decodeToMono } from '../lib/decode-audio.js';
 import { frameProfile } from '../lib/mp3-frames.js';
 import { findRepeatedAudio } from '../lib/repeated-audio.js';
+import {
+  ANCHOR_MATCH_BER,
+  DEFAULT_SEARCH_MS,
+  MIN_ANCHOR_CUT_MS,
+  SUB_MS,
+  anchorClipFrom,
+  findHeadAnchors,
+  locateAnchor,
+} from '../lib/audio-anchor.js';
 import { safeToApproveAutomatically } from '../lib/auto-approve.js';
 import { newId } from '../lib/tokens.js';
 import { normaliseText, normaliseTokens } from '../lib/text-normalise.js';
@@ -191,12 +200,23 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
    * its episodes would leave them looking settled, and the publish gate would let them
    * out before the cut carrying that very approval had been made.
    */
+  /**
+   * `only`, when given, is the exact set of episode ids to mark — never re-derived
+   * from the segment's *current* occurrences. `replaceOccurrences` has always already
+   * run by the time this is called with one, and an episode `only` names precisely
+   * because its occurrence was just *removed* would otherwise vanish from the very
+   * query meant to find it: `SELECT ... FROM ad_segment_occurrences WHERE segment_id`
+   * no longer has a row for it at all, so it could never be marked for the re-cut
+   * that puts its audio back. Losing an occurrence is exactly when a re-cut matters
+   * most — it is what un-trims an episode a segment no longer covers.
+   */
   function markForRecut(segmentId, only = null) {
-    const rows = db
-      .prepare('SELECT DISTINCT episode_id FROM ad_segment_occurrences WHERE segment_id = ?')
-      .all(segmentId)
-      .map((row) => row.episode_id)
-      .filter((id) => !only || only.has(id));
+    const rows = only
+      ? [...only]
+      : db
+          .prepare('SELECT DISTINCT episode_id FROM ad_segment_occurrences WHERE segment_id = ?')
+          .all(segmentId)
+          .map((row) => row.episode_id);
     if (!rows.length) return;
     const mark = db.prepare(
       `UPDATE episodes SET trim_status = '${TRIM_STATUS.PENDING}', updated_at = @now WHERE id = @id`,
@@ -355,10 +375,19 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   );
   const selectOccurrencesOf = db.prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ?');
   const selectCorpusOccurrencesIn = db.prepare(
+    /*
+     * An anchor's cut also carries `source = 'corpus'` — accurately, since it too is
+     * found by comparing sound — which would otherwise put it in front of this query
+     * and let a pre-roll's transcribed words attach to it as though it were an
+     * ordinary repeated stretch. Its signature is excluded here for the same reason a
+     * taught boundary's `marker:` signature never appears among "the words already
+     * decided about": an anchor is decided by the owner confirming it, never by what
+     * a transcript happens to say about the audio in front of it.
+     */
     `SELECT o.*, s.id AS segment_id, s.status, s.text
        FROM ad_segment_occurrences o
        JOIN ad_segments s ON s.id = o.segment_id
-      WHERE o.episode_id = ? AND s.source = '${SEGMENT_SOURCES.CORPUS}'`,
+      WHERE o.episode_id = ? AND s.source = '${SEGMENT_SOURCES.CORPUS}' AND s.signature NOT LIKE 'anchor:%'`,
   );
   const selectMarkers = db.prepare('SELECT * FROM ad_markers WHERE show_id = ? ORDER BY created_at');
   const selectMarker = db.prepare('SELECT * FROM ad_markers WHERE id = ?');
@@ -464,6 +493,15 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
 
   function isClaimed(claimed, episodeId, start, end) {
     return (claimed.get(episodeId) ?? []).some(([a, b]) => start <= b && end >= a);
+  }
+
+  /** The last token that starts before `ms` — the token-index equivalent of a millisecond edge. */
+  function lastTokenBefore(entry, ms) {
+    let last = -1;
+    for (let i = 0; i < entry.tokens.length; i += 1) {
+      if (entry.tokens[i].startMs < ms) last = i;
+    }
+    return last;
   }
 
   /** The segment of this show whose words are these, allowing for a recogniser's variation. */
@@ -613,6 +651,148 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     return false;
   }
 
+  /* ---- the sound of a jingle -------------------------------------------------- */
+
+  /** How many of a show's newest episodes are searched when proposing a jingle. */
+  const MAX_PROPOSAL_EPISODES = 20;
+
+  const selectAnchors = db.prepare('SELECT * FROM ad_anchors WHERE show_id = ? ORDER BY created_at');
+  const selectAnchor = db.prepare('SELECT * FROM ad_anchors WHERE id = ?');
+  const insertAnchorRow = db.prepare(
+    `INSERT INTO ad_anchors
+       (id, show_id, role, marker_id, origin, confirmed_at, dismissed_at, algorithm_version, clip, lead_ms,
+        match_span_ms, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms, created_at, updated_at)
+     VALUES
+       (@id, @show_id, 'programme_starts', @marker_id, @origin, @confirmed_at, NULL, @algorithm_version, @clip,
+        @lead_ms, @match_span_ms, @exemplar_episode_id, @exemplar_start_ms, @exemplar_end_ms, @now, @now)`,
+  );
+  const upsertAnchorHit = db.prepare(
+    `INSERT INTO ad_anchor_hits (anchor_id, episode_id, heard, at_ms, ber, checked_at)
+     VALUES (@anchor_id, @episode_id, @heard, @at_ms, @ber, @checked_at)
+     ON CONFLICT(anchor_id, episode_id) DO UPDATE SET
+       heard = excluded.heard, at_ms = excluded.at_ms, ber = excluded.ber, checked_at = excluded.checked_at`,
+  );
+  const selectAnchorHits = db.prepare('SELECT * FROM ad_anchor_hits WHERE anchor_id = ?');
+
+  /**
+   * Whether two clips are close enough to call the same jingle.
+   *
+   * Used only to stop a dismissed proposal coming straight back: without it, a "no,
+   * that's not the jingle" is forgotten the moment the next pass runs and the same
+   * audio is proposed again under a new id. `locateAnchor` already does exactly this
+   * comparison — one clip slid over a longer array — so the shorter of the two is
+   * searched for inside the longer rather than writing a second matcher.
+   */
+  function clipsMatch(a, b) {
+    if (!a?.length || !b?.length) return false;
+    const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+    return Boolean(locateAnchor(shorter, longer, { searchMs: longer.length * SUB_MS, maxBer: ANCHOR_MATCH_BER }));
+  }
+
+  function insertAnchor(showId, { origin, markerId = null, confirmed = false, clip }) {
+    const id = newId();
+    const now = nowIso();
+    const encoded = encodeFingerprint({
+      hashes: clip.hashes,
+      sampleRate: 0,
+      samplesPerFrame: 0,
+      durationMs: Math.round(clip.hashes.length * SUB_MS),
+    });
+    insertAnchorRow.run({
+      id,
+      show_id: showId,
+      marker_id: markerId,
+      origin,
+      confirmed_at: confirmed ? now : null,
+      algorithm_version: FINGERPRINT_VERSION,
+      clip: encoded,
+      lead_ms: clip.leadMs,
+      match_span_ms: clip.matchSpanMs ?? 0,
+      exemplar_episode_id: clip.exemplarEpisodeId,
+      exemplar_start_ms: clip.exemplarStartMs,
+      exemplar_end_ms: clip.exemplarEndMs,
+      now,
+    });
+    events?.emit(EVENTS.SHOW_CHANGED, { showId });
+    return selectAnchor.get(id);
+  }
+
+  /**
+   * A `programme_starts` marker whose *already located* words agree with where the
+   * jingle was just heard, so the boundary the owner taught can be carried straight
+   * over instead of asking the same question a second way.
+   *
+   * Reads what stage 0 of `detectFromTranscripts` last found for that marker — never
+   * what this same pass finds, because `detectAnchors` runs *before* the words are
+   * read at all (it has to, so the anchor can claim the head before stage 0 gets a
+   * look at it). So a marker taught on the same pass an anchor is first proposed can
+   * never link that pass; it links the next time `detectAnchors` runs and finds the
+   * marker's segment already there from the pass in between. That is deliberate: this
+   * only ever *raises* SelfPod's confidence enough to skip asking, so a pass where it
+   * is not yet possible costs nothing, and one pass' delay is the whole price of not
+   * re-locating the words a second way in a file that already does that job.
+   *
+   * @param {string} showId
+   * @param {Map<string, number>} onsetByEpisode where the jingle was heard, this pass,
+   *   in every episode it was heard in — including one where it sits too close to
+   *   0:00 to be worth cutting, because that is still where the marker's own words
+   *   would agree with it.
+   */
+  function linkableMarker(showId, onsetByEpisode) {
+    for (const marker of selectMarkers.all(showId)) {
+      if (marker.role !== 'programme_starts') continue;
+      const segment = selectBySignature.get(showId, `marker:${marker.id}`);
+      if (!segment) continue;
+      const markerEndByEpisode = new Map(selectOccurrencesOf.all(segment.id).map((row) => [row.episode_id, row.end_ms]));
+      let compared = 0;
+      let agree = 0;
+      for (const [episodeId, onsetMs] of onsetByEpisode) {
+        const markerEnd = markerEndByEpisode.get(episodeId);
+        if (markerEnd == null) continue;
+        compared += 1;
+        // Within a second: generous next to the sub-fingerprint's own 11.6ms
+        // resolution, because the marker's edge was placed by a recognizer's word
+        // timing and snapped to a pause, not by the sound itself.
+        if (Math.abs(markerEnd - onsetMs) <= 1000) agree += 1;
+      }
+      if (compared > 0 && agree === compared) return marker;
+    }
+    return null;
+  }
+
+  /**
+   * Re-derives a stale anchor's clip from the exemplar episode it was originally
+   * taken from, if that episode and its fingerprint both still exist.
+   *
+   * A version bump means the stored bits mean nothing against today's fingerprints —
+   * mixing them would produce matches that mean nothing, the same reason
+   * `FINGERPRINT_VERSION` exists at all — so this never trusts the old clip, only the
+   * millisecond range it was taken from.
+   */
+  async function rebuildAnchorClip(anchor) {
+    if (!anchor.exemplar_episode_id) return null;
+    const exemplarEpisode = episodes.get(anchor.exemplar_episode_id);
+    if (!exemplarEpisode) return null;
+    const fingerprint = await loadFingerprint(exemplarEpisode);
+    if (!fingerprint?.hashes?.length) return null;
+    const from = Math.round(anchor.exemplar_start_ms / SUB_MS);
+    const to = Math.round(anchor.exemplar_end_ms / SUB_MS);
+    if (to <= from || to > fingerprint.hashes.length) return null;
+    return fingerprint.hashes.slice(from, to);
+  }
+
+  /** A cut from 0:00 to `cutEndMs`, rounded outwards the same way `detectForShow` rounds an acoustic cut. */
+  function occurrenceFromAnchor(episode, fingerprint, cutEndMs) {
+    const clampedMs = Math.max(0, Math.min(fingerprint.durationMs ?? cutEndMs, cutEndMs));
+    return {
+      episodeId: episode.id,
+      start: 0,
+      startMs: 0,
+      end: msToFrame(clampedMs, fingerprint) + 1,
+      endMs: clampedMs,
+    };
+  }
+
   const countFingerprints = db.prepare(
     `SELECT COUNT(*) AS n
        FROM episode_fingerprints f
@@ -685,6 +865,41 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         { minEpisodes: Math.min(threshold, 2) },
       );
 
+      /*
+       * Ground a confirmed anchor already explains, per episode — not only the
+       * pre-roll it cuts, but the jingle itself. A pre-roll cut ends exactly where the
+       * jingle starts, on purpose (§19.4's outward bias never applies at a boundary),
+       * so the two never overlap; without the jingle's own span added in here, this
+       * search would still offer the jingle back as "audio this show repeats" the
+       * moment it sees a second episode carry it — which is true, and also not a
+       * question worth asking, since the anchor already explains why.
+       *
+       * Read from `ad_anchor_hits`, not from the cut list: a hit right at 0:00 (no
+       * pre-roll that day) explains its four seconds of audio just as much as a hit
+       * behind a thirty-second one, even though only the second ever produces a cut.
+       */
+      const anchorClaimsByEpisode = new Map();
+      for (const anchorRow of selectAnchors.all(show.id)) {
+        if (!anchorRow.confirmed_at) continue;
+        // The *whole* region this anchor was originally found in, not merely the
+        // (shorter, deliberately inset) clip taken from inside it — the corpus search
+        // below works over the same episodes and can otherwise still find the far
+        // side of the very same jingle as a match of its own.
+        const spanMs = anchorRow.match_span_ms || 0;
+        for (const hit of selectAnchorHits.all(anchorRow.id)) {
+          if (!hit.heard) continue;
+          const timing = timingFor[hit.episode_id];
+          if (!timing) continue;
+          let ranges = anchorClaimsByEpisode.get(hit.episode_id);
+          if (!ranges) anchorClaimsByEpisode.set(hit.episode_id, (ranges = []));
+          ranges.push([0, msToFrame(hit.at_ms - anchorRow.lead_ms + spanMs, timing) + 1]);
+        }
+      }
+      const coveredByAnchor = (occurrence) =>
+        (anchorClaimsByEpisode.get(occurrence.episodeId) ?? []).some(
+          ([from, to]) => occurrence.start >= from && occurrence.end <= to,
+        );
+
       let recorded = 0;
       // Counted apart from `recorded`, because "found three things" and "found three
       // things you have already been shown" are different sentences. Detection runs on
@@ -718,8 +933,17 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         // lets a pre-roll past the theme-tune guard, and the guard must not close again
         // on the next tick just because this detector has never heard them.
         const known = selectBySignature.get(show.id, segment.signature);
+
+        // Anchor-covered occurrences are dropped before anything else asks about this
+        // segment — an approved anchor cut is not offered a second time as "audio this
+        // show repeats." A brand new segment left with fewer than two occurrences by
+        // that filtering is not worth creating; an existing one is still upserted with
+        // whatever survives, so it shrinks (or empties) rather than going stale.
+        const filtered = occurrences.filter((occurrence) => !coveredByAnchor(occurrence));
+        if (!known && filtered.length < 2) continue;
+
         const verdict = safeToApproveAutomatically(
-          { ...segment, durationMs, occurrences, cueScore: known?.cue_score ?? 0 },
+          { ...segment, durationMs, occurrences: filtered, cueScore: known?.cue_score ?? 0 },
           { episodeDurations: durations, minEpisodes: threshold, source: SEGMENT_SOURCES.CORPUS },
         );
         const auto = show.ad_trim_mode === 'auto' && verdict.safe;
@@ -728,9 +952,9 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           signature: segment.signature,
           source: SEGMENT_SOURCES.CORPUS,
           durationMs,
-          episodeCount: segment.episodeCount,
-          occurrenceCount: segment.occurrenceCount,
-          occurrences,
+          episodeCount: new Set(filtered.map((occurrence) => occurrence.episodeId)).size,
+          occurrenceCount: filtered.length,
+          occurrences: filtered,
           status: auto ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.CANDIDATE,
           autoApproved: auto,
           holdReason: verdict.safe ? null : verdict.reason,
@@ -827,14 +1051,49 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const counts = { segments: 0, newSegments: 0, markerCuts: 0, rememberedCuts: 0, heard: heard.length, foldedIn };
       const auto = show.ad_trim_mode === 'auto';
 
+      /*
+       * What the sound already decided, before a single word is looked at.
+       *
+       * `detectAnchors` runs earlier in the pipeline and needs no transcript at all —
+       * this only reads what it already found. Where the jingle was heard, the head
+       * is claimed here so stages 0–3 leave it alone, the same way a marker's own
+       * words claim their ground below. Where it was not, nothing new may be offered
+       * or auto-approved at the head (see the loop after stage 0), but a read the
+       * owner already decided about is still applied there — that is stage 1, and it
+       * runs before this file adds anything to that block list.
+       */
+      const confirmedAnchor = selectAnchors.all(show.id).find((row) => row.confirmed_at);
+      const anchorHitsByEpisode = confirmedAnchor
+        ? new Map(selectAnchorHits.all(confirmedAnchor.id).map((row) => [row.episode_id, row]))
+        : new Map();
+      if (confirmedAnchor) {
+        for (const entry of heard) {
+          const hit = anchorHitsByEpisode.get(entry.episode.id);
+          if (!hit?.heard) continue;
+          const cutEndMs = hit.at_ms - confirmedAnchor.lead_ms;
+          if (cutEndMs < MIN_ANCHOR_CUT_MS) continue;
+          const upTo = lastTokenBefore(entry, cutEndMs);
+          if (upTo >= 0) claimRange(claimed, entry.episode.id, 0, upTo);
+        }
+      }
+
       /* 0. Boundaries the owner taught. */
       for (const marker of selectMarkers.all(show.id)) {
         const phrase = marker.text.split(' ');
         const atStart = marker.role === 'programme_starts';
+        // A marker the owner taught by words, once its own located boundary agreed
+        // with a jingle's sound closely enough to link the two (`detectAnchors`,
+        // `linkableMarker`), stops matching by words for any episode the anchor has
+        // already spoken for — heard or missed, either way deferring to the sound
+        // rather than asking the same question twice. An episode with no fingerprint
+        // has no hit row and falls straight through to the words below, as it always
+        // has.
+        const linkedToAnchor = atStart && confirmedAnchor?.marker_id === marker.id;
         const occurrences = [];
         const before = selectBySignature.get(show.id, `marker:${marker.id}`);
         const already = new Set(before ? selectOccurrencesOf.all(before.id).map((row) => row.episode_id) : []);
         for (const entry of heard) {
+          if (linkedToAnchor && anchorHitsByEpisode.has(entry.episode.id)) continue;
           // Only the window the marker belongs to: the opening for a start, the closing
           // for an end. "Vous écoutez RMC" said again at minute forty is not the start.
           const windowIndex = atStart ? 0 : entry.transcript.windows.length - 1;
@@ -943,6 +1202,24 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           db.prepare(`UPDATE ad_segments SET hold_reason = 'matches_kept_words', updated_at = ? WHERE id = ?`).run(nowIso(), known.id);
         }
         counts.segments += 1;
+      }
+
+      /*
+       * A jingle SelfPod listened for and did not hear blocks nothing above this
+       * line — stage 1 has already run, and a read the owner previously decided
+       * about is applied whether or not the anchor found anything this time. From
+       * here on, though, nothing new is guessed at in the same ground: no offer, and
+       * so no automatic approval of one either. The owner was told plainly (by
+       * `detectAnchors`) that the jingle went unheard; SelfPod does not also start
+       * inventing candidates in the dark where it usually has a boundary to trust.
+       */
+      if (confirmedAnchor) {
+        for (const entry of heard) {
+          const hit = anchorHitsByEpisode.get(entry.episode.id);
+          if (!hit || hit.heard) continue;
+          const upTo = lastTokenBefore(entry, DEFAULT_SEARCH_MS);
+          if (upTo >= 0) claimRange(claimed, entry.episode.id, 0, upTo);
+        }
       }
 
       /* 2. What repeats. */
@@ -1066,7 +1343,272 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return counts;
     },
 
+    /**
+     * Cutting a pre-roll by the sound of the jingle that follows it, not by its words
+     * (spec §19.6). Reads no transcript and needs none: this works with
+     * `ad_transcribe = 'off'` and with no recognizer at all, which is why it is its
+     * own stage rather than part of `detectFromTranscripts` — that function gives up
+     * the moment nothing was heard — and why it runs *before* that stage in the
+     * pipeline: whatever it claims at the head of an episode, the words never see,
+     * because `detectFromTranscripts` reads `ad_anchor_hits` before touching stage 0.
+     *
+     * With no confirmed anchor yet, this proposes one from what every recent
+     * episode's opening shares (`findHeadAnchors`) and stops there — unless a
+     * `programme_starts` marker's own located words already agree with the proposal,
+     * in which case the boundary the owner already taught is carried straight over
+     * rather than asked a second way. A proposal on its own cuts nothing; only a
+     * confirmed anchor is searched for and cut here.
+     */
+    async detectAnchors(showId) {
+      const show = shows.getOrThrow(showId);
+      if (show.ad_trim_mode === 'off') return { skipped: 'mode_off' };
+
+      const rows = selectAnchors.all(showId);
+      // Confirmed wins if one somehow exists alongside a pending row; otherwise the
+      // one proposal still waiting on the owner is what this pass continues working
+      // on — never a fresh one minted under a new id every time this runs.
+      let anchor = rows.find((row) => row.confirmed_at) ?? rows.find((row) => !row.confirmed_at && !row.dismissed_at) ?? null;
+
+      const episodeList = episodes.listByShow(show.id);
+      const withFingerprints = [];
+      const fingerprintsById = new Map();
+      for (const episode of episodeList) {
+        const fingerprint = await loadFingerprint(episode);
+        if (!fingerprint?.hashes?.length) continue;
+        withFingerprints.push({ id: episode.id, fingerprint: fingerprint.hashes });
+        fingerprintsById.set(episode.id, fingerprint);
+      }
+
+      let proposed = false;
+      if (!anchor && withFingerprints.length >= 2) {
+        const dismissedClips = rows
+          .filter((row) => row.dismissed_at)
+          .map((row) => decodeFingerprint(row.clip)?.hashes)
+          .filter(Boolean);
+        /*
+         * The newest episodes only, not the show's whole history. `findHeadAnchors`
+         * insists the jingle be present in *every* episode it is given — deliberately
+         * strict, see that function's own reasoning — and a show that changed its
+         * ident once, or carries one genuinely bonus episode without it, would
+         * otherwise be unable to ever get a proposal at all: one episode with no
+         * jingle anywhere in a library's history is enough to veto every candidate,
+         * for ever. `episodeList` is already newest first (`episodes.listByShow`).
+         */
+        const recentWithFingerprints = withFingerprints.slice(0, MAX_PROPOSAL_EPISODES);
+        for (const candidate of findHeadAnchors(recentWithFingerprints)) {
+          const clip = anchorClipFrom(candidate, fingerprintsById);
+          if (!clip) continue;
+          // "No, that's not the jingle" must stay answered: a dismissed clip is never
+          // proposed again under a new id just because the corpus shifted.
+          if (dismissedClips.some((dismissed) => clipsMatch(clip.hashes, dismissed))) continue;
+          anchor = insertAnchor(show.id, { origin: 'proposed', confirmed: false, clip });
+          proposed = true;
+          break;
+        }
+      }
+      if (!anchor) return { skipped: rows.length ? 'awaiting_decision' : 'nothing_found', proposed };
+
+      let clipHashes;
+      const stored = decodeFingerprint(anchor.clip);
+      if (stored?.hashes?.length) {
+        clipHashes = stored.hashes;
+      } else {
+        /*
+         * The algorithm moved on since this clip was taken. Mixing a fingerprint from
+         * one algorithm with a clip from another would produce matches that mean
+         * nothing, so the clip is never trusted here — only the millisecond range it
+         * was taken from, re-read against today's fingerprint of the same exemplar.
+         * If that episode is gone too, this anchor cuts nothing until the owner
+         * points at the jingle again: never a wrong cut from a stale clip.
+         */
+        clipHashes = await rebuildAnchorClip(anchor);
+        if (clipHashes) {
+          db.prepare('UPDATE ad_anchors SET clip = @clip, algorithm_version = @version, updated_at = @now WHERE id = @id').run({
+            clip: encodeFingerprint({
+              hashes: clipHashes,
+              sampleRate: 0,
+              samplesPerFrame: 0,
+              durationMs: Math.round(clipHashes.length * SUB_MS),
+            }),
+            version: FINGERPRINT_VERSION,
+            now: nowIso(),
+            id: anchor.id,
+          });
+        }
+      }
+      if (!clipHashes) return { skipped: 'anchor_stale', anchorId: anchor.id, proposed };
+
+      /*
+       * Heard or missed, in every fingerprinted episode — run whether or not the
+       * anchor is confirmed yet. A pending proposal gets no cut from this, but it
+       * does get the chance below to link to a marker whose words now agree with it,
+       * and it does let the owner hear the right exemplar on the review card.
+       */
+      const previousHits = new Map(selectAnchorHits.all(anchor.id).map((row) => [row.episode_id, row]));
+      const onsetByEpisode = new Map();
+      const checkedAt = nowIso();
+      let heard = 0;
+      let missed = 0;
+      let newlyMissed = 0;
+      for (const episode of episodeList) {
+        const fingerprint = fingerprintsById.get(episode.id);
+        // No fingerprint (not an MP3, unreadable, too long): not checked, not a miss —
+        // the word marker applies to this episode exactly as it does today.
+        if (!fingerprint) continue;
+        const hit = locateAnchor(clipHashes, fingerprint.hashes);
+        upsertAnchorHit.run({
+          anchor_id: anchor.id,
+          episode_id: episode.id,
+          heard: hit ? 1 : 0,
+          at_ms: hit?.atMs ?? null,
+          ber: hit?.ber ?? null,
+          checked_at: checkedAt,
+        });
+        if (!hit) {
+          missed += 1;
+          const previous = previousHits.get(episode.id);
+          if (!previous || previous.heard) newlyMissed += 1;
+          continue;
+        }
+        heard += 1;
+        onsetByEpisode.set(episode.id, hit.atMs - anchor.lead_ms);
+      }
+
+      /*
+       * A marker the owner already taught, whose *last-known* located words agree
+       * with where the jingle was just heard, links and confirms here — never on the
+       * same pass it was first proposed on, since the words for a brand new marker
+       * have not been read yet by the time this runs (see `linkableMarker`), but on
+       * whichever later pass finds them agreeing.
+       */
+      if (!anchor.confirmed_at) {
+        const marker = linkableMarker(show.id, onsetByEpisode);
+        if (marker) {
+          db.prepare(
+            `UPDATE ad_anchors SET origin = 'from_marker', marker_id = @marker_id, confirmed_at = @now, updated_at = @now WHERE id = @id`,
+          ).run({ marker_id: marker.id, now: nowIso(), id: anchor.id });
+          anchor = selectAnchor.get(anchor.id);
+        }
+      }
+
+      // A proposal is not a decision. Stopping here leaves the hits recorded — the
+      // review card can already say how many episodes the jingle was heard in — but
+      // cuts nothing until the owner, or a linked marker, actually decides.
+      if (!anchor.confirmed_at) return { skipped: 'awaiting_decision', anchorId: anchor.id, proposed };
+
+      const occurrences = [];
+      for (const [episodeId, onsetMs] of onsetByEpisode) {
+        if (onsetMs < MIN_ANCHOR_CUT_MS) continue; // heard right at the start — nothing to cut
+        occurrences.push(occurrenceFromAnchor({ id: episodeId }, fingerprintsById.get(episodeId), onsetMs));
+      }
+
+      const signature = `anchor:${anchor.id}`;
+      const existingSegment = selectBySignature.get(show.id, signature);
+      // An empty cut list still needs recording when a segment already exists, so a
+      // jingle that stops appearing anywhere shrinks the cut back to nothing rather
+      // than leaving a stale approval with no episodes behind it.
+      if (occurrences.length || existingSegment) {
+        const lengths = occurrences.map((o) => o.endMs - o.startMs).sort((a, b) => a - b);
+        upsertSegment(show.id, {
+          signature,
+          source: SEGMENT_SOURCES.CORPUS,
+          status: SEGMENT_STATUS.APPROVED,
+          autoApproved: false,
+          holdReason: null,
+          durationMs: lengths.length ? lengths[Math.floor(lengths.length / 2)] : 0,
+          episodeCount: new Set(occurrences.map((o) => o.episodeId)).size,
+          occurrenceCount: occurrences.length,
+          occurrences,
+        });
+      }
+
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
+      return { anchorId: anchor.id, proposed, heard, missed, newlyMissed, cuts: occurrences.length };
+    },
+
     /* ---- what the owner teaches ---------------------------------------------- */
+
+    listAnchors(showId) {
+      return selectAnchors.all(showId);
+    },
+
+    getAnchor(id) {
+      return selectAnchor.get(id) ?? null;
+    },
+
+    /** "Heard in 12 of 14 episodes" — the anchor card's own summary, over every episode last checked. */
+    anchorSummary(id) {
+      const hits = selectAnchorHits.all(id);
+      return { total: hits.length, heard: hits.filter((row) => row.heard).length, missed: hits.filter((row) => !row.heard).length };
+    },
+
+    /** What the current anchor found (or didn't) in one episode, for the episode page and its ledger. */
+    anchorStatusFor(episodeId) {
+      const hit = db
+        .prepare(
+          `SELECT h.*, a.id AS anchor_id, a.confirmed_at
+             FROM ad_anchor_hits h
+             JOIN ad_anchors a ON a.id = h.anchor_id
+            WHERE h.episode_id = ? AND a.confirmed_at IS NOT NULL
+            ORDER BY h.checked_at DESC LIMIT 1`,
+        )
+        .get(episodeId);
+      if (!hit) return null;
+      return { anchorId: hit.anchor_id, heard: Boolean(hit.heard), atMs: hit.at_ms, ber: hit.ber };
+    },
+
+    /**
+     * "This is the jingle" — pointed at by hand, on an episode that has a fingerprint.
+     * Confirmed on arrival: the owner just made the decision, so there is nothing left
+     * to ask.
+     */
+    async addAnchorFromRange({ showId, episodeId, startMs, endMs }) {
+      const episode = episodes.getOrThrow(episodeId);
+      const fingerprint = await loadFingerprint(episode);
+      if (!fingerprint?.hashes?.length) {
+        throw badRequest('SelfPod has not fingerprinted this episode yet, so there is nothing to anchor to.', 'no_fingerprint');
+      }
+      const clip = anchorClipFrom(
+        { occurrences: [{ episodeId, startMs, endMs }] },
+        new Map([[episodeId, fingerprint]]),
+      );
+      if (!clip) throw badRequest('Select a few seconds of the jingle — at least a couple of seconds either side of any silence.', 'anchor_too_short');
+      return insertAnchor(showId, { origin: 'pointed_at', confirmed: true, clip });
+    },
+
+    /** "Yes, that's the jingle" — confirmed, so the next pass starts cutting to it. */
+    confirmAnchor(id) {
+      const anchor = selectAnchor.get(id);
+      if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+      if (!anchor.confirmed_at) {
+        db.prepare('UPDATE ad_anchors SET confirmed_at = ?, updated_at = ? WHERE id = ?').run(nowIso(), nowIso(), id);
+      }
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: anchor.show_id });
+      return selectAnchor.get(id);
+    },
+
+    /** "No, that's not the jingle" — a proposal only; nothing was ever cut by it. */
+    dismissAnchor(id) {
+      const anchor = selectAnchor.get(id);
+      if (!anchor) throw notFound('That proposal no longer exists.', 'anchor_not_found');
+      db.prepare('UPDATE ad_anchors SET dismissed_at = ?, updated_at = ? WHERE id = ?').run(nowIso(), nowIso(), id);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: anchor.show_id });
+      return selectAnchor.get(id);
+    },
+
+    /** Forgets a confirmed anchor and puts back everything it cut. */
+    removeAnchor(id) {
+      const anchor = selectAnchor.get(id);
+      if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+      const segment = selectBySignature.get(anchor.show_id, `anchor:${id}`);
+      if (segment) {
+        markForRecut(segment.id);
+        db.prepare('DELETE FROM ad_segments WHERE id = ?').run(segment.id);
+      }
+      db.prepare('DELETE FROM ad_anchors WHERE id = ?').run(id);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: anchor.show_id });
+      return anchor;
+    },
 
     listMarkers(showId) {
       return selectMarkers.all(showId);
@@ -1174,6 +1716,21 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             ORDER BY o.start_ms`,
         )
         .all(episodeId);
+    },
+
+    /** The anchor's own cut in one episode, if it made one — kept deliberately apart from `spokenIn`, which an anchor's occurrence never appears in (it carries no text). */
+    anchorCutFor(episodeId) {
+      return (
+        db
+          .prepare(
+            `SELECT s.id AS segment_id, o.start_ms, o.end_ms
+               FROM ad_segment_occurrences o
+               JOIN ad_segments s ON s.id = o.segment_id
+              WHERE o.episode_id = ? AND s.signature LIKE 'anchor:%' AND s.status = '${SEGMENT_STATUS.APPROVED}'
+              LIMIT 1`,
+          )
+          .get(episodeId) ?? null
+      );
     },
 
     /**

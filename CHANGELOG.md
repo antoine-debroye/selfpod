@@ -7,6 +7,44 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.8.8 — 2026-09-16
+
+### Added — the jingle's sound, not its words
+
+- **A pre-roll cut by the sound of the jingle behind it, whatever the pre-roll says.**
+  A boundary taught in 1.8.0 is matched in the transcript, and a recognizer does not
+  write a station ident the same way twice — measured on a real show, the same four
+  seconds came back four different ways, and a taught marker missed on the days its
+  wording changed. The ident is the same recording every time, though, and the
+  acoustic fingerprint already kept for every episode finds it without reading a
+  word: 0.000–0.070 bit-error against itself, never below 0.438 against anything else
+  in the same episode. SelfPod now proposes a jingle it finds sharing the opening of
+  a show's recent episodes at a varying offset — the sign of an ident behind a
+  changing pre-roll rather than a fixed part of the show — and cuts to it once
+  confirmed, needing no transcript and no speech recognizer at all.
+- **A one-press question, not a guess.** The Adverts page offers *"Is this the
+  jingle?"* with a sample to listen to; one press confirms it, another says it is not
+  the jingle and it is not offered again. The jingle can also be pointed at by hand on
+  any episode, and a `programme_starts` boundary already taught links to it
+  automatically once the two agree — the words become a fallback for an episode
+  nothing here can fingerprint, not the primary signal.
+- **A miss says so, and touches nothing else.** An episode the jingle was not heard
+  in is published exactly as it arrived — no new offer is guessed at its opening, and
+  no automatic approval happens there — but a sponsor read already approved elsewhere
+  is still cut from it, because that is a decision already made, not a guess. The
+  episode page and the activity log say plainly that the jingle went unheard, rather
+  than leaving a pre-roll to come back unremarked.
+
+### Fixed
+
+- **An episode could keep serving a stale cut.** When a re-detected segment lost its
+  *only* occurrence in an episode — the audio it was cut to was no longer there —
+  `markForRecut` re-derived who to re-cut from the segment's own occurrences, which
+  by then no longer had a row for that episode at all. It was never marked, and went
+  on serving whatever it had been trimmed to before, indefinitely. Caught while
+  building the jingle feature above, which depends on exactly this working: an
+  episode a jingle stops being heard in must be un-trimmed, not left as it was.
+
 ## 1.8.7 — 2026-09-04
 
 ### Fixed

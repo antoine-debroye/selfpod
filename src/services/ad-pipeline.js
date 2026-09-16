@@ -148,7 +148,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     if (
       !counts.found && !counts.trimmed && !counts.failed && !counts.released &&
       !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts &&
-      !counts.transcriptionFailed && !counts.foldedIn
+      !counts.transcriptionFailed && !counts.foldedIn && !counts.anchorProposed && !counts.anchorMissed
     ) return;
 
     const parts = [];
@@ -162,6 +162,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
       parts.push(`${counts.foldedIn} duplicate ${counts.foldedIn === 1 ? 'row' : 'rows'} folded together`);
     }
     if (counts.markerCuts) parts.push(`${counts.markerCuts} cut at the boundary you set`);
+    if (counts.anchorProposed) parts.push('a station jingle found and offered for you to confirm');
     if (counts.trimmed) {
       parts.push(`${counts.trimmed} ${counts.trimmed === 1 ? 'episode' : 'episodes'} trimmed`);
     }
@@ -197,6 +198,16 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
                 } arrived; a sponsor read the host performs live will not be caught in ${
                   counts.transcriptionFailed === 1 ? 'it' : 'them'
                 }.`,
+              },
+            ]
+          : []),
+        ...(counts.anchorMissed
+          ? [
+              {
+                file: null,
+                message: `SelfPod did not hear the station jingle in ${counts.anchorMissed} ${
+                  counts.anchorMissed === 1 ? 'episode' : 'episodes'
+                }. ${counts.anchorMissed === 1 ? 'Its' : 'Their'} opening is left as it arrived — only reads you had already decided about were applied there.`,
               },
             ]
           : []),
@@ -240,6 +251,12 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
 
         const fingerprinted = await adDetect.fingerprintShow(showId);
 
+        // Before either detector, and before the words: it needs no transcript at
+        // all, so it must not wait behind whisper, and it has to claim the head of an
+        // episode before detectForShow and detectFromTranscripts get a look at the
+        // same ground (spec §19.6).
+        const anchored = await adDetect.detectAnchors(showId);
+
         // Hearing the words comes before either detector, so the acoustic one's finds
         // can be read against them in the same run (a pre-roll found by ear is let go
         // once its words say sponsor). Still inside the unsettled stretch below.
@@ -273,6 +290,8 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           rememberedCuts: heard?.rememberedCuts ?? 0,
           foldedIn,
           markerCuts: heard?.markerCuts ?? 0,
+          anchorProposed: anchored?.proposed ? 1 : 0,
+          anchorMissed: anchored?.newlyMissed ?? 0,
           trimmed: trimmed.trimmed,
           failed: trimmed.failed,
           held: holds.held,
@@ -296,7 +315,7 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           'ran advert detection for a show',
         );
         events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
-        return { ...holds, foldedIn, fingerprinted, transcribed, detected, heard, trimmed };
+        return { ...holds, foldedIn, fingerprinted, anchored, transcribed, detected, heard, trimmed };
       });
     },
 

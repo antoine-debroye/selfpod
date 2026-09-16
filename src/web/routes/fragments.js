@@ -266,6 +266,43 @@ export default async function fragmentRoutes(fastify, services) {
       return renderSegments(reply, shows.get(show.id));
     });
 
+    /* ---------------------------------------------------- the sound of a jingle */
+
+    /** "Yes, that's the jingle" — confirmed, and cut for on the same request. */
+    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/confirm', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const anchor = services.adDetect.getAnchor(request.params.anchorId);
+      if (!anchor || anchor.show_id !== show.id) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+      services.adDetect.confirmAnchor(anchor.id);
+      const result = await services.adPipeline.processShow(show.id);
+      if (!isHtmx(request)) {
+        const cut = result.trimmed?.trimmed ?? 0;
+        return redirectBack(request, reply, advertsPath(show.slug), cut ? `Confirmed. ${cut} ${cut === 1 ? 'episode' : 'episodes'} trimmed to it.` : 'Confirmed.');
+      }
+      return renderSegments(reply, shows.get(show.id));
+    });
+
+    /** "No, that's not the jingle" — a proposal only; nothing was ever cut by it. */
+    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/dismiss', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const anchor = services.adDetect.getAnchor(request.params.anchorId);
+      if (!anchor || anchor.show_id !== show.id) throw notFound('That proposal no longer exists.', 'anchor_not_found');
+      if (!anchor.confirmed_at) services.adDetect.dismissAnchor(anchor.id);
+      if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), 'Noted — not offered again.');
+      return renderSegments(reply, shows.get(show.id));
+    });
+
+    /** Forgetting a confirmed jingle puts back everything it cut. */
+    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+      const show = findShow(request.params.slug);
+      const anchor = services.adDetect.getAnchor(request.params.anchorId);
+      if (!anchor || anchor.show_id !== show.id) throw notFound('That jingle no longer exists.', 'anchor_not_found');
+      services.adDetect.removeAnchor(anchor.id);
+      await services.adPipeline.processShow(show.id);
+      if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), 'Forgotten, and the audio put back.');
+      return renderSegments(reply, shows.get(show.id));
+    });
+
     /* ------------------------------------------------------------ transcripts */
 
     function findEpisode(id) {

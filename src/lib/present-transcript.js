@@ -159,7 +159,16 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
   const strong = (segment.cue_score ?? 0) >= 0.5;
   const decided = formatDay(segment.decided_at);
   const isMarker = String(segment.signature ?? '').startsWith('marker:');
+  const isAnchor = String(segment.signature ?? '').startsWith('anchor:');
 
+  if (isAnchor) {
+    return {
+      verdict: 'will_cut',
+      key: 'jingle',
+      sentence: 'Cut ahead of the station jingle, found by its sound — heard the same every time, whatever the pre-roll in front of it says.',
+      offerMarker: false,
+    };
+  }
   if (isMarker) {
     const ends = segment.marker_role === 'programme_ends';
     return {
@@ -282,10 +291,10 @@ export function parseCues(cues) {
 /**
  * What the ledger says about an episode, from the words' point of view.
  *
- * @param {{episode: object, show: object, row: object|null, spoken: Array<object>, markers: Array<object>, pending: boolean, engineMissing: boolean}} input
+ * @param {{episode: object, show: object, row: object|null, spoken: Array<object>, markers: Array<object>, pending: boolean, engineMissing: boolean, anchorStatus?: object|null, anchorCut?: object|null}} input
  * @returns {{stage: string, sentence: string, at?: string, segmentId?: string, reversible?: boolean}|null}
  */
-export function describeAdvertStage({ episode, show, row, spoken, markers, pending, engineMissing, listenLabel }) {
+export function describeAdvertStage({ episode, show, row, spoken, markers, pending, engineMissing, listenLabel, anchorStatus = null, anchorCut = null }) {
   if (!show || !show.ad_trim_mode || show.ad_trim_mode === 'off') return null;
   const isMp3 = /\.mp3$/i.test(episode.filename ?? '');
   if (!isMp3) {
@@ -293,6 +302,34 @@ export function describeAdvertStage({ episode, show, row, spoken, markers, pendi
     return {
       stage: 'unsupported',
       sentence: `Not listened to — SelfPod can only read MP3 episodes and this one is ${extension || 'something else'}. Published as it arrived.`,
+    };
+  }
+  /*
+   * The jingle's own answer, ahead of anything the words say — it needs no
+   * transcript at all, so it must not wait behind `ad_transcribe = 'off'`, and a
+   * miss here is never covered up by falling through to a word-based guess (spec
+   * §19.6): the owner is told plainly, and only what they already decided about
+   * elsewhere still applies to this episode's opening.
+   */
+  if (anchorStatus) {
+    if (anchorStatus.heard && anchorCut) {
+      return {
+        stage: 'cut_before_jingle',
+        sentence: `Cut the ${formatClock(anchorCut.end_ms)} before the station jingle.`,
+        at: `${formatClock(anchorCut.start_ms)}–${formatClock(anchorCut.end_ms)}`,
+        segmentId: anchorCut.segment_id,
+      };
+    }
+    if (anchorStatus.heard) {
+      return {
+        stage: 'jingle_at_start',
+        sentence: 'The programme starts straight away in this one — there was no advert before the jingle.',
+      };
+    }
+    return {
+      stage: 'jingle_not_heard',
+      sentence:
+        'SelfPod did not hear the station jingle in this one, so it left the opening alone — only reads you had already decided about were applied there. Published as it arrived.',
     };
   }
   if (show.ad_transcribe === 'off') return null;

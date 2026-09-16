@@ -12,18 +12,25 @@
  *     node scripts/check-real-adverts.mjs <feed-url> [--episodes 4] [--marker "Vous écoutez RMC"]
  *         [--tail-marker "C'était votre émission"]
  *         [--head 300] [--tail 240] [--whisper /opt/homebrew/bin/whisper-cli]
- *         [--model ~/models/ggml-base-q5_1.bin] [--keep DIR]
+ *         [--model ~/models/ggml-base-q5_1.bin] [--keep DIR] [--check-anchor]
  *
  * It calls the same library code the service does — decoder, WAV writer, runner,
  * hallucination filter, normaliser, matcher, cue scorer, edge snapper — and prints
  * what each step produced, with the measured real-time factor.
+ *
+ * `--check-anchor` additionally fingerprints every downloaded episode (spec §19.2)
+ * and runs `findHeadAnchors` / `anchorClipFrom` / `locateAnchor` (spec §19.7) — the
+ * same functions `detectAnchors` calls — against them: whether a jingle is proposed,
+ * the clip it would confirm, and where each episode is cut to it or missed. Needs no
+ * words at all, but `--model` is still required because this script's transcript
+ * pass runs regardless; the anchor pipeline itself needs none of it.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { parseFeed } from '../src/lib/rss-parse.js';
-import { decodeToMono } from '../src/lib/decode-audio.js';
+import { decodeToMono, TARGET_RATE } from '../src/lib/decode-audio.js';
 import { frameProfile } from '../src/lib/mp3-frames.js';
 import { openWavWriter } from '../src/lib/wav.js';
 import { runWhisper } from '../src/lib/whisper-runner.js';
@@ -32,6 +39,8 @@ import { normaliseText, normaliseTokens } from '../src/lib/text-normalise.js';
 import { findRepeatedText, locatePhrase } from '../src/lib/repeated-text.js';
 import { scoreAdvertCues, describeCues } from '../src/lib/advert-cues.js';
 import { createEnvelopeBuilder, snapToDip } from '../src/lib/snap-edges.js';
+import { createFingerprinter } from '../src/lib/acoustic-fingerprint.js';
+import { findHeadAnchors, anchorClipFrom, locateAnchor, MIN_ANCHOR_CUT_MS } from '../src/lib/audio-anchor.js';
 import { CUE_OFFER_ALONE, CUE_STRONG } from '../src/constants.js';
 
 const args = process.argv.slice(2);
@@ -52,6 +61,7 @@ const model = option('model', process.env.WHISPER_MODEL);
 const marker = option('marker', null);
 const tailMarker = option('tail-marker', null);
 const keep = option('keep', null);
+const checkAnchor = args.includes('--check-anchor');
 if (!model) {
   console.error('Say where the model is: --model path/to/ggml-base-q5_1.bin (or WHISPER_MODEL).');
   process.exit(2);
@@ -84,6 +94,12 @@ for (const [index, item] of items.entries()) {
     console.log(`  ${item.title}: not an MP3 SelfPod can read`);
     continue;
   }
+  let fingerprint = null;
+  if (checkAnchor) {
+    const fingerprinter = createFingerprinter();
+    await decodeToMono(bytes, profile.frames, (samples) => fingerprinter.push(samples), { targetRate: TARGET_RATE });
+    fingerprint = fingerprinter.finish();
+  }
   const windows =
     headMs + tailMs >= profile.durationMs
       ? [{ kind: 'whole', fromMs: 0, toMs: profile.durationMs }]
@@ -114,7 +130,7 @@ for (const [index, item] of items.entries()) {
     if (!keep) await rm(wav, { force: true });
   }
   const words = heard.flatMap((window) => flattenWords(window.sentences));
-  episodes.push({ id: `ep${index + 1}`, title: item.title, durationMs: profile.durationMs, windows: heard, words, tokens: normaliseTokens(words), rate: audioMs / Math.max(1, workMs) });
+  episodes.push({ id: `ep${index + 1}`, title: item.title, durationMs: profile.durationMs, windows: heard, words, tokens: normaliseTokens(words), rate: audioMs / Math.max(1, workMs), fingerprint });
   console.log(`\n== ${item.title} (${clock(profile.durationMs)}, ${heard[0]?.language ?? '?'}, ${(audioMs / Math.max(1, workMs)).toFixed(1)}× real time)`);
   for (const window of heard) {
     console.log(`-- ${window.kind} ${clock(window.fromMs)}–${clock(window.toMs)}`);
@@ -184,6 +200,42 @@ if (tailMarker) {
     }
     const cutStart = snapToDip(hit.startMs, last.envelope, { fromMs: last.fromMs, direction: 'after' });
     console.log(`   ${episode.id}: heard at ${clock(hit.startMs)}–${clock(hit.endMs)} (${hit.errors} ${hit.errors === 1 ? 'error' : 'errors'}) → cut ${clock(cutStart)}–${clock(episode.durationMs)} (${((episode.durationMs - cutStart) / 1000).toFixed(1)} s)`);
+  }
+}
+
+if (checkAnchor) {
+  console.log('\n== The jingle, by its sound (spec §19.7) — no words involved');
+  const withFingerprints = episodes.filter((episode) => episode.fingerprint?.length).map((episode) => ({ id: episode.id, fingerprint: episode.fingerprint }));
+  const candidates = findHeadAnchors(withFingerprints);
+  if (!candidates.length) {
+    console.log('   nothing proposed — either no ident repeats at a varying offset in the opening, or every episode here happens to agree on where it sits');
+  } else {
+    const [best] = candidates;
+    console.log(`   proposal: ${(best.durationMs / 1000).toFixed(1)} s, ${best.episodeCount} episodes, spread ${(best.spreadMs / 1000).toFixed(1)} s`);
+    for (const occurrence of best.occurrences) console.log(`     ${occurrence.episodeId} @ ${clock(occurrence.startMs)}`);
+    const fingerprintsById = new Map(withFingerprints.map((episode) => [episode.id, { hashes: episode.fingerprint }]));
+    const clip = anchorClipFrom(best, fingerprintsById);
+    if (!clip) {
+      console.log('   the region found was too short to take a safe clip from');
+    } else {
+      console.log(`   clip: ${clip.hashes.length} sub-fingerprints from ${clip.exemplarEpisodeId}, lead ${clip.leadMs} ms, match span ${clip.matchSpanMs} ms`);
+      console.log('\n   located in every episode:');
+      for (const episode of episodes) {
+        if (!episode.fingerprint?.length) {
+          console.log(`     ${episode.id}: no fingerprint (not readable as MP3)`);
+          continue;
+        }
+        const hit = locateAnchor(clip.hashes, episode.fingerprint);
+        if (!hit) {
+          console.log(`     ${episode.id}: NOT HEARD — opening left as it arrived`);
+          continue;
+        }
+        const cutEndMs = hit.atMs - clip.leadMs;
+        console.log(
+          `     ${episode.id}: heard at ${clock(hit.atMs)} (ber ${hit.ber.toFixed(3)}) → ${cutEndMs < MIN_ANCHOR_CUT_MS ? 'nothing to cut, starts near 0:00' : `cut 0:00.0–${clock(cutEndMs)}`}`,
+        );
+      }
+    }
   }
 }
 

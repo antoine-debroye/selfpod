@@ -1221,6 +1221,58 @@ NAS expect several times real time for `base`. The image grows by about 260 MB f
 the binary and both models. `small` is markedly better in French — it hears a jingle
 over music that `base` drops — and is one environment variable away.
 
+### 19.7 The jingle's sound, not its words
+
+**Added in 1.8.8.** A boundary taught in §19.6 is matched in the transcript, and a
+recognizer does not write a station ident the same way twice. Measured on a real
+French show: the same four-second ident came back as `"Vous pouvez vous écouter
+RMC."`, `"…RMC, R-M-C, Demange Pirates…"`, `"Si vous pensez à co-auturer, vous
+pouvez vous écouter RMC."` and `"Vous pouvez vous écouter…"` + `"RMC."` — four
+different transcriptions of one recording. A short marker taught from it barely
+survives `locatePhrase`'s one-error budget; a longer, more natural selection misses
+outright the moment two programmes sharing a feed continue the ident differently. A
+miss is silent — nothing claims the opening, and the generic detectors then remove
+the pre-roll only on the days it happens to repeat, which is the inconsistency this
+section exists to fix.
+
+The ident is not merely *similar* audio each day — it is the same recording, and the
+acoustic fingerprint §19.2 already keeps for every MP3 finds it without reading a
+word. A short clip of it, matched the same way §19.2 matches anything else, is
+reliable where the transcript is not: measured on the same four real episodes, the
+clip scored 0.000–0.070 bit-error against itself and never below 0.438 against
+anything else in the same episode — the same chasm §19.2's own threshold is built on.
+
+**Proposing.** `findRepeatedAudio` (§19.2) is not asked to search the whole episode
+for this — its five-second floor drops an ident measured at 2.8–3.2 seconds of
+matching audio, and a genuinely shared pre-roll would still claim the ground first
+in a whole-file search. Restricted instead to the opening of the newest twenty
+episodes, with a two-second floor, it keeps every other rule: present in *every*
+episode searched — which is what rules out a pre-roll only some of them share — and
+not at 0:00 in every one of them, which is what rules out a theme tune, and not at
+the *same* offset in every one, which is what rules out a fixed part of the show's
+own edit. A show that passes all three still only gets a proposal, never a cut: the
+owner presses once to confirm it, or points at the jingle by hand on any one episode
+that has been fingerprinted, or it links itself to a `programme_starts` marker
+already taught once their boundaries agree — and only ever on a *later* pass, since
+the sound is found before the words are read at all.
+
+**Cutting.** A confirmed jingle is searched for in every fingerprinted episode, each
+pass, independent of `ad_transcribe` — it needs no transcript and no recognizer,
+which is why it runs before either in the pipeline and why it works with speech
+recognition switched off entirely. Heard: the pre-roll ahead of it is cut, exactly as
+a `programme_starts` marker's words would cut it, with the same `MIN_MARKER_CUT_MS`
+floor — a jingle sitting at 0:00 that day means nothing to cut. Not heard: the
+opening is left exactly as it arrived. Nothing new is offered or auto-approved there
+— a read already approved elsewhere still applies, because that is a decision the
+owner already made, not a guess — and the owner is told plainly, on the episode and
+in the activity log, that the jingle went unheard, rather than being left to notice a
+pre-roll that came back.
+
+**What it does not claim.** A show whose last twenty episodes all happen to share one
+pre-roll, or all happen to carry none at all, gets no proposal — the owner can still
+point at the jingle by hand. Confirming a jingle does not guess where a *different*
+kind of ident sits partway into an episode; it only ever cuts from 0:00 to where the
+sound was heard.
 
 ## 17. Acceptance checklist
 
