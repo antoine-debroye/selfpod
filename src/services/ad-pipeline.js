@@ -19,11 +19,21 @@ import { resolvePublishHold } from '../lib/publish-hold.js';
  * Serialising costs wall-clock time nobody is waiting on: the work happens behind a
  * publish hold, so the only observable difference is when an episode appears.
  */
-export function createAdPipeline({ db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber = null }) {
+export function createAdPipeline({
+  db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber = null,
+  autoTrigger = false, triggerDelayMs = 1500, longHoldMs = 30 * 60 * 1000,
+}) {
   let chain = Promise.resolve();
   let active = null;
   /** Whether a pass over every show is already under way. See `processAll`. */
   let sweeping = false;
+  /**
+   * A pass asked for but not yet started, per show. Asking again while one waits gets
+   * the same pass: it looks at everything owed when it starts, so a second one queued
+   * behind it would only do it all twice. A subscription backfill of two hundred
+   * downloads is two hundred scans; it must not become two hundred passes.
+   */
+  const waiting = new Map();
 
   /** Queues work behind everything already queued. Failures do not break the chain. */
   function serialise(label, work) {
@@ -79,6 +89,8 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     let released = 0;
     let held = 0;
     let untrimmable = 0;
+    let oldestHoldMs = 0;
+    const now = Date.now();
 
     for (const episode of episodes.listByShow(show.id)) {
       if (!isTrimmable(episode)) untrimmable += 1;
@@ -98,12 +110,35 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           transcriber.needsTranscript(episode, show),
       });
       if (wanted === (episode.publish_hold ?? null)) {
-        if (wanted) held += 1;
+        if (wanted) {
+          held += 1;
+          if (episode.publish_hold_since) oldestHoldMs = Math.max(oldestHoldMs, now - Date.parse(episode.publish_hold_since));
+        }
         continue;
       }
-      episodes.setSystemFields(episode.id, { publish_hold: wanted });
+      episodes.setSystemFields(episode.id, {
+        publish_hold: wanted,
+        // From the moment it was first held, however many reasons it is held for since.
+        publish_hold_since: wanted ? episode.publish_hold_since ?? new Date(now).toISOString() : null,
+      });
       if (wanted) held += 1;
       else released += 1;
+    }
+
+    /*
+     * An episode held out of the feed for a long time is said out loud. Holding is how
+     * a listener never downloads an advert SelfPod was about to cut; but a hold that
+     * never ends is a feed that silently stopped, which is worse than the advert.
+     */
+    const longHoldKey = `ad_long_hold_${show.id}`;
+    if (oldestHoldMs > longHoldMs) {
+      health?.set(longHoldKey, {
+        level: 'warn',
+        message: `An episode of “${show.title}” has been held out of the feed for ${Math.round(oldestHoldMs / 60000)} minutes.`,
+        detail: 'SelfPod is still listening or waiting for a decision. The Adverts page says which, and what is owed.',
+      });
+    } else {
+      health?.clear(longHoldKey);
     }
     /*
      * A show SelfPod cannot read at all is worth saying out loud.
@@ -125,7 +160,8 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
       health?.clear(key);
     }
 
-    return { released, held, corpusSize };
+    if (released || held) events?.emit(EVENTS.AD_WORK, { showId: show.id, slug: show.slug });
+    return { released, held, corpusSize, oldestHoldMs };
   }
 
   /**
@@ -215,7 +251,42 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
     });
   }
 
+  /*
+   * Passes start when a scan finds a new or changed episode, and once after the scan
+   * at startup — not only on the scheduler's tick. An episode used to wait up to a full
+   * rescan interval before anything looked at it, which was most of the time it spent
+   * out of the feed. The tick stays, as the fallback for anything this misses.
+   */
+  const timers = new Map();
+  function schedule(showId) {
+    clearTimeout(timers.get(showId));
+    const timer = setTimeout(() => {
+      timers.delete(showId);
+      const show = shows.get(showId);
+      if (!show || !show.ad_trim_mode || show.ad_trim_mode === 'off') return;
+      api.processShow(showId).catch((err) => logger?.error({ err, showId }, 'advert pass after a scan failed'));
+    }, triggerDelayMs);
+    timer.unref?.();
+    timers.set(showId, timer);
+  }
+  if (autoTrigger && events) {
+    events.on(EVENTS.SCAN_FINISHED, (payload) => {
+      if (payload?.scope === 'show') {
+        const totals = payload.totals ?? {};
+        if ((totals.added ?? 0) + (totals.updated ?? 0) > 0) schedule(payload.showId);
+      } else if (payload?.scope === 'all' && payload.trigger === 'startup') {
+        api.processAll().catch((err) => logger?.error({ err }, 'advert pass at startup failed'));
+      }
+    });
+  }
+
   const api = {
+    /** Stops pending scan-triggered passes; used on shutdown and by tests. */
+    stop() {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    },
+
     /**
      * Everything a show needs, in order: fingerprint, detect, cut, publish.
      *
@@ -223,7 +294,10 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
      * the segments it already has, and rewrites no audio.
      */
     processShow(showId) {
-      return serialise(`ad:${showId}`, async () => {
+      const already = waiting.get(showId);
+      if (already) return already;
+      const run = serialise(`ad:${showId}`, async () => {
+        waiting.delete(showId);
         const show = shows.get(showId);
         if (!show) return { skipped: 'unknown_show' };
 
@@ -298,6 +372,8 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
           released: holds.released,
         });
 
+        events?.emit(EVENTS.AD_CHANGED, { showId, slug: show.slug });
+        events?.emit(EVENTS.AD_WORK, { showId, slug: show.slug });
         logger?.info(
           {
             showId,
@@ -317,6 +393,69 @@ export function createAdPipeline({ db, events, logger, health, shows, episodes, 
         events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
         return { ...holds, foldedIn, fingerprinted, anchored, transcribed, detected, heard, trimmed };
       });
+      waiting.set(showId, run);
+      // A pass that failed must not stay the answer to "is one waiting?".
+      run.catch(() => {}).finally(() => {
+        if (waiting.get(showId) === run) waiting.delete(showId);
+      });
+      return run;
+    },
+
+    /**
+     * Carries out decisions already made, without looking for anything new.
+     *
+     * Approving, keeping, restoring and forgetting change only what is already in the
+     * catalogue, so what they need is the cut and the hold — seconds — not a pass,
+     * which reads every episode and may listen for minutes. Deliberately not queued
+     * behind a pass that is running: an undo that waits for another show to be heard is
+     * not an undo. The trimmer serialises per episode, so the two cannot cut one file
+     * at once.
+     */
+    async applyDecisions(showId) {
+      const show = shows.get(showId);
+      if (!show) return { skipped: 'unknown_show' };
+      const trimmed = await trimmer.trimShow(showId);
+      const holds = settleHolds(show);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
+      events?.emit(EVENTS.AD_CHANGED, { showId, slug: show.slug });
+      events?.emit(EVENTS.AD_WORK, { showId, slug: show.slug });
+      return { ...holds, trimmed };
+    },
+
+    /**
+     * What a show still owes, in the owner's terms: episodes to read, to hear and to
+     * cut, and roughly how long that is on this machine. Cheap enough for every render:
+     * row counts and the transcriber's own tally, no audio.
+     */
+    workOwed(showId) {
+      const show = shows.get(showId);
+      if (!show || show.ad_trim_mode === 'off') return null;
+      const list = episodes.listByShow(showId);
+      const mp3 = list.filter(isTrimmable);
+      const fingerprinted = countFingerprinted.get(showId)?.n ?? 0;
+      const toRead = Math.max(0, mp3.length - fingerprinted);
+      const listening = transcriber?.progress?.(showId) ?? null;
+      const toHear = transcriber?.available?.() ? listening?.pending ?? 0 : 0;
+      const toCut = list.filter((episode) => episode.trim_status === 'pending' || episode.trim_status === 'trimming').length;
+      const held = list.filter((episode) => episode.publish_hold).length;
+      const rate = transcriber?.status?.().rate ?? null;
+      const scope = transcriber?.scopeFor?.(show);
+      const averageListenMs = scope?.mode === 'whole'
+        ? (mp3.reduce((sum, episode) => sum + (episode.duration_seconds ?? 0), 0) / Math.max(1, mp3.length)) * 1000
+        : Math.min(
+            (scope?.headMs ?? 300_000) + (scope?.tailMs ?? 240_000),
+            (mp3.reduce((sum, episode) => sum + (episode.duration_seconds ?? 0), 0) / Math.max(1, mp3.length)) * 1000,
+          );
+      const estimateSeconds = rate && toHear ? Math.round((toHear * averageListenMs) / rate / 1000) : null;
+      return {
+        toRead,
+        toHear,
+        toCut,
+        held,
+        busy: active === `ad:${showId}`,
+        estimateSeconds,
+        nothingOwed: !toRead && !toHear && !toCut,
+      };
     },
 
     /** Every show that has the feature on. Used at boot and on the scheduler's tick. */

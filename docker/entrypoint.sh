@@ -26,6 +26,22 @@ log() {
   printf '%s selfpod-entrypoint: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
 }
 
+# Runs a command as "uid:gid" with no process left in between. The Alpine image has
+# su-exec; the GPU image is Ubuntu (NVIDIA's runtime needs glibc) and has setpriv from
+# util-linux, which does the same thing.
+run_as() {
+  target="$1"
+  shift
+  if command -v su-exec >/dev/null 2>&1; then
+    exec_or_run su-exec "$target" "$@"
+  else
+    exec_or_run setpriv --reuid "${target%%:*}" --regid "${target##*:}" --clear-groups "$@"
+  fi
+}
+exec_or_run() {
+  if [ "${RUN_AS_EXEC:-0}" = "1" ]; then exec "$@"; else "$@"; fi
+}
+
 # ---------------------------------------------------------------------------
 # Running as a non-root user (someone set `user:` in compose, or the platform
 # enforces it). PUID/PGID cannot be applied, and that is fine — but say so,
@@ -74,7 +90,7 @@ if [ ! -d "$DATA_DIR" ]; then
   mkdir -p "$DATA_DIR" 2>/dev/null || true
 fi
 
-if ! su-exec "$RUN_AS" sh -c "[ -r '$DATA_DIR' ] && [ -x '$DATA_DIR' ]" 2>/dev/null; then
+if ! run_as "$RUN_AS" sh -c "[ -r '$DATA_DIR' ] && [ -x '$DATA_DIR' ]" 2>/dev/null; then
   SELFTEST_RESULT="failed"
   log "----------------------------------------------------------------"
   log "CANNOT READ $DATA_DIR as UID ${PUID}, GID ${PGID}."
@@ -82,7 +98,7 @@ if ! su-exec "$RUN_AS" sh -c "[ -r '$DATA_DIR' ] && [ -x '$DATA_DIR' ]" 2>/dev/n
   log "on the host), or grant that user access to the dataset."
   log "SelfPod will still start so the web interface can explain this."
   log "----------------------------------------------------------------"
-elif ! su-exec "$RUN_AS" sh -c "touch '$DATA_DIR/.selfpod-entrypoint-test' && rm -f '$DATA_DIR/.selfpod-entrypoint-test'" 2>/dev/null; then
+elif ! run_as "$RUN_AS" sh -c "touch '$DATA_DIR/.selfpod-entrypoint-test' && rm -f '$DATA_DIR/.selfpod-entrypoint-test'" 2>/dev/null; then
   SELFTEST_RESULT="failed"
   log "----------------------------------------------------------------"
   log "CANNOT WRITE TO $DATA_DIR as UID ${PUID}, GID ${PGID}."
@@ -98,4 +114,4 @@ fi
 export SELFPOD_DATA_SELFTEST="$SELFTEST_RESULT"
 
 # exec, so node receives SIGTERM directly and can shut down cleanly.
-exec su-exec "$RUN_AS" node /app/src/index.js
+RUN_AS_EXEC=1 run_as "$RUN_AS" node /app/src/index.js

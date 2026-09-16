@@ -1,0 +1,16 @@
+<%
+  /* One page of episodes and the link to the next. Returned on its own by
+     /ui/shows/:slug/ad-timeline, which replaces the "Show older" link it was asked from. */
+  const show = it.show;
+  const timeline = it.timeline;
+%>
+<% for (const bar of timeline.episodes) { %>
+  <%~ include('./cut-bar.eta', { bar, target: '#ad-panel', returnTo: null }) %>
+<% } %>
+<% if (timeline.nextBefore) { %>
+  <div class="ad-timeline__more" id="ad-timeline-more">
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/adverts?before=<%= encodeURIComponent(timeline.nextBefore) %>#ad-timeline"
+       hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-timeline?before=<%= encodeURIComponent(timeline.nextBefore) %>"
+       hx-target="#ad-timeline-more" hx-swap="outerHTML">Show older</a>
+  </div>
+<% } %>

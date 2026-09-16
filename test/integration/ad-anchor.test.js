@@ -362,3 +362,50 @@ describe('the jingle alongside a taught boundary', () => {
     assert.ok(episode.trimmed_filename, 'a read already approved was not cut in an episode the jingle was never heard in');
   });
 });
+
+describe('the jingle in automatic mode', () => {
+  it('is cut without being asked when heard in every recent episode, and forgetting it keeps it forgotten', async () => {
+    const { show, dir } = await makeShow({ mode: 'auto' });
+    server.db.prepare(`UPDATE shows SET ad_transcribe = 'off' WHERE id = ?`).run(show.id);
+    await addEpisode(dir, 'episode-0.mp3', JINGLE, PROGRAMME_A);
+    await addEpisode(dir, 'episode-1.mp3', JINGLE, PROGRAMME_B);
+    await addEpisode(dir, 'episode-2.mp3', PREROLL_A, JINGLE, PROGRAMME_C);
+    await addEpisode(dir, 'episode-3.mp3', PREROLL_B, JINGLE, PROGRAMME_A);
+
+    const result = await server.adPipeline.processShow(show.id);
+
+    const [anchor] = anchors(show.id);
+    assert.ok(anchor.confirmed_at, 'a jingle heard in every episode was left as a question in automatic mode');
+    assert.equal(anchor.auto_confirmed, 1, 'it does not say SelfPod confirmed it on its own');
+    assert.equal(result.anchored.autoConfirmed, true);
+    const cut = byFilename(show.id);
+    assert.ok(cut['episode-2.mp3'].trimmed_filename, 'the pre-roll in front of the jingle was not cut');
+    assert.ok(cut['episode-3.mp3'].trimmed_filename, 'the pre-roll in front of the jingle was not cut');
+    assert.equal(cut['episode-0.mp3'].trimmed_filename, null, 'a jingle at the very start cut something');
+
+    server.adDetect.removeAnchor(anchor.id);
+    await server.adPipeline.processShow(show.id);
+    await server.adPipeline.processShow(show.id);
+
+    const after = anchors(show.id);
+    assert.equal(after.length, 1, 'forgetting it made SelfPod propose the same jingle again');
+    assert.ok(after[0].dismissed_at);
+    assert.equal(after[0].confirmed_at, null);
+    for (const episode of server.episodes.listByShow(show.id)) {
+      assert.equal(episode.trimmed_filename, null, `${episode.filename} is still cut after the jingle was forgotten`);
+    }
+  });
+
+  it('stays a question in review mode', async () => {
+    const { show, dir } = await makeShow({ mode: 'review' });
+    server.db.prepare(`UPDATE shows SET ad_transcribe = 'off' WHERE id = ?`).run(show.id);
+    await addEpisode(dir, 'episode-0.mp3', JINGLE, PROGRAMME_A);
+    await addEpisode(dir, 'episode-1.mp3', PREROLL_A, JINGLE, PROGRAMME_B);
+    await addEpisode(dir, 'episode-2.mp3', PREROLL_B, JINGLE, PROGRAMME_C);
+    await server.adPipeline.processShow(show.id);
+    const [anchor] = anchors(show.id);
+    assert.ok(anchor);
+    assert.equal(anchor.confirmed_at, null);
+    assert.equal(anchor.auto_confirmed, 0);
+  });
+});

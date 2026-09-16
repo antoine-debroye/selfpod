@@ -59,6 +59,18 @@ in the path and no argument comes from outside the code.
 fetches the model from Hugging Face checking the digest above. Point `WHISPER_CLI` and
 `WHISPER_MODEL` at another build or a larger model to use those instead.
 
+## NVIDIA CUDA runtime (the `-cuda` image only)
+
+**What:** the GPU image (`Dockerfile.cuda`, tags ending `-cuda`) is built on NVIDIA's
+`nvidia/cuda:12.6.3-runtime-ubuntu22.04` image and contains the CUDA runtime libraries it
+ships, including cuBLAS, which the CUDA build of whisper.cpp links against. The regular
+image contains none of this.
+
+**Licence:** redistributed as NVIDIA permits for these runtime libraries in container
+images, under the [CUDA Toolkit End User License Agreement](https://docs.nvidia.com/cuda/eula/index.html).
+They are not open source. The GPU driver itself is not in the image; the NVIDIA container
+runtime provides it from the host.
+
 ## Everything else
 
 The remaining runtime dependencies are MIT, ISC, BSD or Apache-2.0. `npm ls --all` and

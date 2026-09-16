@@ -712,9 +712,10 @@ AD_EP_ID="$(api "${BASE}/api/shows/${AD_SHOW_ID}/episodes" | json '
 print(json.load(sys.stdin)["episodes"][0]["id"])')"
 AD_EP_FILE="$(api "${BASE}/api/shows/${AD_SHOW_ID}/episodes" | json '
 print(json.load(sys.stdin)["episodes"][0]["filename"])')"
-# The version the feed is currently advertising. The media route refuses any other,
-# which is the whole point of putting it there: a client resuming a download after the
-# audio changed must be told no, not handed a splice of two files.
+# The version the feed is currently advertising. An address carrying another version
+# is still served — it lives on in subscribers' apps (1.8.2) — but a client resuming
+# against it gets the whole current file, never a fragment to splice (1.8.6), and is
+# told it may not range it (1.8.7), so a proxy in front cannot cut it back down.
 AD_VERSION="$(printf '%s' "$AFTER_FEED" | json '
 import re
 body = sys.stdin.read()
@@ -724,13 +725,22 @@ MEDIA="${BASE}/media/ad-club/${AD_FEED_TOKEN}/${AD_EP_ID}/${AD_EP_FILE}?v=${AD_V
 curl -s -o "${WORK}/trimmed.mp3" "$MEDIA"
 curl -s -o "${WORK}/tail.mp3" -H 'Range: bytes=200000-' "$MEDIA"
 
-# And a version that is not the published one is refused rather than served the
-# current bytes — the check that makes the version mean anything at all.
-STALE="$(curl -s -o /dev/null -w '%{http_code}' \
-  "${BASE}/media/ad-club/${AD_FEED_TOKEN}/${AD_EP_ID}/${AD_EP_FILE}?v=000000000000")"
-[ "$STALE" = "404" ] \
-  && pass "a superseded version is refused, not quietly served the new audio" \
-  || fail "a stale version was served (${STALE})"
+# A superseded version asked for from the middle: the whole current file, 200, and
+# Accept-Ranges: none. This check used to expect a 404, which 1.8.2 removed on purpose —
+# a refusal killed every address already in a subscriber's app.
+STALE_URL="${BASE}/media/ad-club/${AD_FEED_TOKEN}/${AD_EP_ID}/${AD_EP_FILE}?v=000000000000"
+STALE="$(curl -s -D "${WORK}/stale.headers" -o "${WORK}/stale.mp3" -w '%{http_code}' -H 'Range: bytes=200000-' "$STALE_URL")"
+STALE_RANGES="$(tr -d '\r' < "${WORK}/stale.headers" | awk -F': ' 'tolower($1)=="accept-ranges"{print tolower($2)}')"
+if [ "$STALE" = "200" ] && [ "$STALE_RANGES" = "none" ] && cmp -s "${WORK}/stale.mp3" "${WORK}/trimmed.mp3"; then
+  pass "a resuming client on a superseded address gets the whole current file, un-rangeable"
+else
+  fail "a superseded address resumed from the middle: status ${STALE}, accept-ranges '${STALE_RANGES}', whole file: $(cmp -s "${WORK}/stale.mp3" "${WORK}/trimmed.mp3" && echo yes || echo no)"
+fi
+# And the current version still ranges, or every player's seek bar breaks.
+CURRENT_RANGE="$(curl -s -o /dev/null -w '%{http_code}' -H 'Range: bytes=200000-' "$MEDIA")"
+[ "$CURRENT_RANGE" = "206" ] \
+  && pass "the current address still serves byte ranges" \
+  || fail "the current address no longer serves a range (${CURRENT_RANGE})"
 
 python3 - "${WORK}/trimmed.mp3" "${WORK}/tail.mp3" "${WORK}/data/shows/ad-club/${AD_EP_FILE}" <<'PY'
 import sys, pathlib

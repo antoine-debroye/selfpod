@@ -227,7 +227,7 @@ export default async function pageRoutes(fastify, services) {
   /* ------------------------------------------------------------- dashboard */
 
   fastify.get('/', guarded, async (request, reply) => {
-    const all = shows.list().map((show) => presentShow(show));
+    const all = shows.list().map((show) => ({ ...presentShow(show), advertsCaption: services.advertsView.showCaption(show) }));
     return reply.view(
       'pages/dashboard.eta',
       shell(request, {
@@ -289,6 +289,7 @@ export default async function pageRoutes(fastify, services) {
         activeSlug: show.slug,
         crumbs: [{ label: 'Dashboard', href: '/' }, { label: show.title }],
         show: presented,
+        cuts: Object.fromEntries(services.advertsView.cutSummaries(show.id)),
         subscribeCodes: await subscribeQrCodes(presented.feedUrl),
         defaultSubscribeTarget: DEFAULT_SUBSCRIBE_TARGET,
         topbarActions: showActions(show.slug),
@@ -365,13 +366,19 @@ export default async function pageRoutes(fastify, services) {
       to: filter.published?.to ?? null,
     };
     const show = shows.getOrThrow(subscription.show_id);
+    // Every episode's cut state at once, from the same view-model the Adverts page uses.
+    const cuts = services.advertsView.cutSummaries(show.id);
     const items = services.subscriptions
       .items({ ...query, limit: LEDGER_PAGE_SIZE, offset: filter.offset })
       .map((row) => {
         const item = presentItem(row, services);
-        // What the words said about a downloaded episode, from the same presenter
-        // the episode page uses, so the two never disagree.
-        item.adverts = item.episodeId ? services.advertsView.advertsFor(episodes.get(item.episodeId), show) : null;
+        const summary = item.episodeId ? cuts.get(item.episodeId) : null;
+        item.adverts = summary
+          ? {
+              ...summary,
+              episodeUrl: `/shows/${encodeURIComponent(show.slug)}/episodes/${encodeURIComponent(item.episodeId)}`,
+            }
+          : null;
         return item;
       });
     const total = services.subscriptions.itemCount(query);
@@ -437,7 +444,10 @@ export default async function pageRoutes(fastify, services) {
           { label: 'Adverts' },
         ],
         show: presentShow(show),
-        ...(await services.advertsView.segmentsContext(show)),
+        ...(await services.advertsView.panel(show, {
+          owed: services.adPipeline.workOwed(show.id),
+          before: request.query?.before ? String(request.query.before) : null,
+        })),
       }),
       APP_LAYOUT,
     );

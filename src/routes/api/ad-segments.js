@@ -8,6 +8,7 @@ import { cutFrames } from '../../lib/mp3-cut.js';
 import { frameProfile } from '../../lib/mp3-frames.js';
 import { msToFrame } from '../../lib/fingerprint-file.js';
 import { presentSegment } from '../../lib/present-segment.js';
+import { describeWork } from '../../services/adverts-view.js';
 import { isSafeFilename } from '../../lib/slug.js';
 
 /**
@@ -134,7 +135,7 @@ export default async function adSegmentRoutes(fastify, services) {
         fields.ad_transcribe_head_seconds !== show.ad_transcribe_head_seconds ||
         fields.ad_transcribe_tail_seconds !== show.ad_transcribe_tail_seconds)
     ) {
-      services.transcriber?.forgetShow(show.id);
+      await services.transcriber?.forgetShow(show.id);
     }
 
     const settled = adPipeline.settle(show.id);
@@ -187,7 +188,7 @@ export default async function adSegmentRoutes(fastify, services) {
     const marker = adDetect.getMarker(request.params.id);
     if (!marker) throw notFound('That boundary no longer exists.', 'marker_not_found');
     adDetect.removeMarker(marker.id);
-    await adPipeline.processShow(marker.show_id);
+    await adPipeline.applyDecisions(marker.show_id);
     return { removed: true };
   });
 
@@ -263,16 +264,20 @@ export default async function adSegmentRoutes(fastify, services) {
     // Edges moved by word (spec §19.6): the words are the segment, so the text moves
     // with the cut and the run below re-finds it everywhere.
     const body = request.body ?? {};
+    let reshaped = false;
     if (body.startWord !== undefined && body.endWord !== undefined) {
       const episode = episodes.get(String(body.episodeId ?? segment.exemplar_episode_id ?? ''));
       if (!episode || episode.show_id !== segment.show_id) throw badRequest('Say which episode the words are in.', 'unknown_episode');
       const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
       if (!range) throw badRequest('The last word has to come after the first.', 'invalid_word_range');
       await adDetect.reshapeSegment(segment.id, { episodeId: episode.id, ...range });
+      reshaped = true;
     }
 
     adDetect.decide(segment.id, status);
-    const result = await adPipeline.processShow(segment.show_id);
+    // New edges are new words to look for everywhere, which is a pass; a plain decision
+    // only changes what is already known, which is a cut.
+    const result = reshaped ? await adPipeline.processShow(segment.show_id) : await adPipeline.applyDecisions(segment.show_id);
 
     return {
       segment: presentSegment(adDetect.listSegments(segment.show_id).find((row) => row.id === segment.id), {
@@ -346,6 +351,114 @@ export default async function adSegmentRoutes(fastify, services) {
       .send(sample.buffer);
   });
 
+  /* ---- the cuts, episode by episode ---- */
+
+  /** Every episode as a bar: its state and the stretches cut, waiting or restored in it. */
+  fastify.get('/shows/:id/ad-cuts', async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    const view = services.advertsView;
+    const cuts = view.showCuts(show);
+    const timeline = cuts.off
+      ? { episodes: [], nextBefore: null, total: 0 }
+      : view.timeline(show, { cuts, before: request.query?.before ? String(request.query.before) : null });
+    return {
+      mode: show.ad_trim_mode ?? 'off',
+      nextBefore: timeline.nextBefore,
+      episodes: timeline.episodes.map((bar) => ({
+        id: bar.id,
+        title: bar.title,
+        durationMs: bar.durationMs,
+        state: bar.state?.state ?? null,
+        pill: bar.state?.pill ?? null,
+        caption: bar.state?.caption ?? null,
+        savedMs: bar.state?.savedMs ?? 0,
+        stretches: bar.stretches.map((stretch) => ({
+          segmentId: stretch.segmentId,
+          restoreId: stretch.overrideId,
+          kind: stretch.kind,
+          state: stretch.state,
+          startMs: stretch.startMs,
+          endMs: stretch.endMs,
+          left: stretch.left,
+          width: stretch.width,
+          reason: { key: stretch.reasonKey, sentence: stretch.reason },
+        })),
+      })),
+    };
+  });
+
+  /** What a show still owes: episodes to read, hear and cut, and the sentence the page shows. */
+  fastify.get('/shows/:id/ad-work', async (request) => {
+    const show = shows.getOrThrow(request.params.id);
+    const owed = adPipeline.workOwed(show.id);
+    return { work: owed, sentence: describeWork(owed) };
+  });
+
+  /** "Restore here": one stretch left in one episode, whatever rule cuts it. */
+  fastify.post('/ad-segments/:id/restore', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const segment = adDetect.getSegment(request.params.id);
+    if (!segment) throw notFound('That cut no longer exists.', 'segment_not_found');
+    const episode = episodes.get(String(request.body?.episodeId ?? ''));
+    if (!episode || episode.show_id !== segment.show_id) throw badRequest('Say which episode to restore it in.', 'unknown_episode');
+    const restore = adDetect.restoreHere({ segmentId: segment.id, episodeId: episode.id });
+    const result = await adPipeline.applyDecisions(segment.show_id);
+    return { restore: presentRestore(restore), trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  /** Takes a "Restore here" back. */
+  fastify.delete('/ad-restores/:id', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const restore = services.db.prepare('SELECT * FROM ad_cut_overrides WHERE id = ?').get(request.params.id);
+    if (!restore) throw notFound('That restore no longer exists.', 'override_not_found');
+    const episode = episodes.get(restore.episode_id);
+    adDetect.undoRestore(restore.id);
+    const result = episode ? await adPipeline.applyDecisions(episode.show_id) : null;
+    return { removed: true, trimmed: result?.trimmed?.trimmed ?? 0 };
+  });
+
+  /** "Restore everywhere and stop": the rule behind a cut, undone for the whole show. */
+  fastify.post('/ad-segments/:id/stop', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const segment = adDetect.getSegment(request.params.id);
+    if (!segment) throw notFound('That cut no longer exists.', 'segment_not_found');
+    const stopped = adDetect.stopRule(segment.id);
+    const result = await adPipeline.applyDecisions(segment.show_id);
+    return { removed: stopped.removed, kind: segment.kind, trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  /** Teaching by time: a stretch that is an advert, or the station jingle. */
+  fastify.post('/episodes/:id/teach-range', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request) => {
+    const episode = episodes.getOrThrow(request.params.id);
+    const show = shows.getOrThrow(episode.show_id);
+    const body = request.body ?? {};
+    const startMs = Number(body.startMs);
+    const endMs = Number(body.endMs);
+    if (body.kind !== 'advert' && body.kind !== 'jingle') {
+      throw badRequest('Say whether that stretch is an advert or the station jingle.', 'unknown_kind');
+    }
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      throw badRequest('Say a first and a last moment, in that order, within the episode.', 'invalid_range');
+    }
+    if (body.kind === 'jingle') {
+      const anchor = await adDetect.addAnchorFromRange({ showId: show.id, episodeId: episode.id, startMs, endMs });
+      const result = await adPipeline.processShow(show.id);
+      return { anchor: services.advertsView.presentAnchor(anchor), trimmed: result.trimmed?.trimmed ?? 0 };
+    }
+    const segment = await adDetect.teachRange({ showId: show.id, episodeId: episode.id, startMs, endMs });
+    const result = await adPipeline.processShow(show.id);
+    const row = adDetect.listSegments(show.id).find((entry) => entry.id === segment.id);
+    return { segment: row ? presentSegment(row, { episodes }) : null, trimmed: result.trimmed?.trimmed ?? 0 };
+  });
+
+  function presentRestore(restore) {
+    return {
+      id: restore.id,
+      episodeId: restore.episode_id,
+      segmentId: restore.segment_id,
+      startMs: restore.start_ms,
+      endMs: restore.end_ms,
+      createdAt: restore.created_at,
+    };
+  }
+
   /* ---- the sound of a jingle (spec §19.6) ---- */
 
   /** "Yes, that's the jingle" — confirmed, and cut for on the very next run. */
@@ -373,7 +486,7 @@ export default async function adSegmentRoutes(fastify, services) {
     const anchor = adDetect.getAnchor(request.params.id);
     if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
     adDetect.removeAnchor(anchor.id);
-    await adPipeline.processShow(anchor.show_id);
+    await adPipeline.applyDecisions(anchor.show_id);
     return { removed: true };
   });
 

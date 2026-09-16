@@ -85,4 +85,32 @@ describe('the content security policy this app promises to keep', () => {
     assert.match(app, /data-submit-on-change/, 'nothing acts on the attribute');
     assert.match(app, /requestSubmit\(\)/, 'the attribute is read but never submits');
   });
+
+  it('still has the cut bar and the range picker wired to the script that drives them', async () => {
+    // The same failure as the toggles, one feature on: a ▶ that only follows its link
+    // and a bar that ignores a tap both look fine and pass every server-side test.
+    const partials = join(VIEWS, 'partials');
+    const bar = await readFile(join(partials, 'cut-bar.eta'), 'utf8');
+    const stretch = await readFile(join(partials, 'cut-stretch.eta'), 'utf8');
+    const teach = await readFile(join(partials, 'teach-range.eta'), 'utf8');
+    assert.match(bar, /data-cutbar\b/);
+    assert.match(bar, /data-cut-audio/);
+    assert.match(bar, /data-cutbar-pick\b/);
+    assert.match(bar + stretch, /data-play-from=/, 'the ▶ does not say where to play from');
+    assert.match(stretch, /data-play-to=/);
+    assert.match(teach, /data-cutbar-pick-form/, 'the bar has no form to fill');
+    assert.match(teach, /data-range-from/);
+    assert.match(teach, /data-range-to/);
+    assert.match(teach, /data-pick-from-player/);
+
+    const app = await readFile(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'public', 'js', 'app.js'),
+      'utf8',
+    );
+    for (const hook of ['[data-play-from]', '[data-cutbar]', 'audio[data-cut-audio]', '[data-cutbar-pick]', '[data-cutbar-pick-form]', '[data-range-from]', '[data-range-to]', '[data-pick-from-player]', '[data-tx-scope]']) {
+      assert.ok(app.includes(hook), `app.js never looks for ${hook}`);
+    }
+    assert.match(app, /\.play\(\)/, 'nothing ever plays the stretch');
+    assert.match(app, /currentTime/, 'nothing moves the player to the stretch');
+  });
 });

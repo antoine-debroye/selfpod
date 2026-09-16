@@ -1,0 +1,22 @@
+<%
+  /* One stretch of one episode: when, where it stands, why, a way to hear it, and what
+     can be done about it. Every word here is from the view-model. */
+  const s = it.stretch;
+%>
+<li class="stretch stretch--<%= s.state %>">
+  <div class="stretch__main">
+    <span class="stretch__at mono"><%= s.atLabel %></span>
+    <span class="stretch__state"><%= s.stateLabel %></span>
+    <span class="stretch__why"><%= s.reason %></span>
+  </div>
+  <div class="stretch__act">
+    <%
+      /* With script off the link opens the stretch on its own (the existing sample);
+         with it on, app.js plays this stretch of the original, three seconds either side. */
+    %>
+    <a class="stretch__play" href="<%= s.sampleUrl ?? it.audioUrl %>" data-play-from="<%= s.playFrom %>" data-play-to="<%= s.playTo %>" aria-label="Play <%= s.atLabel %>">▶</a>
+    <% for (const action of s.actions) { %>
+      <%~ include('./ad-action.eta', { action, target: it.target, returnTo: it.returnTo }) %>
+    <% } %>
+  </div>
+</li>

@@ -157,6 +157,7 @@ export async function createTestInstance({ env = {}, skipBootstrap = false, whis
     },
 
     async cleanup() {
+      await adDetect.close();
       remoteFeeds.stop?.();
       shows.stop?.();
       settings.stop?.();

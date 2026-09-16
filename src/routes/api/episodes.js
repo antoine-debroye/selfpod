@@ -1,5 +1,10 @@
+import { stat } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
+
+import { resolveContained } from '../../lib/contained-path.js';
 import { notFound, unprocessable } from '../../lib/errors.js';
 import { publishedAudio } from '../../lib/published-audio.js';
+import { isSafeFilename } from '../../lib/slug.js';
 
 export default async function episodeRoutes(fastify, { config, episodes, shows, presentEpisode }) {
   fastify.addHook('onRequest', fastify.requireAdminApi);
@@ -33,6 +38,7 @@ export default async function episodeRoutes(fastify, { config, episodes, shows, 
    */
   fastify.get('/episodes/:id/audio', async (request, reply) => {
     const { episode, show } = load(request.params.id);
+    if (request.query?.copy === 'original') return sendOriginal(reply, episode, show);
     const audio = publishedAudio(episode);
     const url =
       `/media/${encodeURIComponent(show.slug)}/${encodeURIComponent(show.feed_token)}` +
@@ -41,6 +47,30 @@ export default async function episodeRoutes(fastify, { config, episodes, shows, 
     // Temporary and uncached: the answer changes whenever the cut list does.
     return reply.header('cache-control', 'no-store').redirect(url, 307);
   });
+
+  /**
+   * The file on the share, adverts and all, so the owner can hear what was cut.
+   *
+   * Streamed with byte ranges so a player can seek straight to a stretch. The show
+   * folder is normally a writable SMB share, so the path is resolved and proved to be
+   * inside it before a byte is read, exactly as the media route does: a symlink planted
+   * there as an episode file must not become a way to read the rest of the host.
+   * Never cached, and never counted as a download — it is not one.
+   */
+  async function sendOriginal(reply, episode, show) {
+    if (!isSafeFilename(episode.filename)) throw notFound('That episode file is not readable right now.', 'file_missing');
+    const resolved = await resolveContained(shows.dirFor(show), episode.filename);
+    if (!resolved.path) throw notFound('That episode file is not readable right now.', 'file_missing');
+    try {
+      await stat(resolved.path);
+    } catch {
+      throw notFound('That episode file is not readable right now.', 'file_missing');
+    }
+    reply
+      .header('content-type', episode.mime_type)
+      .header('cache-control', 'private, no-store');
+    return reply.sendFile(basename(resolved.path), dirname(resolved.path), { cacheControl: false, contentType: false });
+  }
 
   fastify.patch('/episodes/:id', async (request) => {
     const { episode, show } = load(request.params.id);

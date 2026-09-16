@@ -157,7 +157,7 @@ function seededAt009() {
 describe('migration 010 adds the audio anchor tables', () => {
   it('keeps every existing marker, segment and occurrence untouched', () => {
     const db = seededAt009();
-    runMigrations(db);
+    runMigrations(db, { upTo: 10 });
     assert.equal(db.pragma('user_version', { simple: true }), 10);
 
     const marker = db.prepare('SELECT * FROM ad_markers WHERE id = ?').get('m1');
@@ -206,5 +206,163 @@ describe('migration 010 adds the audio anchor tables', () => {
     db.prepare('DELETE FROM shows WHERE id = ?').run('s1');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ad_anchors').get().n, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ad_anchor_hits').get().n, 0);
+  });
+});
+
+/**
+ * Migration 011 classifies every catalogue row by kind, adds per-episode restores and
+ * the columns a pass uses to skip work. It is additive, so the thing to prove is not
+ * only that nothing is lost but that 1.8.8 still runs against the result: a rollback
+ * is an owner changing an image tag back, and it has to be harmless.
+ */
+function seededAt010() {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  runMigrations(db, { upTo: 10 });
+  assert.equal(db.pragma('user_version', { simple: true }), 10);
+
+  const now = '2026-09-15T00:00:00.000Z';
+  db.prepare(
+    `INSERT INTO shows (id, slug, title, author_name, author_email, feed_token, created_at, updated_at)
+     VALUES ('s1', 'show', 'Show', 'A', 'a@example.com', 'tok', ?, ?)`,
+  ).run(now, now);
+  const episode = db.prepare(
+    `INSERT INTO episodes (id, show_id, filename, identity_key, title, pub_date, file_size_bytes, mime_type,
+                           trimmed_filename, trim_status, publish_hold, created_at, updated_at)
+     VALUES (?, 's1', ?, ?, ?, ?, 1000, 'audio/mpeg', ?, ?, ?, ?, ?)`,
+  );
+  episode.run('e1', 'a.mp3', 'k1', 'A', now, 'e1.abcdef012345.mp3', 'trimmed', null, now, now);
+  episode.run('e2', 'b.mp3', 'k2', 'B', now, null, null, 'awaiting_corpus', now, '2026-09-15T01:00:00.000Z');
+  db.prepare(
+    `INSERT INTO ad_markers (id, show_id, role, inclusive, text, raw_text, language, created_at)
+     VALUES ('m1', 's1', 'programme_starts', 0, 'vous ecoutez rmc', 'Vous écoutez RMC', 'fr', ?)`,
+  ).run(now);
+  db.prepare(
+    `INSERT INTO ad_anchors (id, show_id, origin, confirmed_at, algorithm_version, clip, lead_ms,
+                             exemplar_episode_id, exemplar_start_ms, exemplar_end_ms, created_at, updated_at)
+     VALUES ('a1', 's1', 'proposed', ?, 2, x'0102', 800, 'e1', 1000, 3500, ?, ?)`,
+  ).run(now, now, now);
+
+  const segment = db.prepare(
+    `INSERT INTO ad_segments
+       (id, show_id, signature, source, status, auto_approved, hold_reason, duration_ms,
+        episode_count, occurrence_count, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms,
+        first_seen_at, decided_at, created_at, updated_at, text, raw_text, cue_score, cues)
+     VALUES (@id, 's1', @signature, @source, @status, 0, @hold, 9000, 1, 1, 'e1', 0, 9000,
+             @now, NULL, @now, @now, @text, @text, @score, @cues)`,
+  );
+  const rows = [
+    { id: 'boundary', signature: 'marker:m1', source: 'transcript', status: 'approved', text: 'vous ecoutez rmc' },
+    { id: 'jingle', signature: 'anchor:a1', source: 'corpus', status: 'approved' },
+    { id: 'orphan-marker', signature: 'marker:gone', source: 'transcript', status: 'approved', text: 'x y z' },
+    { id: 'audio', signature: '0123456789abcdef01234567', source: 'corpus', status: 'approved' },
+    { id: 'audio-with-words', signature: '89abcdef0123456789abcdef', source: 'corpus', status: 'candidate', text: 'theme words', score: 0.1, cues: '[]' },
+    { id: 'diff', signature: 'fedcba9876543210fedcba98', source: 'diff', status: 'approved' },
+    { id: 'taught', signature: 'tx:aaaaaaaaaaaaaaaaaaaaaaaa', source: 'transcript', status: 'approved', text: 'code promo rmc' },
+    { id: 'repeated', signature: 'tx:bbbbbbbbbbbbbbbbbbbbbbbb', source: 'transcript', status: 'candidate', text: 'banque populaire', score: 0.8, cues: '["sponsored_by"]' },
+    { id: 'once-undecided', signature: 'tx:cccccccccccccccccccccccc', source: 'transcript', status: 'candidate', hold: 'only_heard_once', text: 'sfr offre', score: 0.7, cues: '["price"]' },
+    { id: 'once-decided', signature: 'tx:dddddddddddddddddddddddd', source: 'transcript', status: 'approved', hold: 'only_heard_once', text: 'volkswagen', score: 0.7, cues: '["price"]' },
+  ];
+  for (const row of rows) {
+    segment.run({ hold: null, text: null, score: null, cues: null, now, ...row });
+    db.prepare(
+      `INSERT INTO ad_segment_occurrences (segment_id, episode_id, start_frame, end_frame, start_ms, end_ms)
+       VALUES (?, 'e1', 0, 345, 0, 9000)`,
+    ).run(row.id);
+  }
+  db.prepare(
+    `INSERT INTO episode_fingerprints (episode_id, algorithm_version, frame_count, sha256, bytes, created_at)
+     VALUES ('e1', 2, 1000, 'abc', 1000, ?)`,
+  ).run(now);
+  return db;
+}
+
+describe('migration 011 classifies the catalogue without losing it', () => {
+  it('gives every row the kind its evidence says, and links rules to their rows', () => {
+    const db = seededAt010();
+    runMigrations(db);
+    assert.equal(db.pragma('user_version', { simple: true }), 11);
+
+    const kinds = Object.fromEntries(
+      db.prepare('SELECT id, kind, marker_id, anchor_id, hold_reason FROM ad_segments').all().map((row) => [row.id, row]),
+    );
+    assert.equal(kinds.boundary.kind, 'boundary_words');
+    assert.equal(kinds.boundary.marker_id, 'm1');
+    assert.equal(kinds.jingle.kind, 'jingle');
+    assert.equal(kinds.jingle.anchor_id, 'a1');
+    assert.equal(kinds.audio.kind, 'repeated_audio');
+    assert.equal(kinds['audio-with-words'].kind, 'repeated_audio', 'words attached later do not change how it was found');
+    assert.equal(kinds.diff.kind, 'diff');
+    assert.equal(kinds.taught.kind, 'remembered_words', 'a word row with no cues was taught by the owner');
+    assert.equal(kinds.repeated.kind, 'repeated_words');
+    assert.equal(kinds['once-decided'].kind, 'remembered_words', 'a heard-once read the owner decided about is kept');
+    assert.equal(kinds['once-decided'].hold_reason, null);
+    assert.equal(kinds['once-undecided'], undefined, 'an undecided heard-once row is removed');
+    assert.equal(kinds['orphan-marker'], undefined, 'a boundary row whose boundary is gone is removed');
+
+    const occurrences = db.prepare('SELECT segment_id FROM ad_segment_occurrences').all().map((row) => row.segment_id);
+    assert.equal(occurrences.length, 8, 'every kept row kept its occurrence, removed rows took theirs with them');
+    assert.deepEqual(db.pragma('foreign_key_check'), [], 'no dangling references');
+  });
+
+  it('leaves the published cut and the hold as they were, and dates the hold', () => {
+    const db = seededAt010();
+    runMigrations(db);
+    const e1 = db.prepare('SELECT * FROM episodes WHERE id = ?').get('e1');
+    assert.equal(e1.trimmed_filename, 'e1.abcdef012345.mp3');
+    assert.equal(e1.publish_hold_since, null);
+    const e2 = db.prepare('SELECT * FROM episodes WHERE id = ?').get('e2');
+    assert.equal(e2.publish_hold, 'awaiting_corpus');
+    assert.equal(e2.publish_hold_since, '2026-09-15T01:00:00.000Z');
+  });
+
+  it('removes the row of a rule with the rule, and a restore with its episode', () => {
+    const db = seededAt010();
+    runMigrations(db);
+    db.prepare(
+      `INSERT INTO ad_cut_overrides (id, episode_id, segment_id, start_ms, end_ms, created_at)
+       VALUES ('o1', 'e1', 'audio', 0, 9000, '2026-09-16T00:00:00.000Z')`,
+    ).run();
+    assert.throws(
+      () => db.prepare(`INSERT INTO ad_cut_overrides (id, episode_id, start_ms, end_ms, created_at) VALUES ('o2', 'e1', 50, 50, 'x')`).run(),
+      /CHECK/,
+      'an empty range is refused',
+    );
+
+    db.prepare('DELETE FROM ad_markers WHERE id = ?').run('m1');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ad_segments WHERE id = 'boundary'").get().n, 0);
+    db.prepare('DELETE FROM ad_anchors WHERE id = ?').run('a1');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ad_segments WHERE id = 'jingle'").get().n, 0);
+
+    db.prepare('DELETE FROM ad_segments WHERE id = ?').run('audio');
+    assert.equal(db.prepare('SELECT segment_id FROM ad_cut_overrides WHERE id = ?').get('o1').segment_id, null,
+      'a restore outlives the row it was made against');
+    db.prepare('DELETE FROM episodes WHERE id = ?').run('e1');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ad_cut_overrides').get().n, 0);
+  });
+
+  it('still takes the statements 1.8.8 runs, so rolling back is harmless', () => {
+    const db = seededAt010();
+    runMigrations(db);
+    const now = '2026-09-16T00:00:00.000Z';
+    // The exact column list upsertSegment inserted in 1.8.8 (ad-detect.js:287-293).
+    db.prepare(
+      `INSERT INTO ad_segments
+         (id, show_id, signature, source, status, auto_approved, hold_reason, duration_ms,
+          episode_count, occurrence_count, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms,
+          first_seen_at, decided_at, created_at, updated_at, text, raw_text, cue_score, cues, language)
+       VALUES ('old', 's1', 'tx:eeeeeeeeeeeeeeeeeeeeeeee', 'transcript', 'candidate', 0, NULL, 5000,
+               1, 1, 'e1', 0, 5000, ?, NULL, ?, ?, 'a b c', 'a b c', 0.2, '[]', 'fr')`,
+    ).run(now, now, now);
+    const read = db
+      .prepare(`SELECT s.id FROM ad_segments s WHERE s.source = 'transcript' AND s.signature NOT LIKE 'marker:%'`)
+      .all();
+    assert.ok(read.some((row) => row.id === 'old'));
+    // An old image cannot know the kind; the default is what a 1.9 pass must correct.
+    assert.equal(db.prepare("SELECT kind FROM ad_segments WHERE id = 'old'").get().kind, 'repeated_audio');
+    db.prepare(`INSERT INTO ad_markers (id, show_id, role, inclusive, text, raw_text, created_at)
+                VALUES ('m2', 's1', 'programme_ends', 1, 'a', 'a', ?)`).run(now);
+    db.prepare(`DELETE FROM ad_markers WHERE id = 'm2'`).run();
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
   });
 });

@@ -16,6 +16,10 @@ export const EVENTS = Object.freeze({
   /** Progress through a show's listening, for the strip on the Adverts page. */
   TRANSCRIBE_PROGRESS: 'transcribe:progress',
   TRANSCRIBE_FINISHED: 'transcribe:finished',
+  /** What a show still owes — episodes to read, hear or cut — changed. Payload: { showId, slug } */
+  AD_WORK: 'ad:work',
+  /** Cuts, decisions, restores or holds of a show changed. Payload: { showId, slug } */
+  AD_CHANGED: 'ad:changed',
   /** The set of shows changed (folder added/removed). Payload: {} */
   SHOWS_CHANGED: 'shows:changed',
   /** Instance settings changed. Payload: { keys: string[] } */

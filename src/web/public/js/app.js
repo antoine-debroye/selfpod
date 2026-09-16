@@ -238,10 +238,13 @@
    * because the cards are swapped by htmx after every decision.
    */
   function txScope(node) {
-    var form = node.closest('form') || node.closest('details') || document;
+    // The episode page keeps the words outside the one form that teaches from them, so
+    // the scope is the element wrapping both; anywhere else it is the form itself.
+    var scoped = node.closest('[data-tx-scope]');
+    var form = scoped || node.closest('form') || node.closest('details') || document;
     return {
       form: form,
-      words: node.closest('[data-tx-edit]') || form.querySelector('[data-tx-edit]'),
+      words: scoped || node.closest('[data-tx-edit]') || form.querySelector('[data-tx-edit]'),
       start: form.querySelector('[data-tx-start]'),
       end: form.querySelector('[data-tx-end]'),
       range: form.querySelector('[data-tx-range]'),
@@ -317,6 +320,142 @@
   }
   document.addEventListener('htmx:afterSettle', txPaintAll);
   txPaintAll();
+
+  /* -------------------------------------------------------------- cut bars */
+
+  /**
+   * Hearing a stretch, and pointing at one.
+   *
+   * Each ▶ is a link to the stretch on its own, which is what it does with script off.
+   * With script on it plays that stretch of the original episode in the bar's own
+   * player, three seconds either side so the edges can be judged, and stops after it.
+   * Tapping the bar fills From, then To, in the page's teach-range form.
+   */
+  var PLAY_CONTEXT_MS = 3000;
+  var playing = null;
+
+  function clock(ms) {
+    var total = Math.max(0, Math.round(ms / 1000));
+    var hours = Math.floor(total / 3600);
+    var minutes = Math.floor((total % 3600) / 60);
+    var seconds = total % 60;
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return hours > 0 ? hours + ':' + pad(minutes) + ':' + pad(seconds) : minutes + ':' + pad(seconds);
+  }
+
+  function stopPlaying() {
+    if (!playing) return;
+    var current = playing;
+    playing = null;
+    current.audio.removeEventListener('timeupdate', current.onTime);
+    current.audio.removeEventListener('error', current.onError);
+    current.link.classList.remove('is-playing');
+    try { current.audio.pause(); } catch (err) { /* already gone */ }
+  }
+
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest('[data-play-from]');
+    if (!link) return;
+    var bar = link.closest('[data-cutbar]');
+    var audio = bar ? bar.querySelector('audio[data-cut-audio]') : null;
+    if (!audio || typeof audio.play !== 'function') return; // the link opens the stretch
+    event.preventDefault();
+    if (playing && playing.link === link) {
+      stopPlaying();
+      return;
+    }
+    stopPlaying();
+    var from = Number(link.getAttribute('data-play-from')) || 0;
+    var to = Number(link.getAttribute('data-play-to')) || 0;
+    var state = { audio: audio, link: link };
+    state.onTime = function () {
+      if (audio.currentTime >= (to + PLAY_CONTEXT_MS) / 1000) stopPlaying();
+    };
+    // The original could not be played here: follow the link to the stretch on its own.
+    state.onError = function () {
+      if (playing !== state) return;
+      stopPlaying();
+      window.location.href = link.href;
+    };
+    audio.addEventListener('timeupdate', state.onTime);
+    audio.addEventListener('error', state.onError);
+    playing = state;
+    link.classList.add('is-playing');
+    var start = function () {
+      if (playing !== state) return;
+      audio.currentTime = Math.max(0, from - PLAY_CONTEXT_MS) / 1000;
+      var promise = audio.play();
+      if (promise && typeof promise.catch === 'function') {
+        promise.catch(function (err) {
+          // Paused by another tap before it began: not a failure.
+          if (err && err.name === 'AbortError') return;
+          state.onError();
+        });
+      }
+    };
+    if (audio.readyState >= 1) {
+      start();
+    } else {
+      audio.preload = 'auto';
+      audio.addEventListener('loadedmetadata', start, { once: true });
+      audio.load();
+    }
+  });
+
+  // A swap can take the player away mid-stretch.
+  document.addEventListener('htmx:beforeSwap', function () {
+    if (playing && !document.body.contains(playing.audio)) stopPlaying();
+  });
+  document.addEventListener('htmx:afterSwap', function () {
+    if (playing && !document.body.contains(playing.audio)) stopPlaying();
+  });
+
+  document.addEventListener('click', function (event) {
+    var track = event.target.closest('[data-cutbar-pick]');
+    if (!track) return;
+    var form = document.querySelector('[data-cutbar-pick-form]');
+    if (!form) return;
+    var from = form.querySelector('[data-range-from]');
+    var to = form.querySelector('[data-range-to]');
+    if (!from || !to || !track.clientWidth) return;
+    var rect = track.getBoundingClientRect();
+    var share = Math.max(0, Math.min(1, (event.clientX - rect.left) / track.clientWidth));
+    var ms = share * (Number(track.getAttribute('data-duration-ms')) || 0);
+    // From, then To; a third tap starts a new range.
+    var target = !from.value ? from : !to.value ? to : null;
+    if (!target) {
+      from.value = '';
+      to.value = '';
+      target = from;
+    }
+    target.value = clock(ms);
+  });
+
+  // Remembers when each audio element last played, for "use player position" below.
+  document.addEventListener('play', function (event) {
+    if (event.target && event.target.tagName === 'AUDIO') event.target.__lastPlayedAt = Date.now();
+  }, true);
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-pick-from-player]');
+    if (!button) return;
+    var form = button.closest('form');
+    var card = button.closest('#episode-adverts') || document;
+    // Whichever copy of the original was listened to last: the player under the bar,
+    // or the one a ▶ on a stretch used. Reading only the first would fill in 0:00 for
+    // someone who found the moment by pressing ▶.
+    var players = card.querySelectorAll('audio[data-original-player], audio[data-cut-audio]');
+    var player = null;
+    for (var i = 0; i < players.length; i += 1) {
+      var candidate = players[i];
+      if (!candidate.paused) { player = candidate; break; }
+      if (!player || (candidate.__lastPlayedAt || 0) > (player.__lastPlayedAt || 0)) player = candidate;
+    }
+    if (!form || !player) return;
+    var which = button.getAttribute('data-pick-from-player') === 'to' ? '[data-range-to]' : '[data-range-from]';
+    var input = form.querySelector(which);
+    if (input) input.value = clock((player.currentTime || 0) * 1000);
+  });
 
   /* --------------------------------------------------------------- toggles */
 

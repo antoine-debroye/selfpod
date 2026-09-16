@@ -1562,6 +1562,7 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   .ep-table--pinned .dur,
   .ep-table--pinned .size,
   .ep-table--pinned .ep-reach,
+  .ep-table--pinned .ep-adverts,
   .ep-table--pinned .ep-status {
     display: inline-block;
     vertical-align: middle;
@@ -1930,66 +1931,6 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   font-size: 13px; color: var(--ink-soft); cursor: pointer; padding-top: 14px;
 }
 
-/* ADDED · adverts review. The page where someone decides whether a stretch of audio
-   is a sponsor read or the theme tune. Everything here is in service of answering
-   that in about two seconds: how long, where, how many episodes, and a way to hear
-   it — laid out so the four can be compared down a column of candidates rather than
-   read one card at a time. */
-.seg-card .ftitle { display: flex; align-items: baseline; gap: 8px; }
-/* Facts on one line each, label first at a fixed width, so the answers line up
-   between cards and the eye can run down them. */
-.seg-facts { display: grid; grid-template-columns: 92px 1fr; gap: 4px 12px; margin-bottom: 14px; }
-.seg-facts dt { font-size: 12px; color: var(--ink-soft); }
-.seg-facts dd { font-size: 13.5px; color: var(--ink); margin: 0; }
-/* Full width: the scrubber is how you skip to the middle of a 40-second read, and a
-   narrow one makes that a game of precision. */
-.seg-card audio { width: 100%; margin: 4px 0 6px; }
-.seg-card .seg-from { font-size: 12px; color: var(--ink-soft); margin-bottom: 14px; }
-/* Side by side, because they are two answers to one question. Each is its own form
-   so that the page works with no JavaScript, which is what stops them being buttons
-   in a single row for free. */
-.seg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.seg-actions form { margin: 0; }
-.seg-decided { list-style: none; }
-/* Two columns, not six. Everything describing the segment stacks in the first and
-   wraps there; only the reversal sits beside it. The single flex line this replaces
-   gave the position label `flex: 1; min-width: 0` and then asked it to share the row
-   with the words and the reason, so it was squeezed to zero width and its text
-   printed straight over the decision next to it. */
-.seg-decided li {
-  display: flex; align-items: flex-start; gap: 18px;
-  padding: 12px 0; border-top: 1px solid var(--line);
-}
-.seg-decided li:first-child { border-top: 0; }
-.seg-decided__main { flex: 1; min-width: 0; }
-.seg-decided__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 9px; }
-/* The word carries the state, not the colour: someone who cannot separate the two
-   tints still has to be able to read which of these is being cut out of their feed. */
-.seg-decided__state { font-size: 12.5px; color: var(--ink-soft); }
-.seg-decided__state--cut { color: var(--ink); font-weight: 600; }
-.seg-decided__fact { font-size: 12.5px; color: var(--ink-soft); }
-.seg-decided__fact::before { content: '·'; margin-right: 9px; color: var(--line-2); }
-.seg-decided__kind { font-weight: 500; color: var(--ink); }
-/* `anywhere` rather than `break-word`: a transcript can carry a web address the
-   recogniser ran together, and one long token must not push the reversal off the card. */
-.seg-decided__words {
-  margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--ink);
-  overflow-wrap: anywhere;
-}
-.seg-decided__why { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
-.seg-decided__act { flex: none; width: 150px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.seg-decided__act form { margin: 0; }
-.seg-decided__note { font-size: 11.5px; line-height: 1.35; color: var(--ink-soft); text-align: right; }
-
-@media (max-width: 640px) {
-  /* The reversal moves under what it reverses rather than being squeezed into a
-     column four words wide. */
-  .seg-decided li { flex-wrap: wrap; gap: 8px; }
-  .seg-decided__main { flex: 1 1 100%; }
-  .seg-decided__act { width: auto; flex-direction: row; align-items: baseline; gap: 8px; }
-  .seg-decided__note { text-align: left; }
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    18  FOLLOWING A FEED
    The subscription page and its ledger — the table that answers "where is that
@@ -2148,11 +2089,12 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   THE WORDS — transcript excerpts, edges and the teaching loop (spec §19.6)
+   THE WORDS — the transcript, its marks, and the one bar to teach from (spec §19.6)
    ═══════════════════════════════════════════════════════════════════════════ */
 .tx {
   line-height: 1.95; font-size: 14px; max-width: 72ch;
   margin: 0 0 8px; padding: 8px 10px; background: var(--paper-2); border-radius: var(--r-sm);
+  overflow-wrap: anywhere;
 }
 .tx--full { max-height: 320px; overflow: auto; }
 /* Every word is a button, so a tap can set an edge; it must not look like one. */
@@ -2167,30 +2109,20 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
 .tx__w--rejected { text-decoration: underline dotted var(--line-2); }
 .tx__w--cue { text-decoration: underline dotted var(--accent); text-underline-offset: 3px; }
 .tx__w--low { opacity: .6; }
-/* A bar at each edge of the cut, so the range reads without hunting for the last tinted word. */
+/* A bar at each edge of the chosen words, so the range reads without hunting for the last tinted word. */
 .tx__w--start { box-shadow: -2px 0 0 0 var(--accent); }
 .tx__w--end { box-shadow: 2px 0 0 0 var(--accent); }
 .tx__w--start.tx__w--end { box-shadow: -2px 0 0 0 var(--accent), 2px 0 0 0 var(--accent); }
 .tx__range { font-size: 12.5px; min-height: 1.2em; margin-bottom: 8px; }
 .tx__legend { display: block; font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
 .tx__intro { margin-bottom: 12px; }
-.tx__edges, .tx__teach, .seg-just { margin: 0 0 12px; }
-.tx__edges summary, .tx__teach summary, .seg-just summary { cursor: pointer; font-size: 13px; color: var(--ink-soft); }
-.tx__edges .form-row, .tx__teach .form-row { margin-top: 10px; }
-.tx__edges .hint { margin-bottom: 8px; }
-.tx__region { margin-bottom: 14px; }
-.tx__region > summary { cursor: pointer; font-size: 14px; padding: 6px 0; }
-.tx__mark { margin: 8px 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; }
-.tx__mark form { margin: 0; }
-.seg-why { margin: 0 0 14px; }
-.seg-cues { display: flex; flex-wrap: wrap; gap: 4px; }
-.seg-cue {
-  display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px;
-  background: var(--accent-soft); color: var(--accent-ink);
+.tx__heading { font-family: var(--sans); font-size: 13.5px; font-weight: 600; margin: 14px 0 6px; }
+.tx__teach { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tx__teach-row, .teach-range__row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px;
 }
-.seg-decided__words, .seg-decided__why { flex: 1 1 100%; font-size: 12.5px; }
-.seg-decide { margin: 0; }
-.transcribe-progress { margin-bottom: 12px; }
+.tx__teach-row select, .teach-range__row select { min-width: 0; max-width: 100%; flex: 1 1 180px; width: auto; }
+.tx__teach-row label, .teach-range__row label { font-size: 13px; color: var(--ink-soft); }
 .listen-scope { border: 0; padding: 0; margin: 4px 0 16px; }
 .listen-scope legend { margin-bottom: 8px; }
 .listen-scope .field-unit { display: flex; align-items: center; gap: 8px; }
@@ -2201,46 +2133,137 @@ dialog.modal[open]::backdrop { animation: sp-fade-in .16s ease-out both; }
   /* A word has to be a target a thumb can hit. */
   .tx__w { padding: 6px 2px; }
 }
-/* A button that reads as a link, for a reversal offered mid-sentence. */
-.btn-link {
-  all: unset; cursor: pointer; color: var(--accent); text-decoration: underline;
-  text-underline-offset: 2px; font: inherit;
-}
-.btn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
-/* The Adverts card on an episode page: what was taken out of this one episode,
-   what is still to decide, and the words underneath it. Same vocabulary as the
-   show's review page — a second set of names for one idea is how the two drift. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   CUTS — what SelfPod removed, episode by episode, and the rules it removes by
+   Four stretch states, drawn three ways on the bar so they read without colour:
+   cut is solid, waiting is hatched, restored is an outline. The word beside
+   each stretch says the same thing again.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ad-work:empty { display: none; }
+.ad-work {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  padding: 9px 14px; border-radius: var(--r-sm);
+  background: var(--teal-soft); color: #1E547A; font-size: 13.5px;
+}
+.ad-work::before {
+  content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teal);
+  animation: sp-pulse 1.6s ease-in-out infinite;
+}
+
+.ad-totals {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 14px;
+}
+.ad-totals__item {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 12px 14px; box-shadow: var(--shadow); min-width: 0;
+}
+.ad-totals dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.ad-totals dd { margin: 2px 0 0; font-family: var(--serif); font-size: 26px; font-weight: 600; color: var(--ink); }
+.ad-note { font-size: 13px; margin: -4px 0 14px; color: var(--ink-soft); }
+.ad-note--warn { color: #8A5E10; }
+
+.rules { list-style: none; margin: 8px 0 0; }
+.rule {
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 12px 0; border-top: 1px solid var(--line);
+}
+.rule:first-child { border-top: 0; }
+.rule__main { flex: 1; min-width: 0; }
+.rule__title { font-size: 14px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.rule__detail { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+.rule__sample { width: 100%; max-width: 360px; margin-top: 8px; }
+.rule__act { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.rule--offered { background: var(--accent-soft); margin: 0 -12px; padding: 12px; border-radius: var(--r-sm); border-top: 0; }
+.rule--offered .rule__detail { color: var(--accent-ink); }
+.rule-teach {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.rule-teach__lead { font-size: 13.5px; font-weight: 600; }
+.rule-teach select { width: auto; flex: 0 1 auto; min-width: 0; }
+.rule-teach input[type="text"] { flex: 1 1 200px; min-width: 0; width: auto; }
+.rules-kept { margin-top: 14px; }
+.rules-kept > summary { cursor: pointer; font-size: 13px; color: var(--ink-soft); }
+
+.cutbar { padding: 14px 0; border-top: 1px solid var(--line); scroll-margin-top: 80px; }
+.cutbar:first-of-type { border-top: 0; }
+.cutbar:target { background: var(--paper-2); margin: 0 -12px; padding: 14px 12px; border-radius: var(--r-sm); }
+.cutbar__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+.cutbar__title { font-weight: 600; font-size: 14px; color: var(--ink); text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+.cutbar__title:hover { text-decoration: underline; }
+.cutbar__lengths { font-size: 12px; color: var(--ink-soft); }
+.cutbar__track {
+  position: relative; height: 14px; border-radius: 999px; cursor: crosshair;
+  background: var(--paper-2); border: 1px solid var(--line); overflow: hidden;
+}
+.cutbar__mark { position: absolute; top: 0; bottom: 0; border-radius: 2px; pointer-events: none; }
+.cutbar__mark--cut { background: var(--accent); }
+.cutbar__mark--waiting {
+  background: repeating-linear-gradient(135deg, var(--warn) 0 3px, var(--warn-soft) 3px 6px);
+}
+.cutbar__mark--restored { background: transparent; box-shadow: inset 0 0 0 2px var(--accent); }
+
+.cut-pill {
+  display: inline-block; font-size: 11.5px; font-weight: 600; line-height: 1.5;
+  padding: 1px 8px; border-radius: 999px; white-space: nowrap; text-decoration: none;
+  background: var(--paper-2); color: var(--ink-soft); border: 1px solid var(--line);
+}
+.cut-pill--cut { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+.cut-pill--waiting, .cut-pill--held { background: var(--warn-soft); color: #8A5E10; border-color: transparent; }
+.cut-pill--listening { background: var(--teal-soft); color: #1E547A; border-color: transparent; }
+a.cut-pill:hover { text-decoration: underline; }
+
+.stretches { list-style: none; margin: 8px 0 0; }
+.stretch {
+  display: flex; align-items: flex-start; gap: 12px; padding: 7px 0;
+}
+.stretch + .stretch { border-top: 1px dashed var(--line); }
+.stretch__main { flex: 1; min-width: 0; font-size: 13px; line-height: 1.5; }
+.stretch__at { font-weight: 600; color: var(--ink); margin-right: 6px; }
+.stretch__state { font-weight: 600; margin-right: 6px; }
+.stretch--cut .stretch__state { color: var(--accent-ink); }
+.stretch--waiting .stretch__state { color: #8A5E10; }
+.stretch--restored .stretch__state { color: var(--teal); }
+.stretch__why { color: var(--ink-soft); }
+.stretch__act { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.stretch__play {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%; font-size: 11px; text-decoration: none;
+  border: 1px solid var(--line-2); color: var(--ink); background: var(--card);
+}
+.stretch__play:hover { background: var(--paper-2); }
+.stretch__play.is-playing { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ad-timeline__more { margin-top: 12px; }
+.ad-settings > summary { cursor: pointer; margin-bottom: 0; }
+.ad-settings[open] > summary { margin-bottom: 14px; }
+.ad-settings__check { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.meta--adverts { margin-top: 2px; }
+.ep-adverts { white-space: nowrap; }
+.ep-table--pinned .ep-adverts:empty { display: none; }
+
+/* The episode page's Adverts card. */
 .ep-ad__hold { margin-bottom: 14px; }
-.ep-ad__summary { margin-bottom: 18px; }
+.ep-ad__summary { margin-bottom: 12px; }
 .ep-ad__headline { font-size: 14px; line-height: 1.5; }
 .ep-ad__figures { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 10px 0 6px; }
 .ep-ad__figures div { min-width: 0; }
 .ep-ad__figures dt { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
 .ep-ad__figures dd { margin: 2px 0 0; font-size: 13.5px; }
-.ep-ad__group { margin-bottom: 18px; }
-.ep-ad__group .ds-caption { margin-bottom: 6px; }
-.ep-ad__list { list-style: none; }
-.ep-ad__list li {
-  display: flex; align-items: flex-start; gap: 18px;
-  padding: 12px 0; border-top: 1px solid var(--line);
-}
-.ep-ad__main { flex: 1; min-width: 0; }
-.ep-ad__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 9px; }
-.ep-ad__at { font-size: 12.5px; color: var(--ink); font-weight: 600; }
-.ep-ad__fact { font-size: 12.5px; color: var(--ink-soft); }
-.ep-ad__fact::before { content: '·'; margin-right: 9px; color: var(--line-2); }
-.ep-ad__words { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.ep-ad__why { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
-.ep-ad__main audio { width: 100%; margin-top: 8px; }
-.ep-ad__act { flex: none; width: 150px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.ep-ad__act form { margin: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.ep-ad__more { margin-top: 4px; }
+.ep-ad__players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.ep-ad__player { min-width: 0; }
+.ep-ad__player audio { width: 100%; margin-top: 4px; }
+.teach-range { margin: 6px 0 4px; padding: 12px 14px; background: var(--paper-2); border-radius: var(--r-sm); }
+.teach-range__time { width: 88px; flex: none; }
+.ep-ad__more { margin-top: 8px; }
 /* The words are evidence for the card above them, not a card of their own. */
 .ep-ad__heard { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 @media (max-width: 640px) {
-  .ep-ad__list li { flex-wrap: wrap; gap: 8px; }
-  .ep-ad__main { flex: 1 1 100%; }
-  .ep-ad__act { width: auto; flex-direction: row; align-items: baseline; gap: 8px; }
+  .ad-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rule, .stretch { flex-wrap: wrap; gap: 8px; }
+  .rule__main, .stretch__main { flex: 1 1 100%; }
+  .rule__act, .stretch__act { justify-content: flex-start; }
+  .ep-ad__players { grid-template-columns: 1fr; }
+  .rule-teach select, .tx__teach-row select, .teach-range__row select { flex: 1 1 100%; }
 }

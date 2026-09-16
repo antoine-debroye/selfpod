@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { availableParallelism } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import {
@@ -26,6 +27,14 @@ import { normaliseBaseUrl } from './lib/urls.js';
  * and until then feed/media routes answer 503 with an explanatory message rather
  * than emitting URLs built from a guess.
  */
+
+/**
+ * Half the logical cores (the physical ones, on a hyper-threaded CPU) less one for
+ * serving, never below two. An i7 with sixteen logical cores gets seven.
+ */
+export function defaultWhisperThreads(logical = availableParallelism()) {
+  return Math.max(2, Math.floor(logical / 2) - 1);
+}
 
 function readInt(raw, fallback, { min, max, name } = {}) {
   if (raw === undefined || raw === null || String(raw).trim() === '') {
@@ -208,7 +217,31 @@ export function loadConfig(env = process.env) {
      */
     whisperBinary: env.WHISPER_CLI?.trim() || null,
     whisperModel: env.WHISPER_MODEL?.trim() || null,
-    whisperThreads: collect(readInt(env.WHISPER_THREADS, 2, { min: 1, max: 16, name: 'WHISPER_THREADS' })),
+    /*
+     * Threads for one recogniser run. The default is the physical cores, less one for
+     * serving — ggml gains nothing from hyper-threads, and on an eight-core i7 two
+     * threads left six idle while an episode waited to be heard.
+     */
+    whisperThreads: collect(
+      readInt(env.WHISPER_THREADS, defaultWhisperThreads(), { min: 1, max: 32, name: 'WHISPER_THREADS' }),
+    ),
+    /*
+     * How politely the recogniser yields the CPU (0 normal … 19 lowest). It only matters
+     * when something else wants the CPU, and on a NAS that something is a listener's
+     * download — so the default still yields, just less than the 15 it used to.
+     */
+    whisperNice: collect(readInt(env.WHISPER_NICE, 10, { min: 0, max: 19, name: 'WHISPER_NICE' })),
+    /** Already-published episodes read again per pass (a changed model or language). */
+    whisperBackfillPerRun: collect(
+      readInt(env.WHISPER_BACKFILL_PER_RUN, 8, { min: 0, max: 200, name: 'WHISPER_BACKFILL_PER_RUN' }),
+    ),
+    /*
+     * How many of a show's newest episodes the repeated-stretch searches compare. At
+     * most 32: the acoustic search cannot find a stretch shared by more episodes than
+     * that (see ad-detect.js, corpusWindow). Cuts already found in older episodes are
+     * kept, and reads already known are matched everywhere.
+     */
+    adCorpusWindow: collect(readInt(env.AD_CORPUS_WINDOW, 24, { min: 2, max: 32, name: 'AD_CORPUS_WINDOW' })),
 
     /** Set by the entrypoint when its own /data read+write test failed. */
     entrypointSelfTestFailed: env.SELFPOD_DATA_SELFTEST === 'failed',

@@ -1,0 +1,29 @@
+<%
+  /* Teaching by time, for a stretch with no words to pick: from, to, and what it is.
+     Works as a plain form; with script on, tapping the bar above fills From then To
+     (data-cutbar-pick), and the buttons copy where the original player is. */
+  const ad = it.adverts;
+  const episode = it.episode;
+%>
+<form class="teach-range" method="post" action="<%= ad.teachRangeUrl %>"
+      hx-post="<%= ad.teachRangeUrl %>" hx-target="#episode-adverts" hx-swap="outerHTML"
+      data-cutbar-pick-form>
+  <div class="teach-range__row">
+    <label for="range-from-<%= episode.id %>">From</label>
+    <input id="range-from-<%= episode.id %>" class="teach-range__time mono" type="text" name="from" inputmode="numeric"
+           placeholder="0:00" pattern="[0-9:.]*" data-range-from>
+    <button class="btn btn-ghost btn-sm" type="button" data-pick-from-player="from" aria-label="Use the original player's position for From">⏱</button>
+    <label for="range-to-<%= episode.id %>">to</label>
+    <input id="range-to-<%= episode.id %>" class="teach-range__time mono" type="text" name="to" inputmode="numeric"
+           placeholder="0:42" pattern="[0-9:.]*" data-range-to>
+    <button class="btn btn-ghost btn-sm" type="button" data-pick-from-player="to" aria-label="Use the original player's position for To">⏱</button>
+  </div>
+  <div class="teach-range__row">
+    <label for="range-kind-<%= episode.id %>">is</label>
+    <select id="range-kind-<%= episode.id %>" name="kind">
+      <option value="advert">an advert — remove it</option>
+      <option value="jingle">the station jingle — cut whatever comes before it, in every episode</option>
+    </select>
+    <button class="btn btn-sm btn-primary" type="submit">Teach</button>
+  </div>
+</form>

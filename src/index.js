@@ -125,6 +125,8 @@ async function main() {
   const subscriptions = createSubscriptions({ db, config, events, logger });
   const transcriber = createTranscriber({ db, config, events, logger, health, shows, episodes });
   const adDetect = createAdDetect({ db, config, events, logger, shows, episodes, transcriber });
+  // Rows an older image wrote after a rollback carry no kind; give them one before any page reads them.
+  adDetect.reconcileKinds();
   const remoteFeeds = createRemoteFeeds({
     config, settings, subscriptions, shows, episodes, scanner,
     metadata, activity, health, events, logger, adDetect,
@@ -135,6 +137,8 @@ async function main() {
   const advertsView = createAdvertsView({ db, adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
     db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
+    // A new or changed file starts a pass straight away, and one runs after the startup scan.
+    autoTrigger: true,
   });
   const readiness = createReadiness({ covers });
   const timeline = createTimeline({ db, logger });
@@ -154,7 +158,7 @@ async function main() {
 
   const app = await buildApp(services);
 
-  shutdown = createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, logger });
+  shutdown = createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, adDetect, adPipeline, logger });
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
@@ -191,7 +195,7 @@ async function main() {
   trimmer.sweepStaging().catch((err) => logger.warn({ err }, 'could not tidy up interrupted trims'));
 }
 
-function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, logger }) {
+function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, remoteFeeds, adDetect, adPipeline, logger }) {
   let running = false;
   return async (signal) => {
     if (running) return;
@@ -199,6 +203,7 @@ function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, r
     logger.info({ signal }, 'shutting down');
     try {
       scheduler.stop();
+      adPipeline?.stop();
       // Before app.close(), so an in-flight download is abandoned rather than holding
       // SIGTERM open for however long an eighty-megabyte fetch has left to run.
       remoteFeeds.stop();
@@ -206,6 +211,7 @@ function createShutdown({ app, db, watcher, scheduler, settings, shows, feeds, r
       shows.stop();
       feeds.stop();
       await watcher.stop();
+      await adDetect?.close();
       await app.close();
       // Checkpointing the WAL means a copy of /data taken after shutdown needs no
       // recovery — which is what makes "move the volume" a safe migration story.

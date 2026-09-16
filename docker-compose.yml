@@ -67,6 +67,16 @@ services:
     # Reaps any stray child process, so a restart never leaves zombies behind.
     init: true
 
+    # With an NVIDIA GPU: use the `-cuda` image tag above and uncomment this. The
+    # README's "Listening on an NVIDIA GPU" says how to check it is being used.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
     # ---------------------------------------------------------------- hardening
     # SelfPod needs no privileges of its own. The entrypoint briefly needs a few
     # to align PUID/PGID and then drop to that user; everything else is removed,
@@ -79,7 +89,7 @@ services:
       - CHOWN         # give the app user its own node_modules
       - DAC_OVERRIDE  # read /data as the target user during the self-test
       - FOWNER
-      - SETUID        # su-exec drops root
+      - SETUID        # su-exec (or setpriv, in the GPU image) drops root
       - SETGID
     security_opt:
       # A setuid binary inside the image cannot be used to climb back to root.

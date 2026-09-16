@@ -47,9 +47,6 @@ const WINDOW = 128;
 /** Shorter than this is a sting or a join, not something worth offering to cut. */
 const MIN_SECONDS = 5;
 
-/** How many places one repeated sub-fingerprint is tried. Silence recurs constantly. */
-const MAX_SEED_OCCURRENCES = 6;
-
 /**
  * One seed every ~46ms.
  *

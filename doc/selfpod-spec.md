@@ -1184,6 +1184,10 @@ counterpart of the acoustic search, seeded on four matching tokens and grown whi
 the two sides keep agreeing, tolerating a substitution or a skipped word wherever the
 next two tokens line up again, and recruiting every other episode before its edges
 are fixed. Fourth, *what sounds like a sponsor read heard once*: offered, never cut.
+**Amended in 1.9.0:** offered where the words are shown, not stored as a row. One row per
+episode per read, none of which could ever become a cut, was most of what made the review
+page unusable; the reads are worked out when an episode's words are displayed, highlighted
+there, and taught from there. The fold into an acoustic find still happens during a pass.
 
 **Cues, and what they are allowed to decide.** A short, readable list of things
 adverts say and programmes mostly do not — who paid, where to go, what code to use,
@@ -1214,6 +1218,15 @@ highlighted, and is where the owner teaches: "this is an advert", "not an advert
 episode, what the words meant for it. Every automatic cut says why wherever it is
 mentioned, and every one can be put back with one click; putting back a remembered
 read is also telling SelfPod to stop cutting those words.
+
+**Amended in 1.9.0.** The owner sees one page per show: four figures (episodes cut, minutes
+removed, waiting, held); the rules in force with how often each was heard and a Forget; and
+every episode as a bar of its cuts and waiting stretches, each with one sentence of reason, a
+▶ that plays the original around it, and at most two buttons — *Restore here* / *Restore
+everywhere and stop* on a cut, *Remove* / *Keep* on what waits. A stretch is in one of four
+states (Cut, Waiting, Kept, Restored here). Boundaries are taught by typing their words;
+stretches by time on an episode page, as well as by words in its transcript. The episode page
+plays the original beside the published copy.
 
 **What it costs.** Measured on the owner's French show on a desktop: the `base`
 model at about 40× real time and `small` at about 20×; on a two-thread Core-class
@@ -1273,6 +1286,62 @@ pre-roll, or all happen to carry none at all, gets no proposal — the owner can
 point at the jingle by hand. Confirming a jingle does not guess where a *different*
 kind of ident sits partway into an episode; it only ever cuts from 0:00 to where the
 sound was heard.
+
+### 19.8 What a cut is, putting one back, and when SelfPod looks
+
+**Added in 1.9.0.**
+
+**Kinds.** Every row of the catalogue says what it is: `jingle` (§19.7), `boundary_words`
+(a boundary taught by its words), `remembered_words` (words the owner marked), `repeated_words`,
+`repeated_audio`, `diff` (§19.3) or `taught_range` (a stretch pointed at by time, with no words
+to remember it by). Said once, in a column, rather than inferred from a signature prefix in six
+different queries. `source` and the signature prefixes are still written exactly as before, so
+an older image run against a migrated database still reads and writes it.
+
+**Restore here.** A cut can be left out of one episode whatever rule makes it. The restore is
+stored against the episode and the time — not the catalogue row, which is folded and re-found
+under new signatures as a show grows, nor the occurrence, which is rewritten every pass — and a
+cut most of whose length lies inside a restored stretch is not made. *Restore everywhere and stop*
+undoes the rule itself, by kind: a jingle or boundary is removed, a taught range forgotten,
+anything else kept as "not an advert". A jingle SelfPod found for itself is dismissed rather than
+deleted when it is removed, so it is not found again on the next pass.
+
+**Automatic mode and the jingle.** In automatic mode a jingle SelfPod proposes (§19.7) is confirmed
+without asking when it is heard in every one of the recent episodes it was proposed from. This is
+the owner's rule for automatic mode applied to its most reliable signal: measured on the show it
+was built for, six upstream episodes out of six at a bit-error rate of 0.11 or less. It is shown as
+an automatic cut and forgotten with one press. In review mode it stays a question.
+
+**When SelfPod looks.** A scan that finds a new or changed episode starts that show's pass, and a
+pass runs after the scan at startup; the scheduler's tick remains the fallback. A pass requested
+while one for the same show is still waiting to start is that pass. Decisions — approve, keep,
+restore, stop, forget — change only what is already known and are carried out by cutting and
+settling holds, without a pass. The trimmer serialises cuts per episode, and checks the digest of
+the bytes it is about to cut against the digest they were fingerprinted from.
+
+**Where a boundary may match.** A start only in an episode's first half, an end only in its
+second — or, in an episode too short for halves, its first or last minute — and no boundary may
+cut more than four fifths of an episode. A short episode is heard as one window, and on the show
+this was built for the host reads the same sponsor tag to open one episode and close the next:
+without this, "cut from these words to the end" matched at 0:00 and asked for the whole episode.
+
+**How much it compares.** Both repeated-stretch searches leave out keys that recur too often —
+32 occurrences for sound, 64 for words — and so cannot find a stretch shared by more episodes than
+that. New stretches are therefore looked for among the newest `AD_CORPUS_WINDOW` episodes (24 by
+default, at most 32; 28 for sound, since each known stretch's exemplar is added), and occurrences
+already found outside the window are kept. Decided reads are still matched by their words in every
+episode (stage 1 of §19.6). The comparison runs in a worker thread.
+
+### 19.9 Listening on a GPU
+
+**Added in 1.9.0.** A second image, built from `Dockerfile.cuda` on NVIDIA's CUDA runtime (glibc,
+which NVIDIA's container runtime requires), carries a CUDA build of whisper.cpp beside the two CPU
+builds. At start the CUDA build is tried first and kept only if whisper's own log says it used a
+GPU (`whisper_backend_init_gpu: using CUDA0 backend`); a build that cannot load, or that found no
+GPU and would run on the processor, is dropped for the CPU build and the health banner says so.
+`/api/status` reports `recogniser.accelerator` and `recogniser.device`. No build machine has a GPU:
+the image is proved to build, its CPU builds on real audio and its CUDA build to link against
+everything but the driver's `libcuda`; the GPU path is proved on real hardware only.
 
 ## 17. Acceptance checklist
 

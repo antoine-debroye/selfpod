@@ -478,6 +478,35 @@ export const SEGMENT_STATUS = Object.freeze({
 export const SEGMENT_SOURCES = Object.freeze({ CORPUS: 'corpus', DIFF: 'diff', TRANSCRIPT: 'transcript' });
 
 /**
+ * What a catalogue row is (spec §19.8), said once rather than inferred from a signature
+ * prefix. `source` is still written, from the kind, so an older image can read the rows.
+ */
+export const SEGMENT_KINDS = Object.freeze({
+  JINGLE: 'jingle',
+  BOUNDARY_WORDS: 'boundary_words',
+  REMEMBERED_WORDS: 'remembered_words',
+  REPEATED_WORDS: 'repeated_words',
+  REPEATED_AUDIO: 'repeated_audio',
+  DIFF: 'diff',
+  TAUGHT_RANGE: 'taught_range',
+});
+
+/** The `source` 1.8 would have written for a kind — kept so a rollback can read rows. */
+export function sourceForKind(kind) {
+  switch (kind) {
+    case SEGMENT_KINDS.DIFF:
+      return SEGMENT_SOURCES.DIFF;
+    case SEGMENT_KINDS.BOUNDARY_WORDS:
+    case SEGMENT_KINDS.REMEMBERED_WORDS:
+    case SEGMENT_KINDS.REPEATED_WORDS:
+    case SEGMENT_KINDS.TAUGHT_RANGE:
+      return SEGMENT_SOURCES.TRANSCRIPT;
+    default:
+      return SEGMENT_SOURCES.CORPUS;
+  }
+}
+
+/**
  * The transcript format. Bump it and every episode is transcribed again on its next
  * turn, which is the whole cost of changing what the file holds.
  */

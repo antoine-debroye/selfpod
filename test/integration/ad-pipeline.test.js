@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { PUBLISH_HOLDS, SEGMENT_STATUS } from '../../src/constants.js';
 import { frameProfile } from '../../src/lib/mp3-frames.js';
+import { createAdPipeline } from '../../src/services/ad-pipeline.js';
 import { createTestServer } from '../helpers/http.js';
 import { FRAME_MS, segment, stitch } from '../helpers/mp3.js';
 
@@ -348,6 +349,11 @@ describe('running it more than once', () => {
     // serving the audio, and the failure is not slowness — it is a scan, a download and
     // three shows' fingerprinting all deciding at once that they may use the disk.
     const a = await makeShow({ mode: 'auto', count: 3 });
+    const otherDir = await server.makeShowFolder('other-club');
+    await writeFile(join(otherDir, '.keep'), '');
+    await server.scanner.scanAllNow('manual');
+    const b = server.shows.getBySlug('other-club');
+    server.db.prepare("UPDATE shows SET ad_trim_mode = 'auto' WHERE id = ?").run(b.id);
 
     const seen = [];
     const original = server.adDetect.fingerprintShow.bind(server.adDetect);
@@ -358,7 +364,7 @@ describe('running it more than once', () => {
       return result;
     };
 
-    await Promise.all([server.adPipeline.processShow(a.id), server.adPipeline.processShow(a.id)]);
+    await Promise.all([server.adPipeline.processShow(a.id), server.adPipeline.processShow(b.id)]);
 
     // The positive control first: an empty list would satisfy the loop below without
     // either run having happened at all.
@@ -367,6 +373,28 @@ describe('running it more than once', () => {
     for (let i = 1; i < seen.length; i += 2) {
       assert.ok(seen[i].startsWith('end:'), `overlapping work: ${seen.join(' ')}`);
     }
+  });
+
+  it('asked for the same show again before its pass starts, runs one pass, not two', async () => {
+    // A pass looks at everything owed when it starts. A second one queued behind it only
+    // does the same work again — and a subscription backfill is hundreds of scans.
+    const show = await makeShow({ mode: 'auto', count: 2 });
+    let passes = 0;
+    const original = server.adDetect.fingerprintShow.bind(server.adDetect);
+    server.adDetect.fingerprintShow = async (showId) => {
+      passes += 1;
+      return original(showId);
+    };
+
+    const first = server.adPipeline.processShow(show.id);
+    const second = server.adPipeline.processShow(show.id);
+    assert.equal(first, second, 'a second request got a pass of its own');
+    await first;
+    assert.equal(passes, 1);
+
+    // Once that pass has finished, asking again is a new pass.
+    await server.adPipeline.processShow(show.id);
+    assert.equal(passes, 2);
   });
 });
 
@@ -515,5 +543,121 @@ describe('a pass over every show', () => {
     const third = await server.adPipeline.processAll();
     assert.ok(Array.isArray(third));
     void show;
+  });
+});
+
+describe('starting a pass without waiting for the scheduler', () => {
+  const until = async (check, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return false;
+  };
+
+  function triggeredPipeline(options = {}) {
+    return createAdPipeline({
+      db: server.db, events: server.events, health: server.health, shows: server.shows, episodes: server.episodes,
+      adDetect: server.adDetect, trimmer: server.trimmer, activity: server.activity, transcriber: server.transcriber,
+      autoTrigger: true, triggerDelayMs: 20, ...options,
+    });
+  }
+
+  it('cuts and publishes a new episode after the scan that found it, with no tick', async () => {
+    const show = await makeShow({ mode: 'auto', count: 3 });
+    await server.adPipeline.processShow(show.id);
+    const pipeline = triggeredPipeline();
+    try {
+      await addEpisode(3);
+      const fourth = () => server.episodes.listByShow(show.id).find((row) => row.filename === 'episode-3.mp3');
+      assert.ok(fourth().publish_hold, 'setup: the new episode was not held on arrival');
+      const done = await until(() => fourth().publish_hold === null && fourth().trim_status === 'trimmed');
+      assert.ok(done, `the new episode was not cut and published: ${JSON.stringify({ hold: fourth().publish_hold, trim: fourth().trim_status })}`);
+    } finally {
+      pipeline.stop();
+    }
+  });
+
+  it('runs no pass for a scan that found nothing new', async () => {
+    const show = await makeShow({ mode: 'auto', count: 2 });
+    await server.adPipeline.processShow(show.id);
+    let passes = 0;
+    const original = server.adDetect.fingerprintShow.bind(server.adDetect);
+    server.adDetect.fingerprintShow = async (showId) => {
+      passes += 1;
+      return original(showId);
+    };
+    const pipeline = triggeredPipeline();
+    try {
+      await server.scanner.scanAllNow('manual');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(passes, 0, 'an unchanged folder started a pass');
+    } finally {
+      pipeline.stop();
+    }
+  });
+});
+
+describe('carrying out a decision', () => {
+  it('cuts and releases without reading or listening to anything', async () => {
+    const show = await makeShow({ mode: 'review', count: 3 });
+    await server.adPipeline.processShow(show.id);
+    assert.ok(holds(show).every(Boolean), 'setup: review mode did not hold the episodes');
+
+    const calls = [];
+    for (const name of ['fingerprintShow', 'detectForShow', 'detectAnchors', 'detectFromTranscripts']) {
+      const original = server.adDetect[name].bind(server.adDetect);
+      server.adDetect[name] = async (...args) => {
+        calls.push(name);
+        return original(...args);
+      };
+    }
+    for (const segment of server.adDetect.listSegments(show.id)) server.adDetect.decide(segment.id, SEGMENT_STATUS.APPROVED);
+    const result = await server.adPipeline.applyDecisions(show.id);
+
+    assert.deepEqual(calls, [], `a decision ran detection: ${calls.join(', ')}`);
+    assert.ok(result.trimmed.trimmed >= 3, 'the approved read was not cut');
+    assert.deepEqual(holds(show), [null, null, null], 'the decided episodes were not released');
+  });
+});
+
+describe('saying how long and why', () => {
+  it('dates a hold from when it began, and warns once it has gone on too long', async () => {
+    const show = await makeShow({ mode: 'review', count: 3 });
+    await server.adPipeline.processShow(show.id);
+    const [held] = server.episodes.listByShow(show.id);
+    assert.ok(held.publish_hold && held.publish_hold_since, 'a held episode has no date for its hold');
+
+    const since = held.publish_hold_since;
+    await server.adPipeline.processShow(show.id);
+    assert.equal(server.episodes.get(held.id).publish_hold_since, since, 'another pass restarted the clock');
+
+    const longAgo = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+    server.db.prepare('UPDATE episodes SET publish_hold_since = ? WHERE show_id = ?').run(longAgo, show.id);
+    server.adPipeline.settle(show.id);
+    const warning = server.health.list?.().find?.((row) => row.key === `ad_long_hold_${show.id}`)
+      ?? server.health.get?.(`ad_long_hold_${show.id}`);
+    assert.ok(warning, 'a hold of forty-five minutes was not said out loud');
+
+    for (const segment of server.adDetect.listSegments(show.id)) server.adDetect.decide(segment.id, SEGMENT_STATUS.APPROVED);
+    await server.adPipeline.applyDecisions(show.id);
+    assert.equal(server.episodes.get(held.id).publish_hold, null, 'setup: approving everything did not release it');
+    assert.equal(server.episodes.get(held.id).publish_hold_since, null, 'a released episode kept the date of its hold');
+    assert.equal(server.health.get(`ad_long_hold_${show.id}`), null, 'the warning outlived the hold');
+  });
+
+  it('says what a show still owes', async () => {
+    const show = await makeShow({ mode: 'review', count: 2 });
+    const before = server.adPipeline.workOwed(show.id);
+    assert.equal(before.toRead, 2, 'two unread episodes were not counted');
+    assert.equal(before.held, 2);
+    assert.equal(before.nothingOwed, false);
+    await server.adPipeline.processShow(show.id);
+    const after = server.adPipeline.workOwed(show.id);
+    assert.equal(after.toRead, 0);
+    assert.equal(after.toCut, 0);
+    server.db.prepare("UPDATE shows SET ad_trim_mode = 'off' WHERE id = ?").run(show.id);
+    assert.equal(server.adPipeline.workOwed(show.id), null);
   });
 });

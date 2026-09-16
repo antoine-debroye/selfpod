@@ -277,7 +277,10 @@ of it can be changed later in **Settings** without touching the container.
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `WHISPER_MODEL` | `base` | Which speech model hears the words: `base` or `small` (both ship in the image), or a path to a whisper.cpp model file. `small` is about twice the work and markedly better in French. |
 | `WHISPER_CLI` | *(the image's own)* | Path to a `whisper-cli` binary, for a build of your own. The image picks its AVX2 or SSE4.2 build for the CPU at boot. |
-| `WHISPER_THREADS` | `2` | Threads the recogniser may use. Two is right for a box that is also serving audio. |
+| `WHISPER_THREADS` | half the logical cores, less one (at least 2) | Threads the recogniser may use. An eight-core, sixteen-thread i7 gets 7. |
+| `WHISPER_NICE` | `10` | How politely the recogniser yields the processor, 0 (normal) to 19. It only matters when something else wants the processor — on a NAS, usually a listener's download. |
+| `WHISPER_BACKFILL_PER_RUN` | `8` | Already-published episodes read again per pass, after a change of model. New episodes are always read first. |
+| `AD_CORPUS_WINDOW` | `24` | How many of a show's newest episodes are compared to find new repeated stretches, at most 32. Cuts already found in older episodes are kept, and reads already known are looked for in every episode. |
 
 ---
 
@@ -290,40 +293,51 @@ page.
 | Setting | What happens |
 |---|---|
 | **Nothing** *(default)* | Your episodes are published exactly as they arrive. SelfPod never listens to them or reads them. |
-| **Listen, tell me what it heard, and wait** | New episodes are held out of your feed until you have decided about anything that sounds like a sponsor read or repeats across episodes. Remove a read once and the same words are cut from later episodes without asking. |
-| **Remove what it is sure about, without asking** | SelfPod cuts a stretch when the words say sponsor read and the same words come back in other episodes, or when you have removed that read before. Anything it is unsure of is listed for you and the episode is published untouched. |
+| **Ask me** | New episodes are held out of your feed until you have decided about what is waiting. Remove a read once and the same words are cut from later episodes without asking. |
+| **Cut what it is sure of** | SelfPod cuts reads that come back in other episodes, reads you removed before, and a station jingle it hears in every recent episode. Anything it is unsure of waits on the Adverts page and the episode is published untouched. |
+
+**The Adverts page shows everything in one place.** Four figures at the top — episodes
+cut, minutes removed, waiting, held. Then *What SelfPod cuts*: every rule in force, how
+many episodes it was heard in, and a Forget button. Then *Episode by episode*: each
+episode as a bar with its cuts and anything waiting marked on it, one sentence saying
+why for each stretch, and a ▶ that plays the original from three seconds before to three
+seconds after. Every stretch has at most two buttons:
+
+- a cut: **Restore here** (leave it in this episode only) or **Restore everywhere and stop**
+  (undo the rule behind it);
+- something waiting: **Remove** or **Keep**.
 
 **It reads the words.** SelfPod transcribes the opening and closing minutes of each
 MP3 episode — on your own machine, with [whisper.cpp](https://github.com/ggml-org/whisper.cpp);
-nothing leaves it — and looks for three things in the text:
+nothing leaves it — and looks for:
 
 - **The same words, day after day.** A campaign runs for a week, and the host reads
-  the same script every morning. The audio is different every time, so nothing that
-  compares sound can find it; the words are the same, and SelfPod finds those, allowing
-  for the recogniser's mishearings.
+  the same script every morning. The audio is different every time; the words are the
+  same, and SelfPod finds those, allowing for the recogniser's mishearings.
 - **Wording that sounds like an advert.** "Brought to you by", a promo code, a web
   address, "terms apply" — and in French, "sans engagement", "code promo", "soumise à
-  condition", the small print the law makes advertisers say. Every candidate shows
-  which of these it heard.
-- **A boundary you point at.** On any episode page, pick the words the programme
-  starts with — "Vous écoutez RMC" — and press *The programme starts here*. From then
-  on everything before those words is cut in every episode where SelfPod hears them,
-  whatever it is. That is how a pre-roll that is a different advert every day goes.
-  The end works the same way, twice over: *The programme ends here* keeps the host's
-  sign-off and cuts whatever follows it, and *Cut from these words to the end* takes a
-  closing sponsor tag that is itself the advert — "C'était votre émission avec…" —
-  and everything after it.
+  condition". A read like this heard only once is highlighted in the episode's words,
+  where you can teach it; it is never cut on its own.
+- **A boundary you teach.** Under *What SelfPod cuts*, type the words the programme
+  starts with — "Vous écoutez RMC" — choose *starts when it says*, and press Teach. From
+  then on everything before those words is cut in every episode where SelfPod hears them.
+  *ends after it says* keeps the words and cuts what follows; *ends, and these words go too*
+  also takes a closing sponsor tag that is itself the advert. A start only counts in the
+  first half of an episode and an end in the second, so a tag read at the start of one
+  episode and the end of another does the right thing in both.
 
-**It shows you the words.** Each candidate is the transcript with the cut marked and a
-few seconds either side, the cues that fired, and one sentence saying what SelfPod will
-do and why — "This sounds like a sponsor read: it says ‘brought to you by’ and gives a
-web address, but you asked to decide first." Tap a word to move an edge. The player
-carries three seconds either side, so the edges can be judged by ear.
+**It hears the jingle.** A station ident is the same recording every day, so SelfPod
+finds it by its sound, whatever the pre-roll in front of it says. In *Cut what it is
+sure of* a jingle heard in every recent episode is cut without asking; in *Ask me* it is
+offered. You can also point at it: on any episode page, give the time range it plays at
+and choose *the station jingle*.
 
-**It remembers.** Remove a read once and later episodes carrying the same words are cut
-without asking, in review mode too — that decision was yours. Keep one and it is never
-offered again. Every automatic cut says why, wherever it is mentioned, and every one
-can be put back with one click.
+**Teach by time.** On an episode page, say *From 0:00 to 0:29 is an advert* — type the
+times, tap the bar twice, or take the position from the player. If SelfPod heard words
+there, those words are cut from later episodes too; if not, that stretch is cut from that
+episode.
+
+**Hear what was cut.** Each episode page plays both the published copy and the original.
 
 **It still compares what episodes sound like.** The acoustic detector from 1.6 — 32
 bits every 11.6 milliseconds describing how energy moves between frequency bands,
@@ -359,6 +373,44 @@ half of another with nothing to notice. Held episodes are counted and explained 
 the show's page — a feed that quietly stops is the thing this app exists to prevent.
 An episode is never held for a recogniser that is not there: if whisper cannot run on
 your machine, the health banner says so and everything is published as it arrives.
+
+### Listening on an NVIDIA GPU
+
+Reading the words is the slow part of a pass. With an NVIDIA card, use the GPU image
+instead of the regular one — same app, same data, different tag:
+
+```
+ghcr.io/antoine-debroye/selfpod:1.9.0-cuda
+```
+
+It is amd64 only, about two and a half gigabytes, and uses the `small` model by default,
+which the GPU makes cheap and which hears French markedly better. It also carries the
+regular CPU builds: at start it tries the GPU build, keeps it only if whisper reports
+that it actually used a GPU, and otherwise falls back to the processor and says so in the
+health banner ("SelfPod is listening with the processor, not the GPU"). It never stops
+listening because the GPU is missing.
+
+**On TrueNAS SCALE:** install the NVIDIA driver for apps (Apps → Configuration →
+Settings → *Install NVIDIA Drivers*), then edit the SelfPod app, set the image tag to the
+`-cuda` one, and allocate the GPU under the app's GPU configuration. With plain Docker
+Compose, add this to the service:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+```
+
+**Checking it worked:** signed in, open `/api/status` — `recogniser.accelerator` is `gpu`
+and `recogniser.device` names the card (`CUDA0`). The build is for Ampere cards such as the
+RTX 3050 (compute capability 8.6) and needs driver 525 or newer; a different card needs the
+image rebuilt with `--build-arg CUDA_ARCHITECTURES=<its capability>`. Nothing in the
+project's own tests can run on a GPU, so this image is proved to build and to fall back
+correctly, and proved on a GPU only on real hardware.
 
 ### Adverts a host inserts as it serves
 

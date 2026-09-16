@@ -1,0 +1,25 @@
+<%
+  /* One episode as a bar: the whole length of the file on the share, with what is cut,
+     waiting or restored drawn where it is. Positions are computed on the server
+     (lib/cut-bar.js), so the bar is right with script off. */
+  const bar = it.bar;
+  const target = it.target ?? '#ad-panel';
+%>
+<article class="cutbar" id="ep-<%= bar.id %>" data-cutbar>
+  <header class="cutbar__head">
+    <a class="cutbar__title" href="<%= bar.url %>"><%= bar.title %></a>
+    <% if (bar.state) { %><span class="cut-pill cut-pill--<%= bar.state.state %>"><%= bar.state.pill %></span><% } %>
+    <% if (bar.lengthsLabel) { %><span class="cutbar__lengths mono"><%= bar.lengthsLabel %></span><% } %>
+  </header>
+  <div class="cutbar__track" data-cutbar-pick data-duration-ms="<%= bar.durationMs %>">
+    <% for (const s of bar.stretches) { %><span class="cutbar__mark cutbar__mark--<%= s.state %>" style="<%= s.style %>" title="<%= s.atLabel %> · <%= s.stateLabel %>"></span><% } %>
+  </div>
+  <audio data-cut-audio preload="none" src="<%= bar.audioUrl %>"></audio>
+  <% if (bar.stretches.length) { %>
+    <ul class="stretches">
+      <% for (const stretch of bar.stretches) { %>
+        <%~ include('./cut-stretch.eta', { stretch, target, returnTo: it.returnTo, audioUrl: bar.audioUrl }) %>
+      <% } %>
+    </ul>
+  <% } %>
+</article>

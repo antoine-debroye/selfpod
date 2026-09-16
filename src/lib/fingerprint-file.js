@@ -25,6 +25,7 @@ import { FINGERPRINT_VERSION } from '../constants.js';
  */
 
 const MAGIC = 0x53504650; // "SPFP"
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 const HEADER_BYTES = 28;
 
 /**
@@ -64,10 +65,13 @@ export function decodeFingerprint(buffer) {
   const frameCount = buffer.readUInt32BE(8);
   if (buffer.length < HEADER_BYTES + frameCount * 4) return null;
 
-  const hashes = new Uint32Array(frameCount);
-  for (let i = 0; i < frameCount; i += 1) {
-    hashes[i] = buffer.readUInt32BE(HEADER_BYTES + i * 4);
-  }
+  // One copy and one byte swap, rather than a call per sub-fingerprint: a pass reads
+  // every episode's file, and the loop this replaces was most of the cost of reading one.
+  // Copied into a fresh buffer so the array is aligned and owns its memory.
+  const bytes = new Uint8Array(frameCount * 4);
+  bytes.set(buffer.subarray(HEADER_BYTES, HEADER_BYTES + frameCount * 4));
+  if (LITTLE_ENDIAN) Buffer.from(bytes.buffer, 0, bytes.length).swap32();
+  const hashes = new Uint32Array(bytes.buffer, 0, frameCount);
 
   return {
     version,
@@ -76,12 +80,6 @@ export function decodeFingerprint(buffer) {
     samplesPerFrame: buffer.readUInt32BE(16) || null,
     durationMs: buffer.readUInt32BE(20) || null,
   };
-}
-
-/** Milliseconds from the start of the audio to a frame index. */
-export function frameToMs(index, { sampleRate, samplesPerFrame }) {
-  if (!sampleRate || !samplesPerFrame) return 0;
-  return Math.round((index * samplesPerFrame * 1000) / sampleRate);
 }
 
 /**

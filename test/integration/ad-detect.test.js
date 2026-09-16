@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir, writeFile } from 'node:fs/promises';
+import { readdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
@@ -75,6 +75,26 @@ describe('fingerprinting an episode', () => {
     const again = await app.adDetect.fingerprintEpisode(episode);
 
     assert.equal(again.skipped, 'unchanged');
+    // Asked of the file system, not of the file: a pass over an unchanged library must
+    // not read the whole library off the disk to learn that nothing happened.
+    assert.equal(again.read, false, 'an unchanged file was read to find out it was unchanged');
+  });
+
+  it('reads a touched file once, and not again once it knows the bytes are the same', async () => {
+    const show = await makeEpisodes(1);
+    const [episode] = app.episodes.listByShow(show.id);
+    await app.adDetect.fingerprintEpisode(episode);
+
+    const path = join(showDir, episode.filename);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(path, later, later);
+
+    const touched = await app.adDetect.fingerprintEpisode(episode);
+    assert.equal(touched.skipped, 'unchanged');
+    assert.equal(touched.read, true, 'a new modification time has to be checked against the bytes');
+
+    const settled = await app.adDetect.fingerprintEpisode(episode);
+    assert.equal(settled.read, false, 'the new time was not remembered');
   });
 
   it('notices a file that was replaced', async () => {
@@ -392,5 +412,75 @@ describe('what comparing two downloads records', () => {
     );
 
     assert.equal(app.adDetect.listSegments(show.id)[0].status, SEGMENT_STATUS.CANDIDATE);
+  });
+
+  it('is only offered, never cut unasked, when the difference is longer than any advert', async () => {
+    // What differs between two downloads is chosen by whoever serves them. Ten minutes
+    // of difference is a replaced programme or a comparison gone wrong, not a break.
+    const show = setMode(await makeEpisodes(2), 'auto');
+    const [episode] = app.episodes.listByShow(show.id);
+
+    app.adDetect.recordDiffSegments(
+      episode,
+      [{ start: 0, end: 200, startMs: 0, endMs: 600_000, durationMs: 600_000 }],
+      { timing: {} },
+    );
+
+    const [recorded] = app.adDetect.listSegments(show.id);
+    assert.equal(recorded.kind, 'diff');
+    assert.equal(recorded.status, SEGMENT_STATUS.CANDIDATE, 'a ten-minute difference was cut without asking');
+    assert.equal(recorded.hold_reason, 'too_long_to_be_an_advert');
+  });
+});
+
+describe('searching only the newest episodes', () => {
+  it('keeps what was already found in episodes outside the window', async () => {
+    // Compare only the three newest episodes, from the start.
+    await app.cleanup();
+    app = await createTestInstance({ env: { AD_CORPUS_WINDOW: '3' } });
+    showDir = await app.makeShowFolder('tape-club');
+
+    const show = setMode(await makeEpisodes(3), 'review');
+    await app.adDetect.fingerprintShow(show.id);
+    await app.adDetect.detectForShow(show.id);
+    const read = app.adDetect.listSegments(show.id).find((row) => row.episode_count === 3);
+    assert.ok(read, 'setup: nothing was found in all three episodes');
+    app.adDetect.decide(read.id, SEGMENT_STATUS.APPROVED);
+    const firstThree = app.episodes.listByShow(show.id).map((row) => row.id);
+    for (const id of firstThree) assert.ok(app.adDetect.cutListFor(id).length, 'setup: an episode is not cut');
+
+    // Three more arrive; whichever three the window now holds, the other three must keep their cut.
+    await makeEpisodes(6);
+    await app.adDetect.fingerprintShow(show.id);
+    await app.adDetect.detectForShow(show.id);
+
+    const after = app.adDetect.getSegment(read.id);
+    assert.ok(after, 'the approved read was lost when the window moved');
+    for (const episode of app.episodes.listByShow(show.id)) {
+      assert.ok(app.adDetect.cutListFor(episode.id).length, `${episode.filename} is not cut`);
+    }
+    assert.equal(after.episode_count, 6, 'episodes outside the window were dropped from the read');
+  });
+});
+
+describe('a show with more episodes than the acoustic search can index', () => {
+  it('still finds a stretch that is in every one of thirty-six episodes', async () => {
+    // The acoustic search leaves out any sub-fingerprint seen more than 32 times.
+    // Searched over the whole show, a stretch shared by all thirty-six episodes had
+    // every key left out and was never found — measured: found in 32, nothing in 33.
+    for (let n = 0; n < 36; n += 1) {
+      await writeFile(
+        join(showDir, `episode-${n}.mp3`),
+        stitch(segment(100_000 + n * 50_000, framesFor(12)), segment(2_000, framesFor(10)), segment(600_000 + n * 50_000, framesFor(12))),
+      );
+    }
+    await app.scanner.scanAllNow('manual');
+    const show = setMode(app.shows.getBySlug('tape-club'), 'review');
+    await app.adDetect.fingerprintShow(show.id);
+    await app.adDetect.detectForShow(show.id);
+
+    const found = app.adDetect.listSegments(show.id);
+    assert.ok(found.length >= 1, 'a stretch shared by thirty-six episodes was not found at all');
+    assert.ok(found[0].episode_count >= 20, `found in only ${found[0].episode_count} episodes`);
   });
 });

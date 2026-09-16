@@ -175,6 +175,7 @@ export async function createTestServer({ env = {}, completeSetup = true, whisper
     },
 
     async cleanup() {
+      await adDetect.close();
       await app.close();
       shows.stop?.();
       settings.stop?.();
