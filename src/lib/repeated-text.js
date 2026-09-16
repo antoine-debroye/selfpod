@@ -234,8 +234,6 @@ export function findRepeatedText(
       if (!sameWindow(a, i, i + SHINGLE - 1)) continue;
       const hits = index.get(shingleKey(a, i));
       if (!hits || hits.length < 2) continue;
-      if (process.env.RT_DEBUG) console.error("seed", e, i, shingleKey(a, i), JSON.stringify(hits));
-      if (process.env.RT_DEBUG) console.error("seed", e, i, shingleKey(a, i), JSON.stringify(hits));
 
       // One partner per other episode, and only unclaimed ground.
       const partners = new Map();

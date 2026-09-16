@@ -23,7 +23,10 @@ if (!models.length) {
   console.error(`no models in ${dir}`);
   process.exit(1);
 }
-const binaries = readdirSync(dir).filter((name) => name.startsWith('whisper-cli'));
+// Builds that need hardware the build machine does not have (the CUDA build needs the
+// driver's libcuda, mounted only at run time) are named here and checked another way.
+const skip = new Set((process.env.WHISPER_SMOKE_SKIP ?? '').split(',').map((name) => name.trim()).filter(Boolean));
+const binaries = readdirSync(dir).filter((name) => name.startsWith('whisper-cli') && !skip.has(name));
 if (!binaries.length) {
   console.error(`no whisper-cli binaries in ${dir}`);
   process.exit(1);

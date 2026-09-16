@@ -327,8 +327,6 @@ export function frameProfile(buffer) {
       to: { bitrate: current.bitrate, channelMode: current.channelMode },
     });
   }
-  const meaningful = discontinuities;
-
   return {
     frames: audioFrames,
     hashes: audioHashes,
@@ -343,7 +341,7 @@ export function frameProfile(buffer) {
       xing?.frameCount != null && Math.abs(xing.frameCount - audioFrames.length) > 1
         ? { declared: xing.frameCount, actual: audioFrames.length }
         : null,
-    discontinuities: meaningful,
+    discontinuities,
     resyncs,
     // Passed on rather than hidden: everything downstream has to refuse a file it has
     // only seen part of.

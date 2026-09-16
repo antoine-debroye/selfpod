@@ -1,4 +1,5 @@
-import { HOLD_REASONS } from '../constants.js';
+import { HOLD_REASONS, SEGMENT_KINDS } from '../constants.js';
+import { inferKind } from './segment-kind.js';
 import { describeCues } from './advert-cues.js';
 import { normaliseWord } from './text-normalise.js';
 
@@ -146,39 +147,77 @@ function repetitionPhrase(segment, positionLabel) {
   return `the same words appear in ${count} ${count === 1 ? 'episode' : 'episodes'}`;
 }
 
+/** "40 seconds" / "2:10": how long a stretch of sound is, for a sentence. */
+function lengthPhrase(ms) {
+  const seconds = Math.round((ms ?? 0) / 1000);
+  return seconds < 90 ? `${seconds} second${seconds === 1 ? '' : 's'}` : formatClock(ms);
+}
+
 /**
- * One sentence: what SelfPod is going to do about a segment found by the words, and
- * why. The keys are stable so the API can be tested on them; the sentences are for
- * people.
+ * One short sentence: why a stretch is cut, waiting or kept. The keys are stable so
+ * the API can be tested on them; the sentences are for people, and are kept short
+ * enough to sit on one line beside the stretch they explain.
  *
- * @returns {{verdict: 'will_cut'|'asking'|'will_leave', key: string, sentence: string, offerMarker: boolean}}
+ * @returns {{verdict: 'will_cut'|'asking'|'will_leave', key: string, sentence: string, offerMarker: boolean|string}}
  */
 export function describeVerdict(segment, { mode = 'review', positionLabel = null, confidence = null, occurrences = [] } = {}) {
   const cues = parseCues(segment.cues);
   const said = describeCues(cues);
   const strong = (segment.cue_score ?? 0) >= 0.5;
-  const decided = formatDay(segment.decided_at);
-  const isMarker = String(segment.signature ?? '').startsWith('marker:');
-  const isAnchor = String(segment.signature ?? '').startsWith('anchor:');
+  const kind = segment.kind ?? inferKind(segment);
+  const count = segment.episode_count ?? 0;
 
-  if (isAnchor) {
+  if (kind === SEGMENT_KINDS.JINGLE) {
     return {
       verdict: 'will_cut',
       key: 'jingle',
-      sentence: 'Cut ahead of the station jingle, found by its sound — heard the same every time, whatever the pre-roll in front of it says.',
+      sentence: segment.anchor_auto_confirmed
+        ? 'Before the station jingle, found by its sound, cut automatically — the jingle was heard in every recent episode.'
+        : 'Before the station jingle, found by its sound.',
       offerMarker: false,
     };
   }
-  if (isMarker) {
+  if (kind === SEGMENT_KINDS.BOUNDARY_WORDS) {
     const ends = segment.marker_role === 'programme_ends';
     return {
       verdict: 'will_cut',
       key: 'boundary',
       sentence: ends
         ? segment.marker_inclusive
-          ? `Everything from “${segment.raw_text}” to the end is cut, as you asked.`
-          : `Everything after “${segment.raw_text}” is cut, as you asked.`
-        : `Everything before “${segment.raw_text}” is cut, as you asked.`,
+          ? `From “${segment.raw_text}” to the end — the boundary you set.`
+          : `After “${segment.raw_text}” — the boundary you set.`
+        : `Before “${segment.raw_text}” — the boundary you set.`,
+      offerMarker: false,
+    };
+  }
+  if (kind === SEGMENT_KINDS.TAUGHT_RANGE) {
+    return { verdict: 'will_cut', key: 'taught_range', sentence: 'A stretch you marked as an advert.', offerMarker: false };
+  }
+  if (kind === SEGMENT_KINDS.DIFF) {
+    return {
+      verdict: segment.status === 'rejected' ? 'will_leave' : segment.status === 'approved' ? 'will_cut' : 'asking',
+      key: 'diff',
+      sentence: 'Differs between two downloads of this episode — inserted by the host.',
+      offerMarker: false,
+    };
+  }
+  if (kind === SEGMENT_KINDS.REPEATED_AUDIO && !segment.text) {
+    const sound = `The same ${lengthPhrase(segment.duration_ms)} of sound in ${count} episode${count === 1 ? '' : 's'}`;
+    if (segment.status === 'approved') {
+      return {
+        verdict: 'will_cut',
+        key: segment.auto_approved ? 'repeated_sound_auto' : 'repeated_sound_removed',
+        sentence: segment.auto_approved ? `${sound}, cut automatically.` : `${sound} — you removed it.`,
+        offerMarker: false,
+      };
+    }
+    if (segment.status === 'rejected') {
+      return { verdict: 'will_leave', key: 'repeated_sound_kept', sentence: `${sound} — you kept it.`, offerMarker: false };
+    }
+    return {
+      verdict: 'asking',
+      key: 'repeated_sound',
+      sentence: `${sound} — a theme or a read; SelfPod cannot tell.`,
       offerMarker: false,
     };
   }
@@ -187,30 +226,20 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
       return {
         verdict: 'will_cut',
         key: 'strong_cues_repeats',
-        sentence: `SelfPod cuts this on its own: it ${said || 'sounds like a sponsor read'}, and ${repetitionPhrase(segment, positionLabel)}.`,
+        sentence: `Cut automatically: it ${said || 'sounds like a sponsor read'}, and ${repetitionPhrase(segment, positionLabel)}.`,
         offerMarker: false,
       };
     }
-    return {
-      verdict: 'will_cut',
-      key: 'remembered_advert',
-      sentence: `SelfPod cuts this on its own${decided ? `: you removed it on ${decided}` : ', because you removed it'}, and it cuts the same words from every later episode without asking.`,
-      offerMarker: false,
-    };
+    return { verdict: 'will_cut', key: 'remembered_advert', sentence: 'The same words as an advert you removed.', offerMarker: false };
   }
   if (segment.status === 'rejected') {
-    return {
-      verdict: 'will_leave',
-      key: 'remembered_not_advert',
-      sentence: `SelfPod leaves this in${decided ? `: you kept it on ${decided}` : ''}, and will not offer the same words again.`,
-      offerMarker: false,
-    };
+    return { verdict: 'will_leave', key: 'remembered_not_advert', sentence: 'Words you kept; SelfPod will not offer them again.', offerMarker: false };
   }
   if (confidence !== null && confidence < LOW_CONFIDENCE) {
     return {
       verdict: 'asking',
       key: 'low_confidence',
-      sentence: 'SelfPod is not sure it heard these words correctly, so it will not act on them alone.',
+      sentence: 'SelfPod is not sure it heard these words right, so it will not act on them alone.',
       offerMarker: false,
     };
   }
@@ -218,7 +247,7 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
     return {
       verdict: 'asking',
       key: 'cues_but_once',
-      sentence: `It sounds like a sponsor read — it ${said || 'has the shape of one'} — but SelfPod has only heard it once. It is asking rather than guessing.`,
+      sentence: `Sounds like a sponsor read — it ${said || 'has the shape of one'} — but it is in one episode only.`,
       offerMarker: false,
     };
   }
@@ -234,14 +263,14 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
       (positionLabel === 'At the very start of every episode' ||
         (starts.length > 0 && Math.max(...starts) < 90_000));
     const offer = nearStart
-      ? '. If this is where the programme starts, say so and SelfPod will cut everything before it, whatever it is'
+      ? ' If the programme starts here, Teach cuts everything before it, whatever it is.'
       : atEnd
-        ? '. If this is where the adverts start, say so and SelfPod will cut from these words to the end, whatever follows them'
+        ? ' If the adverts start here, Teach will cut from these words to the end, whatever follows them.'
         : '';
     return {
       verdict: 'asking',
       key: 'repeats_no_cues',
-      sentence: `${capitalise(repetitionPhrase(segment, positionLabel))}, but nothing in them sounds like a sponsor read. That is usually the host's standing ${atEnd ? 'sign-off' : 'intro'}${offer}.`,
+      sentence: `${capitalise(repetitionPhrase(segment, positionLabel))}, with nothing that sounds like a sponsor — often the host's ${atEnd ? 'sign-off' : 'intro'}.${offer}`,
       offerMarker: nearStart ? 'programme_starts' : atEnd ? 'tail_starts' : false,
     };
   }
@@ -249,7 +278,7 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
     return {
       verdict: 'asking',
       key: 'held',
-      sentence: `This sounds like a sponsor read — it ${said} — but SelfPod will not cut it on its own: ${lowerFirst(HOLD_REASONS[segment.hold_reason] ?? segment.hold_reason)}`,
+      sentence: `Sounds like a sponsor read — it ${said} — but SelfPod will not cut it alone: ${lowerFirst(HOLD_REASONS[segment.hold_reason] ?? segment.hold_reason)}`,
       offerMarker: false,
     };
   }
@@ -257,14 +286,14 @@ export function describeVerdict(segment, { mode = 'review', positionLabel = null
     return {
       verdict: 'will_cut',
       key: 'strong_cues_repeats',
-      sentence: `SelfPod will cut this on its own: it ${said}, and ${repetitionPhrase(segment, positionLabel)}.`,
+      sentence: `Cut automatically: it ${said}, and ${repetitionPhrase(segment, positionLabel)}.`,
       offerMarker: false,
     };
   }
   return {
     verdict: 'asking',
     key: 'strong_cues_review',
-    sentence: `This sounds like a sponsor read — it ${said} — but you asked to decide first. Remove it once and SelfPod cuts the same read from later episodes without asking.`,
+    sentence: `Sounds like a sponsor read — it ${said}. Remove it once and the same read is cut from later episodes.`,
     offerMarker: false,
   };
 }
@@ -351,7 +380,7 @@ export function describeAdvertStage({ episode, show, row, spoken, markers, pendi
   }
   const cut = spoken.filter((entry) => entry.status === 'approved');
   const waiting = spoken.filter((entry) => entry.status === 'candidate');
-  const boundary = cut.find((entry) => String(entry.signature).startsWith('marker:'));
+  const boundary = cut.find((entry) => (entry.kind ?? inferKind(entry)) === SEGMENT_KINDS.BOUNDARY_WORDS);
   if (boundary) {
     const atStart = boundary.start_ms === 0;
     const sentence = atStart

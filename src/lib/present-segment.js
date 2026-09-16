@@ -1,4 +1,5 @@
-import { HOLD_REASONS, SEGMENT_SOURCES } from '../constants.js';
+import { HOLD_REASONS, SEGMENT_KINDS, SEGMENT_SOURCES } from '../constants.js';
+import { WORD_KINDS, inferKind } from './segment-kind.js';
 import { describeVerdict, flattenTranscript, parseCues, presentExcerpt, LOW_CONFIDENCE } from './present-transcript.js';
 import { describeCues } from './advert-cues.js';
 import { meanConfidence } from './transcript.js';
@@ -23,9 +24,10 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
   const occurrences = segment.occurrences ?? [];
   const durationSeconds = Math.round((segment.duration_ms ?? 0) / 10) / 100;
   const positionLabel = describePosition(occurrences, episodes);
-  const spoken = segment.source === SEGMENT_SOURCES.TRANSCRIPT || Boolean(segment.text);
-  const isMarker = String(segment.signature ?? '').startsWith('marker:');
-  const isAnchor = String(segment.signature ?? '').startsWith('anchor:');
+  const kind = segment.kind ?? inferKind(segment);
+  const spoken = Boolean(segment.text) || WORD_KINDS.includes(kind) || kind === SEGMENT_KINDS.BOUNDARY_WORDS;
+  const isMarker = kind === SEGMENT_KINDS.BOUNDARY_WORDS;
+  const isAnchor = kind === SEGMENT_KINDS.JINGLE;
   const cues = parseCues(segment.cues);
 
   /*
@@ -51,6 +53,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
     showId: segment.show_id,
     status: segment.status,
     source: segment.source,
+    kind,
     /**
      * Where it came from, in words, because the two sources deserve very different
      * amounts of trust. Something that differs between two downloads of one episode

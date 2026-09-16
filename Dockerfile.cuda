@@ -1,0 +1,137 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# SelfPod with an NVIDIA GPU for listening (spec §19.9). amd64 only.
+#
+# The same app as Dockerfile, on a different base: NVIDIA's container runtime hands a
+# GPU to glibc userspace, and the regular image is Alpine (musl). So this is Ubuntu,
+# with Node from its official tarball, and whisper.cpp built three ways — for CUDA,
+# and the same two CPU builds as the regular image. The start-up check uses the CUDA
+# build only if it actually ran on a GPU, and otherwise falls back to a CPU build and
+# says so in the health banner (src/services/transcriber.js).
+#
+# What cannot be proved here: that it runs on a GPU. Build machines have none, and the
+# CUDA build cannot even load without the driver's libcuda, which the NVIDIA runtime
+# mounts into the container at start. The build proves the CPU builds on real audio,
+# and that the CUDA build links against everything but that one library.
+# ---------------------------------------------------------------------------
+ARG CUDA_VERSION=12.6.3
+ARG UBUNTU=ubuntu22.04
+
+FROM nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU} AS build
+
+ARG NODE_VERSION=22.23.2
+ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+# The RTX 3050 is Ampere, compute capability 8.6. Building for every architecture takes
+# several times as long and is several times the size; override for other cards.
+ARG CUDA_ARCHITECTURES=86
+ARG WHISPER_CPP_TAG=b4938
+ARG WHISPER_BASE_SHA256=422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898
+ARG WHISPER_SMALL_SHA256=ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils git cmake make g++ python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSLo /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+ && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - \
+ && mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 \
+ && rm /tmp/node.tar.xz
+ENV PATH=/opt/node/bin:$PATH
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+# glibc prebuilds for better-sqlite3 and sharp; never --omit=optional (sharp's binaries are optional deps).
+RUN npm ci --omit=dev
+RUN node -e "require('better-sqlite3'); require('sharp'); console.log('native modules OK')"
+
+RUN git clone --depth 1 --branch "$WHISPER_CPP_TAG" https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp
+
+ENV WHISPER_CMAKE="-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
+  -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_SDL2=OFF -DWHISPER_CURL=OFF"
+
+# ggml is linked statically; the CUDA libraries stay shared (cuBLAS alone is hundreds of
+# megabytes) and come from the runtime image below.
+RUN set -e; mkdir -p /app/whisper; \
+  cmake -S /tmp/whisper.cpp -B /tmp/wbc $WHISPER_CMAKE -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
+    -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+    && cmake --build /tmp/wbc --target whisper-cli -j"$(nproc)" \
+    && cp /tmp/wbc/bin/whisper-cli /app/whisper/whisper-cli-cuda; \
+  cmake -S /tmp/whisper.cpp -B /tmp/wb3 $WHISPER_CMAKE -DGGML_STATIC=ON -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+    && cmake --build /tmp/wb3 --target whisper-cli -j"$(nproc)" \
+    && cp /tmp/wb3/bin/whisper-cli /app/whisper/whisper-cli-v3; \
+  cmake -S /tmp/whisper.cpp -B /tmp/wb2 $WHISPER_CMAKE -DGGML_STATIC=ON -DGGML_SSE42=ON -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF \
+    && cmake --build /tmp/wb2 --target whisper-cli -j"$(nproc)" \
+    && cp /tmp/wb2/bin/whisper-cli /app/whisper/whisper-cli-v2; \
+  rm -rf /tmp/wbc /tmp/wb3 /tmp/wb2 /tmp/whisper.cpp
+
+RUN curl -fsSLo /app/whisper/ggml-base-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin \
+ && echo "$WHISPER_BASE_SHA256  /app/whisper/ggml-base-q5_1.bin" | sha256sum -c - \
+ && curl -fsSLo /app/whisper/ggml-small-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin \
+ && echo "$WHISPER_SMALL_SHA256  /app/whisper/ggml-small-q5_1.bin" | sha256sum -c -
+
+# ---------------------------------------------------------------------------
+# Runtime stage: CUDA runtime libraries (cuBLAS, the CUDA runtime), no compilers.
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-${UBUNTU}
+
+ENV DEBIAN_FRONTEND=noninteractive
+# util-linux: setpriv, which drops privileges as su-exec does on Alpine.
+# passwd: usermod/groupmod for PUID/PGID. tzdata: TZ.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata util-linux passwd \
+ && rm -rf /var/lib/apt/lists/*
+
+# The same app user as the regular image, at the default PUID/PGID. Ubuntu 22.04's
+# CUDA images have no user at 1000 to move out of the way (24.04's "ubuntu" user would).
+RUN groupadd -g 1000 selfpod \
+ && useradd -u 1000 -g selfpod -d /app -s /usr/sbin/nologin -M selfpod
+
+COPY --from=build /opt/node /opt/node
+ENV PATH=/opt/node/bin:$PATH
+
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/whisper ./whisper
+COPY src ./src
+COPY docker ./docker
+COPY scripts ./scripts
+
+# The CPU builds are proved on real audio against this image's libraries. The CUDA build
+# is proved to link against everything except libcuda.so.1, which only the NVIDIA runtime
+# provides, at start.
+RUN WHISPER_SMOKE_SKIP=whisper-cli-cuda node docker/whisper-smoke.mjs \
+ && missing="$(ldd /app/whisper/whisper-cli-cuda | grep 'not found' | grep -v 'libcuda.so.1' || true)" \
+ && if [ -n "$missing" ]; then echo "whisper-cli-cuda is missing libraries: $missing"; exit 1; fi \
+ && echo "whisper-cli-cuda links (libcuda.so.1 comes from the driver at run time)"
+
+RUN chmod +x docker/entrypoint.sh \
+ && mkdir -p /data \
+ && chown selfpod:selfpod /app
+
+# `small` by default here: the GPU makes it cheap, and it hears French markedly better.
+ENV NODE_ENV=production \
+    PORT=8080 \
+    DATA_DIR=/data \
+    PUID=1000 \
+    PGID=1000 \
+    WHISPER_MODEL=small \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+EXPOSE 8080
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD ["node", "/app/docker/healthcheck.mjs"]
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+
+LABEL org.opencontainers.image.title="SelfPod (NVIDIA GPU)" \
+      org.opencontainers.image.description="Self-hosted podcast server for private feeds, listening for spoken adverts on an NVIDIA GPU." \
+      org.opencontainers.image.source="https://github.com/antoine-debroye/selfpod" \
+      # As the regular image, plus NVIDIA's CUDA runtime libraries from the base image,
+      # redistributed under the CUDA EULA. THIRD-PARTY-LICENSES.md says so.
+      org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later AND LicenseRef-NVIDIA-CUDA-EULA"

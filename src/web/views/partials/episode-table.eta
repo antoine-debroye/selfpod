@@ -4,8 +4,15 @@
   const scheduled = episodes.filter((e) => e.scheduled);
   const inFeed = episodes.filter((e) => e.status !== 'removed' && !e.scheduled);
   const removed = episodes.filter((e) => e.status === 'removed');
+  /* An episode's advert state, keyed by id, computed for the whole show at once. Absent
+     when the show does not use the feature, and so is the column. */
+  const cuts = it.cuts ?? {};
+  const withAdverts = Object.keys(cuts).length > 0;
 %>
-<div class="form-card" id="episode-table">
+<div class="form-card" id="episode-table"
+     hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/episode-table"
+     hx-trigger="sse:ad-changed-<%= show.id %> from:body"
+     hx-swap="outerHTML">
   <div class="episode-table__head">
     <div class="ftitle" style="margin:0">Episodes</div>
     <span class="badge badge-mute"><%= inFeed.length %></span>
@@ -45,13 +52,14 @@
             <th scope="col">Duration</th>
             <th scope="col">Size</th>
             <th scope="col" title="Whole-file downloads / partial streams">Fetches</th>
+            <% if (withAdverts) { %><th scope="col">Adverts</th><% } %>
             <th scope="col">Status</th>
             <th scope="col"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           <% for (const episode of episodes) { %>
-            <%~ include('../partials/episode-row', { episode, show, helpers: it.helpers }) %>
+            <%~ include('../partials/episode-row', { episode, show, cut: withAdverts ? (cuts[episode.id] ?? null) : undefined, helpers: it.helpers }) %>
           <% } %>
         </tbody>
       </table>

@@ -446,3 +446,59 @@ describe('a format whose frames SelfPod cannot rejoin', () => {
     assert.equal(result.reason, 'unsupported_format');
   });
 });
+
+describe('cutting safely while other things happen', () => {
+  it('does not cut a file that changed after it was read, and cuts it once it is read again', async () => {
+    const show = await makeShow();
+    await detectAndApprove(show);
+    const [episode] = app.episodes.listByShow(show.id);
+    const path = join(showDir, episode.filename);
+    // Same audio with a few bytes of junk ahead of it: the frames the cut list names
+    // are no longer where they were.
+    const original = await readFile(path);
+    await writeFile(path, Buffer.concat([Buffer.from('ID3-not-really'), original]));
+
+    const outcome = await app.trimmer.trimEpisode(app.episodes.get(episode.id));
+    assert.equal(outcome.trimmed, false);
+    assert.equal(outcome.reason, 'changed_since_read', 'a changed file was cut by positions measured on the old one');
+    assert.equal(app.episodes.get(episode.id).trimmed_filename, null);
+    assert.notEqual(app.episodes.get(episode.id).trim_status, TRIM_STATUS.FAILED, 'waiting for a re-read was reported as a failure');
+  });
+
+  it('a cut still being written cannot overwrite the decision that came after it', async () => {
+    const show = await makeShow();
+    const found = await detectAndApprove(show);
+    const [episode] = app.episodes.listByShow(show.id);
+
+    // The first cut is held up just before it records itself — where a slow disk or a
+    // long file would hold it — while the owner changes their mind and a second cut runs.
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let calls = 0;
+    const trimmer = createTrimmer({
+      db: app.db, config: app.config, events: app.events, health: app.health,
+      shows: app.shows, episodes: app.episodes, adDetect: app.adDetect,
+      metadata: {
+        async read() {
+          calls += 1;
+          if (calls === 1) await gate;
+          return { durationSeconds: 100, error: null };
+        },
+      },
+    });
+
+    const forced = { ...app.episodes.get(episode.id), trim_status: null };
+    const first = trimmer.trimEpisode(forced);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const segment of found) app.adDetect.decide(segment.id, SEGMENT_STATUS.REJECTED);
+    const second = trimmer.trimEpisode(forced);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    await Promise.all([first, second]);
+
+    const row = app.episodes.get(episode.id);
+    assert.equal(row.trimmed_filename, null, 'the older cut was published over the newer decision to keep the read');
+    const left = (await readdir(join(app.config.trimmedDir, show.id)).catch(() => [])).filter((name) => name.startsWith(episode.id));
+    assert.deepEqual(left, [], `a cut copy was left behind: ${left.join(', ')}`);
+  });
+});

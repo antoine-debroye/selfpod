@@ -40,9 +40,28 @@ import { newId } from '../lib/tokens.js';
  * the first place.
  */
 /** Reasons a trim did not happen that are not faults. */
-const EXPECTED_OUTCOMES = new Set(['nothing_approved', 'unsupported_format', 'unknown_show']);
+const EXPECTED_OUTCOMES = new Set(['nothing_approved', 'unsupported_format', 'unknown_show', 'changed_since_read', 'already_done']);
 
 export function createTrimmer({ config, events, logger, health, shows, episodes, adDetect, metadata }) {
+  /*
+   * One cut of an episode at a time. Undoing a decision re-cuts straight away, without
+   * waiting behind a pass that may be minutes into listening to another show — so a
+   * pass and an undo can reach the same episode together. Serialised per episode, the
+   * second one reads the row the first one wrote and either does nothing or cuts again
+   * from the newer decisions; neither can delete a file the other just published.
+   */
+  const locks = new Map();
+  function withEpisodeLock(episodeId, work) {
+    const previous = locks.get(episodeId) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    const settled = next.catch(() => {});
+    locks.set(episodeId, settled);
+    settled.then(() => {
+      if (locks.get(episodeId) === settled) locks.delete(episodeId);
+    });
+    return next;
+  }
+
   function showDir(showId) {
     return join(config.trimmedDir, showId);
   }
@@ -139,103 +158,129 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
      * re-running with an unchanged cut list rewrites an identical file and leaves the
      * enclosure URL alone.
      */
-    async trimEpisode(episode) {
-      const show = shows.get(episode.show_id);
-      if (!show) return { trimmed: false, reason: 'unknown_show' };
-      if (!isTrimmable(episode)) return { trimmed: false, reason: 'unsupported_format' };
+    trimEpisode(requested, { onlyIfStale = false } = {}) {
+      return withEpisodeLock(requested.id, async () => {
+        // Read again inside the lock: whatever ran before may have just cut it.
+        const fresh = episodes.get(requested.id) ?? requested;
+        // `force` asks for a cut whatever the row says, and says so with a null status.
+        const episode = requested.trim_status === null ? { ...fresh, trim_status: null } : fresh;
+        if (onlyIfStale && episode.trim_status === TRIM_STATUS.TRIMMED) return { trimmed: false, reason: 'already_done' };
+        return trimNow(episode);
+      });
+    },
+  };
 
-      const cuts = adDetect.cutListFor(episode.id);
-      if (!cuts.length) {
-        // Not a failure — nothing has been approved for this episode, or everything
-        // that was has since been rejected. Either way it publishes as it arrived.
-        return { episode: await discard(episode), trimmed: false, reason: 'nothing_approved' };
-      }
+  async function trimNow(episode) {
+    const show = shows.get(episode.show_id);
+    if (!show) return { trimmed: false, reason: 'unknown_show' };
+    if (!isTrimmable(episode)) return { trimmed: false, reason: 'unsupported_format' };
 
-      const source = join(shows.dirFor(show), episode.filename);
-      let buffer;
-      try {
-        buffer = await readFile(source);
-      } catch (err) {
-        return fail(episode, 'unreadable', `The file could not be read: ${err.message}.`);
-      }
+    const cuts = adDetect.cutListFor(episode.id);
+    if (!cuts.length) {
+      // Not a failure — nothing has been approved for this episode, or everything
+      // that was has since been rejected. Either way it publishes as it arrived.
+      return { episode: await discard(episode), trimmed: false, reason: 'nothing_approved' };
+    }
 
-      episodes.setSystemFields(episode.id, { trim_status: TRIM_STATUS.TRIMMING });
+    const source = join(shows.dirFor(show), episode.filename);
+    let buffer;
+    try {
+      buffer = await readFile(source);
+    } catch (err) {
+      return fail(episode, 'unreadable', `The file could not be read: ${err.message}.`);
+    }
 
-      const result = cutFrames(buffer, cuts);
-      if (!result) {
-        // `cutFrames` refuses rather than returning something wrong, and there are two
-        // ways to get here. Saying which matters: one is a bug upstream, the other is
-        // a file SelfPod is not willing to cut, and only the second is the owner's to
-        // act on.
-        const profile = frameProfile(buffer);
-        if (profile?.truncated) {
-          return fail(
-            episode,
-            'too_long',
-            'This episode is longer than SelfPod will read in one piece (about five hours).',
-          );
-        }
+    /*
+     * The cut list is frame positions measured on the bytes that were fingerprinted.
+     * A file replaced since — a re-download, an edit over the share — has frames in
+     * other places, and cutting it by the old positions would publish an episode with
+     * programme missing and advert left in. Checked on the bytes about to be cut; a
+     * mismatch waits for the next pass to read the file again.
+     */
+    const expected = adDetect.fingerprintDigest?.(episode.id);
+    if (expected && createHash('sha256').update(buffer).digest('hex') !== expected) {
+      logger?.warn({ episodeId: episode.id }, 'the episode changed since it was read; cutting it after the next pass reads it again');
+      return { trimmed: false, reason: 'changed_since_read' };
+    }
+
+    episodes.setSystemFields(episode.id, { trim_status: TRIM_STATUS.TRIMMING });
+
+    const result = cutFrames(buffer, cuts);
+    if (!result) {
+      // `cutFrames` refuses rather than returning something wrong, and there are two
+      // ways to get here. Saying which matters: one is a bug upstream, the other is
+      // a file SelfPod is not willing to cut, and only the second is the owner's to
+      // act on.
+      const profile = frameProfile(buffer);
+      if (profile?.truncated) {
         return fail(
           episode,
-          'nothing_left',
-          `The approved segments cover the whole episode (${cuts.length} of them).`,
+          'too_long',
+          'This episode is longer than SelfPod will read in one piece (about five hours).',
         );
       }
-
-      // The version is part of the filename, not just of the URL. Writing every cut to
-      // one name per episode leaves a window between the rename and the database write
-      // where the columns describe the old file and the disk holds the new one — and a
-      // byte-range request landing in that window is handed bytes from a file that is
-      // not the length the feed just advertised. Naming the file after its own content
-      // means the two can never disagree: the old cut stays readable at its own name
-      // until the row has moved, and only then does it go.
-      const version = createHash('sha256').update(result.buffer).digest('hex').slice(0, 12);
-      const filename = `${episode.id}.${version}.mp3`;
-      const directory = showDir(episode.show_id);
-      const staging = join(directory, `.${newId()}.tmp`);
-      const destination = join(directory, filename);
-      const previous = pathFor(episode);
-      try {
-        await mkdir(directory, { recursive: true });
-        await writeFile(staging, result.buffer);
-        await rename(staging, destination);
-      } catch (err) {
-        await rm(staging, { force: true }).catch(() => {});
-        return fail(episode, 'unwritable', `The trimmed copy could not be written: ${err.message}.`);
-      }
-
-      // Measured from the file that was written, never computed as "original minus what
-      // was cut". Cutting at frame boundaries adds a few tens of milliseconds at each
-      // join, and the arithmetic answer would drift from what a player reports.
-      const measured = await metadata.read(destination);
-      const bytes = (await stat(destination)).size;
-
-      const updated = episodes.setSystemFields(episode.id, {
-        trim_status: TRIM_STATUS.TRIMMED,
-        trimmed_filename: filename,
-        trimmed_bytes: bytes,
-        trimmed_duration_seconds: measured.durationSeconds ?? null,
-        trimmed_etag: version,
-      });
-
-      // Only now, with nothing pointing at it any more.
-      if (previous && previous !== destination) await rm(previous, { force: true }).catch(() => {});
-
-      health?.clear(`trim_${episode.id}`);
-      logger?.info(
-        {
-          episodeId: episode.id,
-          cuts: cuts.length,
-          framesRemoved: result.framesRemoved,
-          removedSeconds: Math.round((result.durationMs - (measured.durationSeconds ?? 0) * 1000) / 1000),
-          durationSeconds: measured.durationSeconds,
-        },
-        'trimmed an episode',
+      return fail(
+        episode,
+        'nothing_left',
+        `The approved segments cover the whole episode (${cuts.length} of them).`,
       );
-      events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
-      return { episode: updated, trimmed: true, framesRemoved: result.framesRemoved };
-    },
+    }
 
+    // The version is part of the filename, not just of the URL. Writing every cut to
+    // one name per episode leaves a window between the rename and the database write
+    // where the columns describe the old file and the disk holds the new one — and a
+    // byte-range request landing in that window is handed bytes from a file that is
+    // not the length the feed just advertised. Naming the file after its own content
+    // means the two can never disagree: the old cut stays readable at its own name
+    // until the row has moved, and only then does it go.
+    const version = createHash('sha256').update(result.buffer).digest('hex').slice(0, 12);
+    const filename = `${episode.id}.${version}.mp3`;
+    const directory = showDir(episode.show_id);
+    const staging = join(directory, `.${newId()}.tmp`);
+    const destination = join(directory, filename);
+    const previous = pathFor(episode);
+    try {
+      await mkdir(directory, { recursive: true });
+      await writeFile(staging, result.buffer);
+      await rename(staging, destination);
+    } catch (err) {
+      await rm(staging, { force: true }).catch(() => {});
+      return fail(episode, 'unwritable', `The trimmed copy could not be written: ${err.message}.`);
+    }
+
+    // Measured from the file that was written, never computed as "original minus what
+    // was cut". Cutting at frame boundaries adds a few tens of milliseconds at each
+    // join, and the arithmetic answer would drift from what a player reports.
+    const measured = await metadata.read(destination);
+    const bytes = (await stat(destination)).size;
+
+    const updated = episodes.setSystemFields(episode.id, {
+      trim_status: TRIM_STATUS.TRIMMED,
+      trimmed_filename: filename,
+      trimmed_bytes: bytes,
+      trimmed_duration_seconds: measured.durationSeconds ?? null,
+      trimmed_etag: version,
+    });
+
+    // Only now, with nothing pointing at it any more.
+    if (previous && previous !== destination) await rm(previous, { force: true }).catch(() => {});
+
+    health?.clear(`trim_${episode.id}`);
+    logger?.info(
+      {
+        episodeId: episode.id,
+        cuts: cuts.length,
+        framesRemoved: result.framesRemoved,
+        removedSeconds: Math.round((result.durationMs - (measured.durationSeconds ?? 0) * 1000) / 1000),
+        durationSeconds: measured.durationSeconds,
+      },
+      'trimmed an episode',
+    );
+    events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
+    return { episode: updated, trimmed: true, framesRemoved: result.framesRemoved };
+  }
+
+  Object.assign(api, {
     /**
      * Brings every episode of a show into line with the current decisions.
      *
@@ -248,7 +293,7 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
       let failed = 0;
       for (const episode of rows) {
         if (!force && episode.trim_status === TRIM_STATUS.TRIMMED) continue;
-        const outcome = await api.trimEpisode(force ? { ...episode, trim_status: null } : episode);
+        const outcome = await api.trimEpisode(force ? { ...episode, trim_status: null } : episode, { onlyIfStale: !force });
         if (outcome.trimmed) trimmed += 1;
         // Only genuine failures count. "Nothing was approved" and "SelfPod cannot read
         // this format" are both ordinary answers, and counting them would put a
@@ -258,8 +303,7 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
       }
       return { trimmed, failed, considered: rows.length };
     },
-
-  };
+  });
 
   return api;
 }

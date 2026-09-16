@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,7 @@ import { createEnvelopeBuilder, decodeEnvelope, encodeEnvelope } from '../lib/sn
 import { newId } from '../lib/tokens.js';
 import { filterHallucinations, wordsFromWhisper } from '../lib/transcript.js';
 import { openWavWriter } from '../lib/wav.js';
-import { WhisperError, runWhisper, timeoutFor } from '../lib/whisper-runner.js';
+import { WhisperError, deviceFromLog, runWhisper, timeoutFor } from '../lib/whisper-runner.js';
 import { pickWhisperBinary } from '../lib/cpu-features.js';
 
 /**
@@ -65,7 +66,21 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
        word_count = excluded.word_count, cpu_ms = excluded.cpu_ms, created_at = excluded.created_at`,
   );
 
-  const binaryPath = config.whisperBinary ?? pickWhisperBinary(DEFAULT_DIR);
+  /*
+   * The binaries to try, best first. The GPU image ships `whisper-cli-cuda` beside the
+   * CPU builds; it is tried first and kept only if it actually used the GPU. A binary
+   * the operator named is the only candidate: they chose it.
+   */
+  const whisperDir = config.whisperDir ?? DEFAULT_DIR;
+  const cudaBinary = join(whisperDir, 'whisper-cli-cuda');
+  const cpuBinary = pickWhisperBinary(whisperDir);
+  const candidates = config.whisperBinary
+    ? [config.whisperBinary]
+    : existsSync(cudaBinary) ? [cudaBinary, cpuBinary] : [cpuBinary];
+  let binaryPath = candidates[0];
+  /** 'gpu' | 'cpu' | null (not known yet), and the device whisper named. */
+  let accelerator = null;
+  let device = null;
   // WHISPER_MODEL is a path, or one of the names the image ships: `base` or `small`.
   const modelPath = /^[a-z0-9.-]+$/i.test(config.whisperModel ?? '')
     ? join(DEFAULT_DIR, `ggml-${config.whisperModel.replace(/^ggml-|\.bin$/g, '')}${/-q\d/.test(config.whisperModel) ? '' : '-q5_1'}.bin`)
@@ -142,25 +157,57 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
       state = 'ready';
       return state;
     }
-    const prefix = join(config.tempDir, `tx-probe-${newId()}`);
-    try {
-      const { json } = await runner({
-        binary: binaryPath,
-        model: modelPath,
-        wavPath: SMOKE_WAV,
-        outputPrefix: prefix,
-        threads,
-        timeoutMs: 120_000,
-        logger,
-      });
-      if (!Array.isArray(json?.transcription)) throw new WhisperError('bad_output', 'the probe produced no transcript');
-      setAvailable();
-      logger?.info({ binary: binaryPath, model: modelPath }, 'the speech recogniser is ready');
-    } catch (error) {
-      if (error?.code === 'missing') setUnavailable('missing', `${error.message}.`);
-      else setUnavailable('failing', `The check at start-up failed: ${error?.message ?? error}.`);
-      logger?.warn({ err: error, binary: binaryPath }, 'the speech recogniser is not available');
+    let lastError = null;
+    let gpuProblem = null;
+    for (const candidate of candidates) {
+      const isCuda = candidate === cudaBinary && !config.whisperBinary;
+      const prefix = join(config.tempDir, `tx-probe-${newId()}`);
+      try {
+        const { json, log } = await runner({
+          binary: candidate,
+          model: modelPath,
+          wavPath: SMOKE_WAV,
+          outputPrefix: prefix,
+          threads,
+          timeoutMs: 120_000,
+          logger,
+          prints: true,
+        });
+        if (!Array.isArray(json?.transcription)) throw new WhisperError('bad_output', 'the probe produced no transcript');
+        const used = deviceFromLog(log);
+        if (isCuda && used.accelerator !== 'gpu') {
+          // It ran, but on the CPU: no GPU is visible to the container. The CPU build
+          // beside it is the better CPU binary, so that is what is used — and it is said.
+          gpuProblem = 'The GPU build started but found no GPU, so it would have run on the processor.';
+          continue;
+        }
+        binaryPath = candidate;
+        accelerator = used.accelerator ?? (isCuda ? 'gpu' : 'cpu');
+        device = used.device;
+        setAvailable();
+        if (gpuProblem) {
+          health?.set('whisper_gpu_unused', {
+            level: 'warn',
+            message: 'SelfPod is listening with the processor, not the GPU.',
+            detail: `${gpuProblem} Check that the app has the GPU allocated (TrueNAS: edit the app, GPU configuration) and that the NVIDIA driver is installed for apps. Everything still works, more slowly.`,
+          });
+        } else {
+          health?.clear('whisper_gpu_unused');
+        }
+        logger?.info({ binary: binaryPath, model: modelPath, accelerator, device }, 'the speech recogniser is ready');
+        return state;
+      } catch (error) {
+        lastError = error;
+        if (isCuda) {
+          gpuProblem = `The GPU build could not run (${error?.message ?? error}).`;
+          logger?.warn({ err: error, binary: candidate }, 'the GPU build of the speech recogniser could not run; trying the CPU build');
+        }
+      }
     }
+    const error = lastError ?? new WhisperError('crashed', gpuProblem ?? 'no recogniser could run');
+    if (error?.code === 'missing') setUnavailable('missing', `${error.message}.`);
+    else setUnavailable('failing', `The check at start-up failed: ${error?.message ?? error}.`);
+    logger?.warn({ err: error, binary: binaryPath }, 'the speech recogniser is not available');
     return state;
   }
 
@@ -274,6 +321,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
         wavPath,
         outputPrefix: prefix,
         threads,
+        nice: config.whisperNice ?? 15,
         timeoutMs: timeoutFor(window.toMs - window.fromMs),
         logger,
         // Not read by whisper-cli; it lets a stand-in recogniser in a test know what it
@@ -399,7 +447,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
 
     /** Where SelfPod is listening right now, for the status endpoint and the page. */
     status() {
-      return { state, active, rate: lastRate };
+      return { state, active, rate: lastRate, accelerator, device };
     },
 
     /**
@@ -419,7 +467,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
       if (!available()) return counts;
 
       const held = owed.filter((episode) => episode.publish_hold);
-      const rest = owed.filter((episode) => !episode.publish_hold).slice(0, MAX_BACKFILL_PER_RUN);
+      const rest = owed.filter((episode) => !episode.publish_hold).slice(0, config.whisperBackfillPerRun ?? MAX_BACKFILL_PER_RUN);
       for (const episode of [...held, ...rest]) {
         if (!available()) break;
         const result = await transcribeEpisode(episode, show);
@@ -480,11 +528,19 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
       return counts;
     },
 
-    /** Forgets a show's transcripts, so changed listening settings take effect. */
-    forgetShow(showId) {
+    /**
+     * Forgets a show's transcripts, so changed listening settings take effect.
+     *
+     * The files go with the rows. Left behind, they were words from the old settings
+     * sitting under /data/.tx for as long as each episode happened not to be read again.
+     */
+    async forgetShow(showId) {
       db.prepare(
         'DELETE FROM episode_transcripts WHERE episode_id IN (SELECT id FROM episodes WHERE show_id = ?)',
       ).run(showId);
+      await rm(join(config.transcriptDir, showId), { recursive: true, force: true }).catch((error) => {
+        logger?.warn({ err: error, showId }, 'could not remove the old transcripts of a show');
+      });
     },
 
     /** The one place the human-readable form of the model name lives. */

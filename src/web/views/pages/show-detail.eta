@@ -81,7 +81,7 @@
      counts as well, which does not fit in a 600px column beside the artwork. It
      sits below the two-column grid so it gets the full width. */
 %>
-<%~ include('../partials/episode-table', { show, episodes: show.episodes, helpers: it.helpers }) %>
+<%~ include('../partials/episode-table', { show, episodes: show.episodes, cuts: it.cuts, helpers: it.helpers }) %>
 
 <section class="form-card danger-zone">
   <div class="ftitle">Danger zone</div>

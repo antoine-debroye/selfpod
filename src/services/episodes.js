@@ -62,11 +62,11 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt, 
     `INSERT INTO episodes (id, show_id, filename, identity_key, title, title_is_custom, tag_title,
                            description, season, episode_number, explicit, pub_date, pub_date_is_custom,
                            duration_seconds, bitrate_kbps, file_size_bytes, file_mtime, mime_type,
-                           status, publish_hold, created_at, updated_at)
+                           status, publish_hold, publish_hold_since, created_at, updated_at)
      VALUES (@id, @show_id, @filename, @identity_key, @title, @title_is_custom, @tag_title,
              @description, @season, @episode_number, @explicit, @pub_date, @pub_date_is_custom,
              @duration_seconds, @bitrate_kbps, @file_size_bytes, @file_mtime, @mime_type,
-             @status, @publish_hold, @created_at, @updated_at)`,
+             @status, @publish_hold, CASE WHEN @publish_hold IS NULL THEN NULL ELSE @created_at END, @created_at, @updated_at)`,
   );
   const deleteEpisode = db.prepare('DELETE FROM episodes WHERE id = ?');
 
@@ -196,6 +196,7 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt, 
         'trimmed_duration_seconds',
         'trimmed_etag',
         'publish_hold',
+        'publish_hold_since',
       ];
       const entries = Object.entries(fields).filter(([key]) => allowed.includes(key));
       if (!entries.length) return api.get(id);

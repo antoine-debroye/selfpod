@@ -52,6 +52,9 @@
       </a>
     <% } %>
   </td>
+  <% if (it.cut !== undefined) { %>
+    <td class="ep-adverts"><% if (it.cut) { %><a class="cut-pill cut-pill--<%= it.cut.state %>" href="<%= it.cut.url %>" title="<%= it.cut.caption %>"><%= it.cut.pill %></a><% } %></td>
+  <% } %>
   <td class="ep-status"><span class="badge <%= badge.cls %> badge--tight"><span class="d" aria-hidden="true"></span><%= badge.label %></span></td>
   <td class="ep-actions">
     <div class="actions">

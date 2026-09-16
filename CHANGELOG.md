@@ -7,6 +7,110 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.9.0 — 2026-09-16
+
+### Changed — adverts you can see, and put back
+
+- **One page shows what was cut, from which episode, and why.** The Adverts page is now
+  three things top to bottom: four figures (episodes cut, minutes removed, waiting, held);
+  *What SelfPod cuts* — every rule in force, each with how many episodes it was heard in and
+  one button to forget it; and *Episode by episode* — each episode as a bar with what was cut
+  and what is waiting marked on it, one sentence of reason per stretch, and a ▶ that plays the
+  original from three seconds before to three seconds after. The ~50 status phrases and 12
+  button labels of 1.8 are now four states for a stretch and six buttons.
+- **Put a cut back in one episode, or everywhere.** *Restore here* leaves that stretch in that
+  episode only; the rule goes on cutting the others. *Restore everywhere and stop* undoes the
+  rule itself. Both take seconds: a decision no longer waits for a pass.
+- **Teach it directly.** Type the words the programme starts or ends with and press Teach —
+  no more hunting for them three menus deep in a transcript. On any episode, give a time range
+  and say whether it is an advert or the station jingle; tap the bar, or take the position from
+  the player. Words heard there are remembered for later episodes; without words, the stretch is
+  cut from that episode.
+- **Hear what was removed.** The episode page plays the original as well as the published copy.
+- **In automatic mode the station jingle is cut without asking** when SelfPod hears it in every
+  recent episode — measured on the show this was built for, six out of six. It is listed as an
+  automatic cut with Forget; forgetting it means it is not proposed again. Review mode still asks.
+- The episode table has an *Adverts* column (cut 0:39 / waiting / held …) and the dashboard card
+  says how much was cut, so nothing needs opening to see where things stand.
+- "Sounds like a sponsor read, heard once" is no longer a row to decide about. It is highlighted
+  in the episode's words, where it can be taught from.
+
+### Changed — faster, and without waiting for the clock
+
+- **A new episode is looked at as soon as it arrives.** A pass used to start only on the
+  scheduler's tick, so a new episode sat out of the feed for up to a whole rescan interval
+  before anything read it. A scan that finds a new or changed episode now starts that
+  show's pass at once, and a pass runs after the scan at startup. The tick stays, as the
+  fallback. Asking for a show's pass again while one is still waiting to start is the same
+  pass, so a subscription backfill of a hundred downloads is not a hundred passes.
+- **An unchanged file is not read.** Every pass used to read and hash every episode of
+  every show to find out that nothing had changed — the whole library off the disk every
+  few minutes. The size and modification time now answer that; the digest is still the
+  authority when they disagree.
+- **The comparing is done off the thread that serves listeners.** The searches that
+  compare episodes with each other are quadratic and ran where downloads and the health
+  check are answered; on a show a few months old that was long enough for a NAS to
+  restart the app mid-pass. They now run in a worker thread.
+- **Decisions no longer wait for a pass.** Removing, keeping, restoring and forgetting
+  change only what is already known, so they cut and publish straight away — seconds —
+  instead of running a whole pass first, and never queue behind another show being heard.
+- **The recogniser uses the machine it is on.** `WHISPER_THREADS` now defaults to the
+  physical cores less one (seven on an eight-core i7) rather than two, and it runs at nice
+  10 rather than 15 (`WHISPER_NICE`). Up to eight already-published episodes are read again
+  per pass after a change of model (`WHISPER_BACKFILL_PER_RUN`), rather than two.
+- **An NVIDIA GPU can do the listening.** A second image, `ghcr.io/antoine-debroye/selfpod:1.9.0-cuda`
+  (amd64), carries a CUDA build of whisper.cpp and uses `small` by default. It uses the GPU
+  only if whisper reports that it did, and otherwise falls back to the processor and says
+  so in the health banner. **Experimental:** no machine the project is built on has a GPU,
+  so this image is proved to build and to fall back, and on a GPU only once it has run on
+  real hardware. README, *Listening on an NVIDIA GPU*.
+- An episode held out of the feed for more than half an hour is said out loud in the
+  health banner, and every hold is dated from when it began.
+
+### Fixed
+
+- **A read in every episode of a longer show could never be found.** Both searches leave
+  out anything that recurs too often — that is what keeps silence from swamping them — and
+  both searched the whole show, so a sponsor read in every one of more than 64 episodes (by
+  its words) or 32 (by its sound) had every trace of itself left out. Measured: found in 64
+  episodes, nothing in 65; found in 32, nothing in 33. On a show published twice a day that
+  was about a month. New repeated stretches are now looked for among the newest 24 episodes
+  (`AD_CORPUS_WINDOW`, at most 32); what was found in older episodes stays cut, and reads
+  already decided about are still matched in every episode.
+- **The same advert under a new name.** A stretch found by its sound was recognised by a
+  signature taken from whichever episode the search started from, and that changed as
+  episodes arrived — the same read turned up as a new question while the new episodes it
+  was in went uncut. Finds are now matched to what is already known by where they are.
+- **A ten-minute "difference" could be cut unasked.** What differs between two downloads
+  of one episode was approved on sight in automatic mode whatever its length; the limit
+  written for exactly that case was never consulted. Longer than two and a half minutes, it
+  is now offered, not cut.
+- **A file replaced during a pass could be cut in the wrong places.** The cut is made by
+  frame positions measured on the file that was read; a file replaced since — a re-download,
+  an edit over the share — is now left until the next pass reads it again.
+- **Two cuts of one episode at once.** An undo arriving while a pass was cutting the same
+  episode could publish the older cut over the newer decision. Cuts of one episode now wait
+  for each other.
+- Changing where SelfPod listens left the old transcripts on disk; they are now removed.
+- Moving the edges of a read left its sponsor cues describing the old words.
+- **A closing tag could ask for a whole episode to be cut.** A boundary taught as "cut from these
+  words to the end" was matched anywhere in a short episode heard as one window, so where the host
+  read the same sponsor tag to *open* an episode it matched at 0:00. Found on real audio: four
+  episodes of six refused to trim. An end now belongs in an episode's second half (or last minute),
+  a start in its first, and no boundary may cut more than four fifths of an episode.
+- The station jingle's own sound was offered back as "the same 14 seconds of sound in 4 episodes"
+  beside the cut it explained.
+- Acceptance step 20 still expected a superseded enclosure address to be refused, which
+  1.8.2 removed on purpose; it now checks what the media route actually does.
+
+### Upgrading
+
+- The database migrates itself, additively: 1.8.8 still runs against it. Two things do not
+  survive a rollback to 1.8: a *Restore here* (1.8 cuts that stretch again), and the removal
+  of undecided "heard once" rows, which 1.8 would not recreate until it hears them again.
+- **Undecided "sounds like a sponsor read, heard once" rows are removed by the migration.**
+  They could never be cut on their own. Ones you had decided about are kept.
+
 ## 1.8.8 — 2026-09-16
 
 ### Added — the jingle's sound, not its words

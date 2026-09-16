@@ -6,7 +6,7 @@ import { VERSION } from '../../version.js';
  * it must answer even when the app is unhealthy — the values come from the
  * in-memory health registry rather than from a query that might itself fail.
  */
-export default async function statusRoutes(fastify, { settings, health, watcher, scheduler, shows, activity, config }) {
+export default async function statusRoutes(fastify, { settings, health, watcher, scheduler, shows, activity, config, transcriber }) {
   fastify.get('/status', async (request) => {
     const authenticated = fastify.isAuthenticated(request);
     const issues = health.list();
@@ -44,6 +44,11 @@ export default async function statusRoutes(fastify, { settings, health, watcher,
       maxUploadSizeMb: config.maxUploadSizeMb,
       watcher: watcher?.status() ?? { mode: 'off', enabled: false, degraded: false, lastEventAt: null },
       scheduler: scheduler?.status() ?? null,
+      // Which recogniser is listening, and on what: `accelerator` is 'gpu' or 'cpu'
+      // once the start-up check has run, and `device` names the GPU whisper used.
+      recogniser: transcriber
+        ? (({ state, accelerator, device, rate }) => ({ state, accelerator, device, rate }))(transcriber.status())
+        : null,
       shows: {
         total: shows.list().length,
         paused: shows.list().filter((s) => s.status === SHOW_STATUS.FOLDER_MISSING).length,

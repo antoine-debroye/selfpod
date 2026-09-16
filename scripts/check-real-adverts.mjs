@@ -13,6 +13,7 @@
  *         [--tail-marker "C'était votre émission"]
  *         [--head 300] [--tail 240] [--whisper /opt/homebrew/bin/whisper-cli]
  *         [--model ~/models/ggml-base-q5_1.bin] [--keep DIR] [--check-anchor]
+ *         [--language fr] [--threads 8]
  *
  * It calls the same library code the service does — decoder, WAV writer, runner,
  * hallucination filter, normaliser, matcher, cue scorer, edge snapper — and prints
@@ -62,6 +63,9 @@ const marker = option('marker', null);
 const tailMarker = option('tail-marker', null);
 const keep = option('keep', null);
 const checkAnchor = args.includes('--check-anchor');
+// What the service passes as -l, and how many threads it gives the recogniser.
+const language = option('language', 'auto');
+const threads = Number(option('threads', 2));
 if (!model) {
   console.error('Say where the model is: --model path/to/ggml-base-q5_1.bin (or WHISPER_MODEL).');
   process.exit(2);
@@ -122,11 +126,11 @@ for (const [index, item] of items.entries()) {
     }, { targetRate: 16000, resample: 'average' });
     writer.close();
     const started = Date.now();
-    const { json } = await runWhisper({ binary, model, wavPath: wav, outputPrefix: join(dir, `ep${index + 1}-${window.kind}`), threads: 2 });
+    const { json } = await runWhisper({ binary, model, wavPath: wav, outputPrefix: join(dir, `ep${index + 1}-${window.kind}`), threads, language });
     workMs += Date.now() - started;
     audioMs += window.toMs - window.fromMs;
-    const { language, sentences } = wordsFromWhisper(json, { offsetMs: window.fromMs, window: w });
-    heard.push({ ...window, language, sentences: filterHallucinations(sentences), envelope: envelope.finish() });
+    const { language: heardLanguage, sentences } = wordsFromWhisper(json, { offsetMs: window.fromMs, window: w });
+    heard.push({ ...window, language: heardLanguage, sentences: filterHallucinations(sentences), envelope: envelope.finish() });
     if (!keep) await rm(wav, { force: true });
   }
   const words = heard.flatMap((window) => flattenWords(window.sentences));
@@ -240,5 +244,5 @@ if (checkAnchor) {
 }
 
 const rates = episodes.map((episode) => episode.rate);
-if (rates.length) console.log(`\nReal-time factor: ${(rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1)}× on this machine, 2 threads.`);
+if (rates.length) console.log(`\nReal-time factor: ${(rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1)}× on this machine, ${threads} threads, -l ${language}.`);
 if (!keep) await rm(dir, { recursive: true, force: true }).catch(() => {});

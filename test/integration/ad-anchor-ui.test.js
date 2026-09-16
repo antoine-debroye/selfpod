@@ -62,7 +62,7 @@ describe('the jingle proposal card', () => {
 
     const page = await server.get(`/shows/${show.slug}/adverts`);
     assert.equal(page.statusCode, 200);
-    assert.ok(page.body.includes('Is this the jingle?'), 'the proposal card did not render');
+    assert.ok(page.body.includes('Is this the station jingle?'), 'the proposal did not render');
     assert.ok(page.body.includes(`/ad-anchors/${anchor.id}/confirm`), 'no confirm form on the page');
     assert.ok(page.body.includes(`/ad-anchors/${anchor.id}/dismiss`), 'no dismiss form on the page');
 
@@ -75,8 +75,10 @@ describe('the jingle proposal card', () => {
     assert.ok(episodes['episode-3.mp3'].trimmed_filename, 'confirming through the form did not cut the pre-roll');
 
     const after = await server.get(`/shows/${show.slug}/adverts`);
-    assert.ok(!after.body.includes('Is this the jingle?'), 'the confirmed anchor is still shown as a question');
-    assert.ok(after.body.includes('Forget it'), 'a confirmed anchor has no way to remove it');
+    assert.ok(!after.body.includes('Is this the station jingle?'), 'the confirmed anchor is still shown as a question');
+    assert.ok(after.body.includes('The station jingle'), 'the confirmed jingle is not listed as a rule');
+    assert.ok(after.body.includes(`/ad-anchors/${anchor.id}/remove`), 'a confirmed anchor has no way to remove it');
+    assert.match(after.body, /<button[^>]*>Forget<\/button>/);
   });
 
   it('dismisses the proposal through htmx, and nothing is cut', async () => {
@@ -86,6 +88,8 @@ describe('the jingle proposal card', () => {
     await addEpisode('episode-2.mp3', PREROLL_B, JINGLE, PROGRAMME_C);
     await server.adPipeline.processShow(show.id);
     const [anchor] = server.adDetect.listAnchors(show.id);
+    // The positive control: the question was on the page, so its absence below means something.
+    assert.ok((await server.get(`/shows/${show.slug}/adverts`)).body.includes('Is this the station jingle?'), 'setup: no proposal shown');
 
     const response = await server.request({
       method: 'POST',
@@ -94,7 +98,8 @@ describe('the jingle proposal card', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded', 'hx-request': 'true' },
     });
     assert.equal(response.statusCode, 200, 'an htmx request should re-render the panel, not redirect');
-    assert.ok(!response.body.includes('Is this the jingle?'), 'the dismissed proposal is still shown');
+    assert.ok(response.body.includes('id="ad-panel"'), 'the panel did not come back');
+    assert.ok(!response.body.includes('Is this the station jingle?'), 'the dismissed proposal is still shown');
 
     for (const episode of server.episodes.listByShow(show.id)) {
       assert.equal(episode.trimmed_filename, null, 'dismissing cut something anyway');

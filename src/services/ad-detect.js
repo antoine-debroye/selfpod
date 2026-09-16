@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -7,10 +7,13 @@ import {
   FINGERPRINTABLE_EXTENSIONS,
   FINGERPRINT_VERSION,
   HOLD_REASONS,
+  SEGMENT_KINDS,
   SEGMENT_SOURCES,
   SEGMENT_STATUS,
   TRIM_STATUS,
+  sourceForKind,
 } from '../constants.js';
+import { OWNER_KINDS, inferKind } from '../lib/segment-kind.js';
 import { nowIso } from '../lib/dates.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
@@ -18,14 +21,13 @@ import { decodeFingerprint, encodeFingerprint, msToFrame } from '../lib/fingerpr
 import { createFingerprinter } from '../lib/acoustic-fingerprint.js';
 import { decodeToMono } from '../lib/decode-audio.js';
 import { frameProfile } from '../lib/mp3-frames.js';
-import { findRepeatedAudio } from '../lib/repeated-audio.js';
+import { createAudioSearch } from '../lib/audio-search.js';
 import {
   ANCHOR_MATCH_BER,
   DEFAULT_SEARCH_MS,
   MIN_ANCHOR_CUT_MS,
   SUB_MS,
   anchorClipFrom,
-  findHeadAnchors,
   locateAnchor,
 } from '../lib/audio-anchor.js';
 import { safeToApproveAutomatically } from '../lib/auto-approve.js';
@@ -34,7 +36,9 @@ import { normaliseText, normaliseTokens } from '../lib/text-normalise.js';
 import { MIN_SIMILARITY, findRepeatedText, locatePhrase, sameSpokenRead, signatureOf, tokenSimilarity } from '../lib/repeated-text.js';
 import { scoreAdvertCues } from '../lib/advert-cues.js';
 import { snapToDip } from '../lib/snap-edges.js';
+import { findSponsorBlocks } from '../lib/sponsor-blocks.js';
 import { meanConfidence, rawTextOf } from '../lib/transcript.js';
+import { restoreCovers as sharedRestoreCovers } from '../lib/cut-bar.js';
 
 /**
  * Cataloguing the audio a show repeats (spec §19).
@@ -54,13 +58,16 @@ import { meanConfidence, rawTextOf } from '../lib/transcript.js';
  * which is fast enough to be uninteresting: an hour-long episode fingerprints in well
  * under a second.
  */
-export function createAdDetect({ db, config, events, logger, shows, episodes, transcriber = null }) {
+export function createAdDetect({ db, config, events, logger, shows, episodes, transcriber = null, audioSearch = null }) {
+  const search = audioSearch ?? createAudioSearch({ logger });
   const selectFingerprint = db.prepare('SELECT * FROM episode_fingerprints WHERE episode_id = ?');
   const upsertFingerprint = db.prepare(
     `INSERT INTO episode_fingerprints
-       (episode_id, algorithm_version, frame_count, sample_rate, duration_ms, sha256, bytes, created_at)
-     VALUES (@episode_id, @algorithm_version, @frame_count, @sample_rate, @duration_ms, @sha256, @bytes, @created_at)
+       (episode_id, algorithm_version, frame_count, sample_rate, duration_ms, sha256, bytes, file_mtime_ms, searched_at, created_at)
+     VALUES (@episode_id, @algorithm_version, @frame_count, @sample_rate, @duration_ms, @sha256, @bytes, @file_mtime_ms, NULL, @created_at)
      ON CONFLICT(episode_id) DO UPDATE SET
+       file_mtime_ms = excluded.file_mtime_ms,
+       searched_at = NULL,
        algorithm_version = excluded.algorithm_version,
        frame_count = excluded.frame_count,
        sample_rate = excluded.sample_rate,
@@ -69,6 +76,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        bytes = excluded.bytes,
        created_at = excluded.created_at`,
   );
+  const touchFingerprint = db.prepare('UPDATE episode_fingerprints SET file_mtime_ms = ? WHERE episode_id = ?');
 
   const selectSegments = db.prepare(
     'SELECT * FROM ad_segments WHERE show_id = ? ORDER BY episode_count DESC, duration_ms DESC',
@@ -104,6 +112,36 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     }
 
     const path = join(shows.dirFor(show), episode.filename);
+    const existing = selectFingerprint.get(episode.id);
+
+    /*
+     * Asked of the file system before the file is read. Every pass visits every
+     * episode, and reading and hashing each one to learn that nothing changed was
+     * the single largest cost of a pass that found nothing — the whole library off
+     * the disk every few minutes. The size and modification time answer the same
+     * question for the price of a stat; the digest is still the authority whenever
+     * they disagree, and a file rewritten in place at the same size and within the
+     * same millisecond is caught by the trimmer, which checks the digest again before
+     * it cuts anything.
+     */
+    let info;
+    try {
+      info = await stat(path);
+    } catch (error) {
+      logger?.debug({ err: error, episodeId: episode.id }, 'could not read episode for fingerprinting');
+      return { skipped: 'unreadable' };
+    }
+    const mtimeMs = Math.trunc(info.mtimeMs);
+    if (
+      !force &&
+      existing &&
+      existing.algorithm_version === FINGERPRINT_VERSION &&
+      existing.bytes === info.size &&
+      existing.file_mtime_ms === mtimeMs
+    ) {
+      return { skipped: 'unchanged', frameCount: existing.frame_count, read: false };
+    }
+
     let bytes;
     try {
       bytes = await readFile(path);
@@ -113,9 +151,10 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     }
 
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const existing = selectFingerprint.get(episode.id);
     if (!force && existing?.sha256 === sha256 && existing.algorithm_version === FINGERPRINT_VERSION) {
-      return { skipped: 'unchanged', frameCount: existing.frame_count };
+      // Touched but not changed: remember the new time so the next pass does not read it.
+      touchFingerprint.run(mtimeMs, episode.id);
+      return { skipped: 'unchanged', frameCount: existing.frame_count, read: true };
     }
 
     const profile = frameProfile(bytes);
@@ -164,6 +203,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       duration_ms: profile.durationMs,
       sha256,
       bytes: bytes.length,
+      file_mtime_ms: mtimeMs,
       created_at: nowIso(),
     });
 
@@ -235,6 +275,14 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   function upsertSegment(showId, segment) {
     const existing = selectBySignature.get(showId, segment.signature);
     const now = nowIso();
+    // Said by the caller where it knows; otherwise read from the same evidence the
+    // migration used. `source` always follows the kind, for an older image's sake.
+    // A row already recorded keeps its kind unless the caller says otherwise: several
+    // passes re-find known rows without the evidence that first classified them.
+    const kind =
+      segment.kind ??
+      existing?.kind ??
+      inferKind({ signature: segment.signature, source: segment.source, cues: segment.cues ?? null });
 
     if (existing) {
       // A candidate that automatic mode now finds safe — it reached the threshold, or
@@ -257,10 +305,18 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             cue_score = COALESCE(@cue_score, cue_score),
             cues = COALESCE(@cues, cues),
             language = COALESCE(@language, language),
+            kind = CASE WHEN kind IN (${OWNER_KINDS.map((k) => `'${k}'`).join(', ')}) THEN kind ELSE @kind END,
+            source = CASE WHEN kind IN (${OWNER_KINDS.map((k) => `'${k}'`).join(', ')}) THEN source ELSE @source END,
+            marker_id = COALESCE(@marker_id, marker_id),
+            anchor_id = COALESCE(@anchor_id, anchor_id),
             updated_at = @now
           WHERE id = @id`,
       ).run({
         id: existing.id,
+        kind,
+        source: sourceForKind(kind),
+        marker_id: segment.markerId ?? null,
+        anchor_id: segment.anchorId ?? null,
         episode_count: segment.episodeCount,
         occurrence_count: segment.occurrenceCount,
         duration_ms: segment.durationMs,
@@ -285,18 +341,21 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     const exemplar = segment.exemplar ?? segment.occurrences[0] ?? null;
     db.prepare(
       `INSERT INTO ad_segments
-         (id, show_id, signature, source, status, auto_approved, hold_reason, duration_ms,
+         (id, show_id, signature, source, kind, marker_id, anchor_id, status, auto_approved, hold_reason, duration_ms,
           episode_count, occurrence_count, exemplar_episode_id, exemplar_start_ms, exemplar_end_ms,
           first_seen_at, decided_at, created_at, updated_at, text, raw_text, cue_score, cues, language)
        VALUES
-         (@id, @show_id, @signature, @source, @status, @auto_approved, @hold_reason, @duration_ms,
+         (@id, @show_id, @signature, @source, @kind, @marker_id, @anchor_id, @status, @auto_approved, @hold_reason, @duration_ms,
           @episode_count, @occurrence_count, @exemplar_episode_id, @exemplar_start_ms, @exemplar_end_ms,
           @now, @decided_at, @now, @now, @text, @raw_text, @cue_score, @cues, @language)`,
     ).run({
       id,
       show_id: showId,
       signature: segment.signature,
-      source: segment.source,
+      source: sourceForKind(kind),
+      kind,
+      marker_id: segment.markerId ?? null,
+      anchor_id: segment.anchorId ?? null,
       status: segment.status ?? SEGMENT_STATUS.CANDIDATE,
       auto_approved: segment.autoApproved ? 1 : 0,
       hold_reason: segment.holdReason ?? null,
@@ -368,10 +427,31 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     return changed;
   }
 
+  /**
+   * How many of a show's newest episodes the two repeated-stretch searches compare.
+   *
+   * Never more than 32. The acoustic search leaves out any sub-fingerprint seen more
+   * than 32 times — silence recurs constantly, and this is what keeps it from swamping
+   * the index — so a stretch shared by 33 episodes has every one of its keys left out
+   * and is never found: measured, found in 32, nothing in 33. The words search has the
+   * same rule at 64. Keeping the window under both is what lets a read in every episode
+   * be found at all.
+   */
+  function corpusWindow() {
+    return Math.min(32, Math.max(2, config?.adCorpusWindow ?? 24));
+  }
+
+  /* ---- restores ------------------------------------------------------------- */
+
+  const selectOverrides = db.prepare('SELECT * FROM ad_cut_overrides WHERE episode_id = ? ORDER BY start_ms');
+  // Whether a restore covers a cut: shared with the page, so the two cannot disagree.
+  const restoreCovers = sharedRestoreCovers;
+
   /* ---- the words ------------------------------------------------------------ */
 
   const selectTranscriptSegments = db.prepare(
-    `SELECT * FROM ad_segments WHERE show_id = ? AND source = '${SEGMENT_SOURCES.TRANSCRIPT}'`,
+    `SELECT * FROM ad_segments WHERE show_id = ?
+        AND kind IN ('${SEGMENT_KINDS.BOUNDARY_WORDS}', '${SEGMENT_KINDS.REMEMBERED_WORDS}', '${SEGMENT_KINDS.REPEATED_WORDS}')`,
   );
   const selectOccurrencesOf = db.prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ?');
   const selectCorpusOccurrencesIn = db.prepare(
@@ -387,7 +467,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     `SELECT o.*, s.id AS segment_id, s.status, s.text
        FROM ad_segment_occurrences o
        JOIN ad_segments s ON s.id = o.segment_id
-      WHERE o.episode_id = ? AND s.source = '${SEGMENT_SOURCES.CORPUS}' AND s.signature NOT LIKE 'anchor:%'`,
+      WHERE o.episode_id = ? AND s.kind = '${SEGMENT_KINDS.REPEATED_AUDIO}'`,
   );
   const selectMarkers = db.prepare('SELECT * FROM ad_markers WHERE show_id = ? ORDER BY created_at');
   const selectMarker = db.prepare('SELECT * FROM ad_markers WHERE id = ?');
@@ -397,6 +477,10 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   const END_BIAS_MS = 80;
   /** A pre-roll shorter than this is a lead-in, not an advert. */
   const MIN_MARKER_CUT_MS = 2000;
+  /** The most of an episode a taught boundary may cut. */
+  const MAX_BOUNDARY_SHARE = 0.8;
+  /** How far past a jingle's matched span its own audio may still be found again. */
+  const ANCHOR_CLAIM_MARGIN_MS = 1000;
   /** How much of an acoustic occurrence a spoken one has to cover to be the same thing. */
   const SAME_THING_OVERLAP = 0.7;
 
@@ -404,9 +488,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
    * Everything known about a heard episode, in one shape: the words, the tokens the
    * matcher reads, and what is needed to turn a millisecond into a frame.
    */
-  async function hearShow(show) {
+  async function hearShow(show, { episodeIds = null } = {}) {
     const heard = [];
+    const wanted = episodeIds ? new Set(episodeIds) : null;
     for (const episode of episodes.listByShow(show.id)) {
+      if (wanted && !wanted.has(episode.id)) continue;
       const transcript = await transcriber.loadTranscript(episode);
       if (!transcript) continue;
       const words = [];
@@ -508,7 +594,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   function knownSegmentFor(showId, text, { except = null } = {}) {
     const phrase = text.split(' ');
     for (const row of selectTranscriptSegments.all(showId)) {
-      if (!row.text || row.signature.startsWith('marker:') || row.id === except) continue;
+      if (!row.text || row.kind === SEGMENT_KINDS.BOUNDARY_WORDS || row.id === except) continue;
       const known = row.text.split(' ');
       // Whole against whole first, then the shorter aligned inside the longer: the
       // second is what recognises the same read heard a word early or a word late.
@@ -529,7 +615,37 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
    *
    * The oldest wins the words, since those are the ones that were decided about.
    */
+  /**
+   * Gives rows the kind their evidence says, where the column still holds its default.
+   *
+   * Only an older image writes such rows — 1.8 cannot know the column exists — so this
+   * is what makes rolling back and forward again harmless. Cheap enough to run before
+   * anything reads the catalogue: one indexed UPDATE per rule, touching nothing that
+   * already has a kind other than the default.
+   */
+  const reconcileStatements = [
+    `UPDATE ad_segments SET kind = '${SEGMENT_KINDS.BOUNDARY_WORDS}', marker_id = substr(signature, 8)
+      WHERE show_id = @show AND kind = '${SEGMENT_KINDS.REPEATED_AUDIO}' AND signature LIKE 'marker:%'
+        AND substr(signature, 8) IN (SELECT id FROM ad_markers)`,
+    `UPDATE ad_segments SET kind = '${SEGMENT_KINDS.JINGLE}', anchor_id = substr(signature, 8)
+      WHERE show_id = @show AND kind = '${SEGMENT_KINDS.REPEATED_AUDIO}' AND signature LIKE 'anchor:%'
+        AND substr(signature, 8) IN (SELECT id FROM ad_anchors)`,
+    `UPDATE ad_segments SET kind = '${SEGMENT_KINDS.DIFF}'
+      WHERE show_id = @show AND kind = '${SEGMENT_KINDS.REPEATED_AUDIO}' AND source = '${SEGMENT_SOURCES.DIFF}'`,
+    `UPDATE ad_segments SET kind = CASE WHEN cues IS NULL THEN '${SEGMENT_KINDS.REMEMBERED_WORDS}' ELSE '${SEGMENT_KINDS.REPEATED_WORDS}' END
+      WHERE show_id = @show AND kind = '${SEGMENT_KINDS.REPEATED_AUDIO}' AND source = '${SEGMENT_SOURCES.TRANSCRIPT}'
+        AND signature NOT LIKE 'marker:%'`,
+  ].map((sql) => db.prepare(sql));
+  const selectShowIds = db.prepare('SELECT id FROM shows');
+  function reconcileKinds(showId) {
+    const ids = showId ? [showId] : selectShowIds.all().map((row) => row.id);
+    db.transaction(() => {
+      for (const show of ids) for (const statement of reconcileStatements) statement.run({ show });
+    })();
+  }
+
   function mergeDuplicateReads(showId) {
+    reconcileKinds(showId);
     const rows = selectSegments
       .all(showId)
       /*
@@ -538,7 +654,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        * rows for one ten-second tag, at eight different episode counts — and once the
        * words are attached to them there is nothing to tell those eight apart.
        */
-      .filter((row) => row.text && !row.signature.startsWith('marker:'))
+      .filter((row) => row.text && row.kind !== SEGMENT_KINDS.BOUNDARY_WORDS && row.kind !== SEGMENT_KINDS.JINGLE)
       .sort((a, b) => {
         /*
          * A read found by its words wins over the same read found by ear, because its
@@ -547,8 +663,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
          * the duplicate comes straight back. Within a kind, the oldest wins: those are
          * the words that were decided about.
          */
-        const kind = (row) => (row.source === SEGMENT_SOURCES.TRANSCRIPT ? 0 : 1);
-        return kind(a) - kind(b) || String(a.first_seen_at).localeCompare(String(b.first_seen_at));
+        const byWords = (row) => (row.kind === SEGMENT_KINDS.REPEATED_AUDIO ? 1 : 0);
+        return byWords(a) - byWords(b) || String(a.first_seen_at).localeCompare(String(b.first_seen_at));
       });
     const gone = new Set();
     let merged = 0;
@@ -804,6 +920,16 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     fingerprintEpisode,
     loadFingerprint,
 
+    /** The digest of the file an episode was fingerprinted from, or null. The trimmer checks it before cutting. */
+    fingerprintDigest(episodeId) {
+      return selectFingerprint.get(episodeId)?.sha256 ?? null;
+    },
+
+    /** Stops the search worker. Called on shutdown, and by tests between instances. */
+    async close() {
+      await search.close();
+    },
+
     /**
      * How many of a show's episodes SelfPod has actually listened to.
      *
@@ -830,37 +956,80 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     },
 
     /**
-     * Looks for repetition across a show's episodes and updates the catalogue.
+     * Looks for repetition across a show's newest episodes and updates the catalogue.
      *
-     * The whole corpus is resident while this runs — one Uint32Array of frame hashes
-     * per episode, about 550 kB for an hour — so a five-hundred-episode show is a few
-     * hundred megabytes. That is a real cost on the hardware this targets and it is
-     * stated here rather than described as something it is not: an earlier version of
-     * this comment claimed episodes were streamed one at a time, which they never were.
-     *
-     * The search is also quadratic in episode count, because a segment present in
-     * every episode is extended against every other. Measured at 137,000 frames an
-     * episode: five episodes 0.3 s, twenty 4.3 s, forty 16.5 s — synchronously, on a
-     * box that is also serving audio. It runs behind a publish hold and on one chain,
-     * so nobody is waiting on it, but a large library will feel it.
+     * The search is quadratic in episode count — measured at 137,000 frames an episode:
+     * five episodes 0.3 s, twenty 4.3 s, forty 16.5 s — and it holds every fingerprint it
+     * compares in memory, about 1.2 MB an hour of audio at fingerprint version 2. So it
+     * compares only the newest `adCorpusWindow` episodes (forty by default), and it runs
+     * in a worker thread, where it cannot hold up a listener's download or the health
+     * check. What was already found in older episodes is not searched for again but is
+     * kept: a cut in an episode outside the window stays exactly as it was.
      */
     async detectForShow(showId, { minEpisodes = null } = {}) {
       const show = shows.getOrThrow(showId);
+      reconcileKinds(show.id);
       if (show.ad_trim_mode === 'off') return { segments: 0, skipped: 'mode_off' };
 
       const threshold = minEpisodes ?? show.ad_auto_min_episodes ?? 3;
+      // A little under the window: each known stretch's own exemplar joins the search
+      // too, and a stretch in every windowed episode plus its exemplar must still be
+      // under the acoustic search's limit of 32.
+      const windowSize = Math.min(corpusWindow(), 28);
       const corpus = [];
       const durations = {};
-      for (const episode of episodes.listByShow(show.id)) {
+      const addToCorpus = async (episode) => {
+        if (!episode || durations[episode.id] !== undefined) return;
         const fingerprint = await loadFingerprint(episode);
-        if (!fingerprint?.hashes?.length) continue;
+        if (!fingerprint?.hashes?.length) return;
         corpus.push({ id: episode.id, hashes: fingerprint.hashes, timing: fingerprint });
         durations[episode.id] = fingerprint.durationMs ?? 0;
+      };
+      // Newest first (episodes.listByShow), so the window is the most recent episodes.
+      for (const episode of episodes.listByShow(show.id)) {
+        if (corpus.length >= windowSize) break;
+        await addToCorpus(episode);
       }
+      /*
+       * Plus the episode each known stretch of sound was first found in, whatever its
+       * age. Without it a read the owner already decided about is compared only among
+       * new episodes, found again from scratch, and offered as something new — while
+       * the new episodes it is in go uncut. With it the known stretch is always in the
+       * search, and the new finds overlap it where it already is.
+       */
+      const knownAudio = selectSegments
+        .all(show.id)
+        .filter((row) => row.kind === SEGMENT_KINDS.REPEATED_AUDIO && row.exemplar_episode_id);
+      for (const row of knownAudio) await addToCorpus(episodes.get(row.exemplar_episode_id));
       if (corpus.length < 2) return { segments: 0, skipped: 'not_enough_episodes' };
+      const inWindow = new Set(corpus.map((entry) => entry.id));
+
+      /*
+       * Which known row a find is, by where it is rather than by its signature. The
+       * signature is taken from whichever episode seeded the search, and that changes
+       * as episodes arrive — the same ten-second tag once stood on the page as eight
+       * rows. The same stretch of the same episode is the same thing.
+       */
+      const knownOccurrences = knownAudio.map((row) => ({ row, occurrences: selectOccurrencesOf.all(row.id) }));
+      const knownFor = (occurrences) => {
+        for (const { row, occurrences: stored } of knownOccurrences) {
+          for (const found of occurrences) {
+            const length = found.endMs - found.startMs;
+            if (length <= 0) continue;
+            const same = stored.some(
+              (o) =>
+                o.episode_id === found.episodeId &&
+                Math.min(o.end_ms, found.endMs) - Math.max(o.start_ms, found.startMs) >=
+                  SAME_THING_OVERLAP * Math.max(length, o.end_ms - o.start_ms),
+            );
+            if (same) return row;
+          }
+        }
+        return null;
+      };
 
       const timingFor = Object.fromEntries(corpus.map((entry) => [entry.id, entry.timing]));
-      const found = findRepeatedAudio(
+      const found = await search.repeatedAudio(
         corpus.map((entry) => ({ id: entry.id, fingerprint: entry.hashes })),
         { minEpisodes: Math.min(threshold, 2) },
       );
@@ -892,7 +1061,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           if (!timing) continue;
           let ranges = anchorClaimsByEpisode.get(hit.episode_id);
           if (!ranges) anchorClaimsByEpisode.set(hit.episode_id, (ranges = []));
-          ranges.push([0, msToFrame(hit.at_ms - anchorRow.lead_ms + spanMs, timing) + 1]);
+          // A second's margin past the matched span: the search here pushes its own edges
+          // outwards by a few hundred milliseconds, so the same jingle found again ended
+          // just past the span and was offered back as "the same 14 seconds of sound" —
+          // seen on the real show, beside the very cut that already explained it.
+          ranges.push([0, msToFrame(hit.at_ms - anchorRow.lead_ms + spanMs + ANCHOR_CLAIM_MARGIN_MS, timing) + 1]);
         }
       }
       const coveredByAnchor = (occurrence) =>
@@ -900,6 +1073,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           ([from, to]) => occurrence.start >= from && occurrence.end <= to,
         );
 
+      const updatedThisPass = new Set();
       let recorded = 0;
       // Counted apart from `recorded`, because "found three things" and "found three
       // things you have already been shown" are different sentences. Detection runs on
@@ -932,15 +1106,28 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         // The words attached to this audio on an earlier run, if any: they are what
         // lets a pre-roll past the theme-tune guard, and the guard must not close again
         // on the next tick just because this detector has never heard them.
-        const known = selectBySignature.get(show.id, segment.signature);
+        const known = selectBySignature.get(show.id, segment.signature) ?? knownFor(occurrences);
+        // The search returns overlapping variants of one stretch, longest first. The
+        // first one to reach a known row is it; a later variant rewriting the same row
+        // would shrink its cut and re-cut every episode on every pass.
+        if (known && updatedThisPass.has(known.id)) continue;
 
         // Anchor-covered occurrences are dropped before anything else asks about this
         // segment — an approved anchor cut is not offered a second time as "audio this
         // show repeats." A brand new segment left with fewer than two occurrences by
         // that filtering is not worth creating; an existing one is still upserted with
         // whatever survives, so it shrinks (or empties) rather than going stale.
-        const filtered = occurrences.filter((occurrence) => !coveredByAnchor(occurrence));
-        if (!known && filtered.length < 2) continue;
+        const inSearch = occurrences.filter((occurrence) => !coveredByAnchor(occurrence));
+        if (!known && inSearch.length < 2) continue;
+        // Occurrences in episodes this search did not look at are carried forward
+        // untouched: not being compared this pass is not the same as not being there.
+        const carried = known
+          ? selectOccurrencesOf
+              .all(known.id)
+              .filter((row) => !inWindow.has(row.episode_id))
+              .map((row) => ({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms }))
+          : [];
+        const filtered = [...inSearch, ...carried];
 
         const verdict = safeToApproveAutomatically(
           { ...segment, durationMs, occurrences: filtered, cueScore: known?.cue_score ?? 0 },
@@ -949,8 +1136,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         const auto = show.ad_trim_mode === 'auto' && verdict.safe;
 
         const stored = upsertSegment(show.id, {
-          signature: segment.signature,
-          source: SEGMENT_SOURCES.CORPUS,
+          signature: known?.signature ?? segment.signature,
+          kind: known?.kind ?? SEGMENT_KINDS.REPEATED_AUDIO,
           durationMs,
           episodeCount: new Set(filtered.map((occurrence) => occurrence.episodeId)).size,
           occurrenceCount: filtered.length,
@@ -959,6 +1146,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           autoApproved: auto,
           holdReason: verdict.safe ? null : verdict.reason,
         });
+        updatedThisPass.add(stored.id);
         recorded += 1;
         if (stored.isNew) fresh += 1;
       }
@@ -986,11 +1174,19 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           .update(`${episode.id}:${range.startMs}:${range.endMs}`)
           .digest('hex')
           .slice(0, 24);
-        const auto = show.ad_trim_mode === 'auto';
+        // The length guard has always been written for this case and was never asked:
+        // a difference chosen by whoever serves the audio can be ten minutes long, and
+        // that is not an advert to take out of an episode nobody looked at.
+        const durationMs = range.durationMs ?? range.endMs - range.startMs;
+        const verdict = safeToApproveAutomatically(
+          { durationMs, episodeCount: 1, occurrences: [{ episodeId: episode.id, startMs: range.startMs, endMs: range.endMs }] },
+          { source: SEGMENT_SOURCES.DIFF },
+        );
+        const auto = show.ad_trim_mode === 'auto' && verdict.safe;
         upsertSegment(show.id, {
           signature,
-          source: SEGMENT_SOURCES.DIFF,
-          durationMs: range.durationMs ?? range.endMs - range.startMs,
+          kind: SEGMENT_KINDS.DIFF,
+          durationMs,
           episodeCount: 1,
           occurrenceCount: 1,
           occurrences: [
@@ -1007,7 +1203,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           ],
           status: auto ? SEGMENT_STATUS.APPROVED : SEGMENT_STATUS.CANDIDATE,
           autoApproved: auto,
-          holdReason: null,
+          holdReason: verdict.safe ? null : verdict.reason,
         });
         recorded += 1;
       }
@@ -1027,6 +1223,48 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      */
     foldDuplicateReads(showId) {
       return mergeDuplicateReads(showId);
+    },
+
+    /**
+     * What sounds like a sponsor read in one episode and is not already cut, kept or
+     * waiting — for highlighting in the words, where it can be taught from. Worked out
+     * each time rather than stored (spec §19.6): a few hundred tokens of arithmetic.
+     */
+    async sponsorSuggestions(episodeId) {
+      if (!transcriber) return [];
+      const episode = episodes.get(episodeId);
+      const show = episode ? shows.get(episode.show_id) : null;
+      if (!show) return [];
+      const [entry] = await hearShow(show, { episodeIds: [episodeId] });
+      if (!entry) return [];
+      const covered = db
+        .prepare('SELECT start_ms, end_ms FROM ad_segment_occurrences WHERE episode_id = ?')
+        .all(episodeId);
+      const overlapsStored = (startMs, endMs) =>
+        covered.some((row) => Math.min(endMs, row.end_ms) - Math.max(startMs, row.start_ms) > 0.5 * (endMs - startMs));
+      const suggestions = [];
+      for (const block of findSponsorBlocks(entry)) {
+        const cues = cuesFor(entry, block.tokenStart, block.tokenEnd);
+        if (cues.score < CUE_OFFER_ALONE) continue;
+        if (overlapsStored(block.startMs, block.endMs)) continue;
+        const firstWord = entry.tokens[block.tokenStart]?.word ?? 0;
+        const lastWord = entry.tokens[block.tokenEnd]?.word ?? firstWord;
+        suggestions.push({
+          startMs: block.startMs,
+          endMs: block.endMs,
+          startWord: firstWord,
+          endWord: lastWord,
+          rawText: cues.rawText,
+          cueScore: cues.score,
+          cues: cues.cues,
+        });
+      }
+      return suggestions;
+    },
+
+    /** See reconcileKinds. Run once at boot for every show, and before every pass. */
+    reconcileKinds(showId = null) {
+      reconcileKinds(showId);
     },
 
     /**
@@ -1096,11 +1334,24 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           if (linkedToAnchor && anchorHitsByEpisode.has(entry.episode.id)) continue;
           // Only the window the marker belongs to: the opening for a start, the closing
           // for an end. "Vous écoutez RMC" said again at minute forty is not the start.
+          //
+          // And only the half of the episode it belongs to. A short episode is heard as
+          // one window, so "the closing window" is the whole episode — and a host who
+          // reads the same sponsor tag to open one episode and close the next had
+          // "cut from these words to the end" match at 0:00 and ask for the whole
+          // episode to go. Measured on the show this was built for: four episodes of
+          // six. The start of a programme is in its first half; its end in its second —
+          // or, in an episode too short for halves to mean much, its first or last minute.
           const windowIndex = atStart ? 0 : entry.transcript.windows.length - 1;
-          const first = entry.tokens.findIndex((token) => token.window === windowIndex);
+          const halfMs = entry.durationMs / 2;
+          const startsBefore = Math.max(halfMs, 60_000);
+          const endsAfter = Math.min(halfMs, Math.max(0, entry.durationMs - 60_000));
+          const inHalf = (token) =>
+            token.window === windowIndex && (atStart ? token.startMs < startsBefore : token.startMs >= endsAfter);
+          const first = entry.tokens.findIndex(inHalf);
           if (first < 0) continue;
           let last = entry.tokens.length - 1;
-          while (last > first && entry.tokens[last].window !== windowIndex) last -= 1;
+          while (last > first && !inHalf(entry.tokens[last])) last -= 1;
           const hit = locatePhrase(entry.tokens.slice(first, last + 1), phrase);
           if (!hit) continue;
           const hitStart = first + hit.start;
@@ -1120,12 +1371,17 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             occurrence = occurrenceFrom(entry, cutStartMs, entry.durationMs, { snapEnd: false, keepStart: !marker.inclusive });
             occurrence.end = msToFrame(entry.durationMs, entry.timing) + 1;
           }
+          // A boundary that would take most of an episode has matched in the wrong place
+          // — the programme is not a fifth of its own length. The trimmer would refuse
+          // the cut and flag the episode; better never to ask.
+          if (occurrence.endMs - occurrence.startMs > MAX_BOUNDARY_SHARE * entry.durationMs) continue;
           occurrences.push(occurrence);
         }
         const lengths = occurrences.map((o) => o.endMs - o.startMs).sort((a, b) => a - b);
         const stored = upsertSegment(show.id, {
           signature: `marker:${marker.id}`,
-          source: SEGMENT_SOURCES.TRANSCRIPT,
+          kind: SEGMENT_KINDS.BOUNDARY_WORDS,
+          markerId: marker.id,
           status: SEGMENT_STATUS.APPROVED,
           autoApproved: false,
           durationMs: lengths.length ? lengths[Math.floor(lengths.length / 2)] : 0,
@@ -1153,7 +1409,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         .all(show.id)
         .sort((a, b) => (a.status === SEGMENT_STATUS.CANDIDATE ? 1 : 0) - (b.status === SEGMENT_STATUS.CANDIDATE ? 1 : 0));
       for (const known of knownFirst) {
-        if (!known.text || known.signature.startsWith('marker:')) continue;
+        if (!known.text || known.kind === SEGMENT_KINDS.BOUNDARY_WORDS) continue;
         const phrase = known.text.split(' ');
         const existing = selectOccurrencesOf.all(known.id);
         const occurrences = [];
@@ -1167,7 +1423,6 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         }
         // Episodes not heard this time keep the occurrence they had.
         for (const row of existing) {
-          if (byId.has(row.episode_id) && occurrences.some((o) => o.episodeId === row.episode_id)) continue;
           if (byId.has(row.episode_id)) continue;
           occurrences.push({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms });
         }
@@ -1222,9 +1477,19 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         }
       }
 
-      /* 2. What repeats. */
+      /*
+       * 2. What repeats — among the newest episodes only.
+       *
+       * The search leaves out any four-word run seen more than MAX_KEY_OCCURRENCES (64)
+       * times, which is what keeps silence and filler from swamping it — and which also
+       * meant that once a show had more than 64 episodes, a read in every one of them
+       * could never be found again. Measured: found in 64 episodes, nothing in 65. The
+       * window keeps the search under that. Reads already known are matched in every
+       * episode by stage 1 above, whatever its age.
+       */
+      const searchWindow = new Set(heard.slice(0, corpusWindow()).map((entry) => entry.episode.id));
       const found = findRepeatedText(
-        heard.map((entry) => ({ id: entry.episode.id, tokens: entry.tokens })),
+        heard.filter((entry) => searchWindow.has(entry.episode.id)).map((entry) => ({ id: entry.episode.id, tokens: entry.tokens })),
         { claimed },
       );
       for (const segment of found) {
@@ -1241,6 +1506,13 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         if (occurrences.length < 2) continue;
         for (const o of segment.occurrences) claimRange(claimed, o.episodeId, o.start, o.end);
         const known = knownSegmentFor(show.id, text);
+        // Where this read was already found outside the window, it stays found.
+        if (known) {
+          for (const row of selectOccurrencesOf.all(known.id)) {
+            if (searchWindow.has(row.episode_id)) continue;
+            occurrences.push({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms });
+          }
+        }
         const episodeCount = new Set(occurrences.map((o) => o.episodeId)).size;
         const verdict = safeToApproveAutomatically(
           { durationMs: segment.durationMs, episodeCount, occurrences, cueScore: cues.score },
@@ -1267,74 +1539,25 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         if (stored.isNew) counts.newSegments += 1;
       }
 
-      /* 3. What sounds like a sponsor read, heard once. Offered, never cut. */
+      /*
+       * 3. What sounds like a sponsor read, heard once.
+       *
+       * No longer a row: a read heard in one episode was never cut on its own, and one
+       * row per episode per read was most of the noise on the Adverts page. It is
+       * highlighted where the words are shown (sponsorSuggestions) and taught from
+       * there. What remains here is the one useful side effect — words that fall on
+       * audio already found by ear are attached to that row, so its card can quote them.
+       */
       for (const entry of heard) {
-        let block = null;
-        const blocks = [];
-        // A block ends at the last sentence that sounded like an advert. The quiet
-        // sentences that may have followed were only ever kept in case another cue
-        // came along; if none did, they are the programme starting.
-        const flush = () => {
-          if (block && block.raw >= 4 && block.cueEndMs - block.startMs >= 10_000) {
-            blocks.push({ ...block, endMs: block.cueEndMs, tokenEnd: block.cueTokenEnd });
-          }
-          block = null;
-        };
-        for (const sentence of entry.sentences) {
-          const [tokenStart] = entry.tokenRange.get(sentence.wordStart) ?? [];
-          const tokenEnd = entry.tokenRange.get(sentence.wordEnd)?.[1];
-          if (tokenStart === undefined || tokenEnd === undefined) continue;
-          if (isClaimed(claimed, entry.episode.id, tokenStart, tokenEnd)) {
-            flush();
-            continue;
-          }
-          const scored = scoreAdvertCues(entry.tokens.slice(tokenStart, tokenEnd + 1), { rawText: sentence.text });
-          if (block && (sentence.startMs - block.endMs > 6000 || sentence.endMs - block.startMs > 120_000 || sentence.window !== block.window)) flush();
-          if (!block) {
-            if (!scored.raw) continue;
-            block = {
-              startMs: sentence.startMs, endMs: sentence.endMs, tokenStart, tokenEnd,
-              cueEndMs: sentence.endMs, cueTokenEnd: tokenEnd, raw: 0, quiet: 0, window: sentence.window,
-            };
-          }
-          block.endMs = sentence.endMs;
-          block.tokenEnd = tokenEnd;
-          if (scored.raw) {
-            block.raw += scored.raw;
-            block.quiet = 0;
-            block.cueEndMs = sentence.endMs;
-            block.cueTokenEnd = tokenEnd;
-          } else {
-            block.quiet += 1;
-            if (block.quiet >= 3) flush();
-          }
-        }
-        flush();
+        const blocks = findSponsorBlocks(entry, {
+          isClaimed: (tokenStart, tokenEnd) => isClaimed(claimed, entry.episode.id, tokenStart, tokenEnd),
+        });
         for (const candidate of blocks) {
           const cues = cuesFor(entry, candidate.tokenStart, candidate.tokenEnd);
           if (cues.score < CUE_OFFER_ALONE) continue;
           const text = entry.tokens.slice(candidate.tokenStart, candidate.tokenEnd + 1).map((t) => t.t).join(' ');
           const cut = occurrenceFrom(entry, candidate.startMs, candidate.endMs);
-          if (annotateCorpus(entry, cut, { ...cues, text }, show, durations, threshold)) continue;
-          claimRange(claimed, entry.episode.id, candidate.tokenStart, candidate.tokenEnd);
-          const stored = upsertSegment(show.id, {
-            signature: knownSegmentFor(show.id, text)?.signature ?? signatureOf(text),
-            source: SEGMENT_SOURCES.TRANSCRIPT,
-            status: SEGMENT_STATUS.CANDIDATE,
-            autoApproved: false,
-            holdReason: 'only_heard_once',
-            durationMs: cut.endMs - cut.startMs,
-            episodeCount: 1,
-            occurrenceCount: 1,
-            occurrences: [cut],
-            text,
-            rawText: cues.rawText,
-            cueScore: cues.score,
-            cues: cues.cues,
-            language: entry.transcript.language,
-          });
-          counts.segments += 1;
-          if (stored.isNew) counts.newSegments += 1;
+          annotateCorpus(entry, cut, { ...cues, text }, show, durations, threshold);
         }
       }
 
@@ -1361,6 +1584,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      */
     async detectAnchors(showId) {
       const show = shows.getOrThrow(showId);
+      reconcileKinds(show.id);
       if (show.ad_trim_mode === 'off') return { skipped: 'mode_off' };
 
       const rows = selectAnchors.all(showId);
@@ -1380,6 +1604,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       }
 
       let proposed = false;
+      let autoConfirmed = false;
       if (!anchor && withFingerprints.length >= 2) {
         const dismissedClips = rows
           .filter((row) => row.dismissed_at)
@@ -1395,7 +1620,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
          * for ever. `episodeList` is already newest first (`episodes.listByShow`).
          */
         const recentWithFingerprints = withFingerprints.slice(0, MAX_PROPOSAL_EPISODES);
-        for (const candidate of findHeadAnchors(recentWithFingerprints)) {
+        for (const candidate of await search.headAnchors(recentWithFingerprints)) {
           const clip = anchorClipFrom(candidate, fingerprintsById);
           if (!clip) continue;
           // "No, that's not the jingle" must stay answered: a dismissed clip is never
@@ -1491,6 +1716,27 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         }
       }
 
+      /*
+       * In automatic mode, a jingle SelfPod found for itself is cut without being asked
+       * — when it is heard in every one of the recent episodes it was proposed from.
+       * That is the owner's own rule for automatic mode: cut what SelfPod is sure of,
+       * say so, and make it one press to undo. Measured on the real show this was built
+       * for, the same clip was heard in six upstream episodes out of six at a bit-error
+       * rate of 0.11 or less, where anything else scores above 0.43. Forgetting an
+       * automatically confirmed jingle dismisses it, so it is never proposed again.
+       * In review mode it stays a question.
+       */
+      if (!anchor.confirmed_at && show.ad_trim_mode === 'auto' && anchor.origin === 'proposed') {
+        const recent = withFingerprints.slice(0, MAX_PROPOSAL_EPISODES);
+        if (recent.length >= 2 && recent.every((entry) => onsetByEpisode.has(entry.id))) {
+          db.prepare(
+            'UPDATE ad_anchors SET confirmed_at = @now, auto_confirmed = 1, updated_at = @now WHERE id = @id',
+          ).run({ now: nowIso(), id: anchor.id });
+          anchor = selectAnchor.get(anchor.id);
+          autoConfirmed = true;
+        }
+      }
+
       // A proposal is not a decision. Stopping here leaves the hits recorded — the
       // review card can already say how many episodes the jingle was heard in — but
       // cuts nothing until the owner, or a linked marker, actually decides.
@@ -1511,7 +1757,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         const lengths = occurrences.map((o) => o.endMs - o.startMs).sort((a, b) => a - b);
         upsertSegment(show.id, {
           signature,
-          source: SEGMENT_SOURCES.CORPUS,
+          kind: SEGMENT_KINDS.JINGLE,
+          anchorId: anchor.id,
           status: SEGMENT_STATUS.APPROVED,
           autoApproved: false,
           holdReason: null,
@@ -1523,7 +1770,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       }
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
-      return { anchorId: anchor.id, proposed, heard, missed, newlyMissed, cuts: occurrences.length };
+      return { anchorId: anchor.id, proposed, autoConfirmed, heard, missed, newlyMissed, cuts: occurrences.length };
     },
 
     /* ---- what the owner teaches ---------------------------------------------- */
@@ -1576,6 +1823,101 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return insertAnchor(showId, { origin: 'pointed_at', confirmed: true, clip });
     },
 
+    /**
+     * "This stretch is an advert", pointed at by time rather than by words.
+     *
+     * Where SelfPod heard words there, it is taught by those words, so the same read is
+     * cut from later episodes too — the same as picking the words in the transcript.
+     * Where it heard none (no recogniser, listening switched off, a mid-roll outside the
+     * listening window, music) it is cut from this episode only, by time: nothing about
+     * a stretch of sound says where it will be tomorrow.
+     */
+    async teachRange({ showId, episodeId, startMs, endMs }) {
+      const show = shows.getOrThrow(showId);
+      const episode = episodes.getOrThrow(episodeId);
+      if (episode.show_id !== show.id) throw notFound('That episode is not in this show.', 'episode_not_found');
+      const fingerprint = await loadFingerprint(episode);
+      const durationMs = fingerprint?.durationMs ?? (episode.duration_seconds ?? 0) * 1000;
+      if (!fingerprint?.sampleRate || !fingerprint?.samplesPerFrame) {
+        throw badRequest('SelfPod has not read this episode yet, so it cannot cut it. Try again after the next check.', 'no_fingerprint');
+      }
+      if (!(startMs >= 0 && endMs > startMs && endMs <= durationMs + 500)) {
+        throw badRequest('Say a first and a last moment, in that order, within the episode.', 'invalid_range');
+      }
+      if (endMs - startMs < 1000) throw badRequest('That is less than a second — select the whole advert.', 'range_too_short');
+
+      const transcript = transcriber ? await transcriber.loadTranscript(episode) : null;
+      if (transcript) {
+        const words = transcript.windows
+          .flatMap((window) => window.sentences.flatMap((sentence) => sentence.words))
+          .filter((word) => (word.s + word.e) / 2 >= startMs && (word.s + word.e) / 2 <= endMs);
+        const rawText = rawTextOf(words);
+        if (normaliseText(rawText).length >= 3) {
+          return api.teachSegment({ showId, episodeId, startMs, endMs, rawText, status: SEGMENT_STATUS.APPROVED, language: transcript.language ?? null });
+        }
+      }
+
+      const clampedEnd = Math.min(endMs, durationMs);
+      const occurrence = {
+        episodeId,
+        startMs,
+        endMs: clampedEnd,
+        // Outwards, as every cut edge is: a breath of programme lost beats a syllable of advert kept.
+        start: msToFrame(startMs, fingerprint),
+        end: msToFrame(clampedEnd, fingerprint) + 1,
+      };
+      const signature = `range:${createHash('sha256').update(`${episodeId}:${startMs}:${clampedEnd}`).digest('hex').slice(0, 24)}`;
+      return upsertSegment(show.id, {
+        signature,
+        kind: SEGMENT_KINDS.TAUGHT_RANGE,
+        status: SEGMENT_STATUS.APPROVED,
+        autoApproved: false,
+        holdReason: null,
+        durationMs: clampedEnd - startMs,
+        episodeCount: 1,
+        occurrenceCount: 1,
+        occurrences: [occurrence],
+      });
+    },
+
+    /**
+     * "Restore everywhere and stop": the rule behind a cut, undone for the whole show.
+     *
+     * Dispatched by kind, because a cut is the effect of different things: a jingle and
+     * a boundary are rules with their own rows, and removing only their cut would leave
+     * the rule standing and the cut back on the next pass. Anything else is a decision
+     * about a stretch, and becomes "keep it" — remembered, so it is not offered again.
+     */
+    stopRule(segmentId) {
+      const segment = selectSegment.get(segmentId);
+      if (!segment) throw notFound('That cut no longer exists.', 'segment_not_found');
+      if (segment.kind === SEGMENT_KINDS.JINGLE && segment.anchor_id) return { removed: 'jingle', anchor: api.removeAnchor(segment.anchor_id) };
+      if (segment.kind === SEGMENT_KINDS.BOUNDARY_WORDS && segment.marker_id) return { removed: 'boundary', marker: api.removeMarker(segment.marker_id) };
+      if (segment.kind === SEGMENT_KINDS.TAUGHT_RANGE) {
+        // A range means nothing outside its own episode; keeping it as "not an advert" would remember nothing.
+        return { removed: 'range', segment: api.forgetSegment(segmentId) };
+      }
+      return { removed: 'decision', segment: api.decide(segmentId, SEGMENT_STATUS.REJECTED) };
+    },
+
+    /**
+     * Forgets a decision entirely, so what it was about can be offered again.
+     *
+     * For a "keep it" the owner has changed their mind about, and for a range taught by
+     * time. The cut it made, if any, is put back first.
+     */
+    forgetSegment(segmentId) {
+      const segment = selectSegment.get(segmentId);
+      if (!segment) throw notFound('That decision no longer exists.', 'segment_not_found');
+      if (segment.kind === SEGMENT_KINDS.JINGLE || segment.kind === SEGMENT_KINDS.BOUNDARY_WORDS) {
+        return api.stopRule(segmentId);
+      }
+      if (segment.status === SEGMENT_STATUS.APPROVED) markForRecut(segment.id);
+      db.prepare('DELETE FROM ad_segments WHERE id = ?').run(segment.id);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: segment.show_id });
+      return segment;
+    },
+
     /** "Yes, that's the jingle" — confirmed, so the next pass starts cutting to it. */
     confirmAnchor(id) {
       const anchor = selectAnchor.get(id);
@@ -1596,7 +1938,13 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return selectAnchor.get(id);
     },
 
-    /** Forgets a confirmed anchor and puts back everything it cut. */
+    /**
+     * Forgets a confirmed anchor and puts back everything it cut.
+     *
+     * One SelfPod found for itself is dismissed rather than deleted: its clip is what
+     * stops the same jingle being proposed — or, in automatic mode, confirmed — again
+     * on the very next pass. One the owner pointed at is simply gone.
+     */
     removeAnchor(id) {
       const anchor = selectAnchor.get(id);
       if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
@@ -1605,7 +1953,13 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         markForRecut(segment.id);
         db.prepare('DELETE FROM ad_segments WHERE id = ?').run(segment.id);
       }
-      db.prepare('DELETE FROM ad_anchors WHERE id = ?').run(id);
+      if (anchor.origin === 'proposed') {
+        db.prepare(
+          'UPDATE ad_anchors SET confirmed_at = NULL, auto_confirmed = 0, dismissed_at = @now, updated_at = @now WHERE id = @id',
+        ).run({ now: nowIso(), id });
+      } else {
+        db.prepare('DELETE FROM ad_anchors WHERE id = ?').run(id);
+      }
       events?.emit(EVENTS.SHOW_CHANGED, { showId: anchor.show_id });
       return anchor;
     },
@@ -1662,7 +2016,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       if (!text) throw notFound('Those words have nothing SelfPod can listen for.', 'empty_phrase');
       const transcript = await transcriber.loadTranscript(episode);
       const entry = transcript
-        ? (await hearShow(show)).find((candidate) => candidate.episode.id === episodeId)
+        ? (await hearShow(show, { episodeIds: [episodeId] }))[0] ?? null
         : null;
       const occurrence = entry
         ? occurrenceFrom(entry, startMs, endMs)
@@ -1693,7 +2047,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     async exemplarTranscripts(showId) {
       const wanted = new Set();
       for (const row of selectSegments.all(showId)) {
-        if (row.exemplar_episode_id && (row.source === SEGMENT_SOURCES.TRANSCRIPT || row.text)) wanted.add(row.exemplar_episode_id);
+        if (row.exemplar_episode_id && row.text) wanted.add(row.exemplar_episode_id);
       }
       const transcripts = new Map();
       for (const episodeId of wanted) {
@@ -1712,7 +2066,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           `SELECT s.*, o.start_ms, o.end_ms, o.start_frame, o.end_frame
              FROM ad_segment_occurrences o
              JOIN ad_segments s ON s.id = o.segment_id
-            WHERE o.episode_id = ? AND (s.source = '${SEGMENT_SOURCES.TRANSCRIPT}' OR s.text IS NOT NULL)
+            WHERE o.episode_id = ? AND (s.kind IN ('${SEGMENT_KINDS.BOUNDARY_WORDS}', '${SEGMENT_KINDS.REMEMBERED_WORDS}', '${SEGMENT_KINDS.REPEATED_WORDS}') OR s.text IS NOT NULL)
             ORDER BY o.start_ms`,
         )
         .all(episodeId);
@@ -1726,7 +2080,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             `SELECT s.id AS segment_id, o.start_ms, o.end_ms
                FROM ad_segment_occurrences o
                JOIN ad_segments s ON s.id = o.segment_id
-              WHERE o.episode_id = ? AND s.signature LIKE 'anchor:%' AND s.status = '${SEGMENT_STATUS.APPROVED}'
+              WHERE o.episode_id = ? AND s.kind = '${SEGMENT_KINDS.JINGLE}' AND s.status = '${SEGMENT_STATUS.APPROVED}'
               LIMIT 1`,
           )
           .get(episodeId) ?? null
@@ -1744,19 +2098,31 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const segment = selectSegment.get(segmentId);
       if (!segment) throw notFound('That segment no longer exists.', 'segment_not_found');
       const show = shows.getOrThrow(segment.show_id);
-      const entry = (await hearShow(show)).find((candidate) => candidate.episode.id === episodeId);
+      const entry = (await hearShow(show, { episodeIds: [episodeId] }))[0];
       const occurrence = entry ? occurrenceFrom(entry, startMs, endMs) : { episodeId, startMs, endMs, start: 0, end: 0 };
       const text = normaliseText(rawText).join(' ');
       const others = selectOccurrencesOf
         .all(segmentId)
         .filter((row) => row.episode_id !== episodeId)
         .map((row) => ({ episodeId: row.episode_id, start: row.start_frame, end: row.end_frame, startMs: row.start_ms, endMs: row.end_ms }));
+      // The cues belong to the words: new edges, new words, cues read again — otherwise
+      // the card goes on quoting what the old edges happened to include.
+      let cues = null;
+      if (entry) {
+        const inRange = entry.tokens
+          .map((token, index) => ({ token, index }))
+          .filter(({ token }) => (token.startMs + token.endMs) / 2 >= occurrence.startMs && (token.startMs + token.endMs) / 2 <= occurrence.endMs);
+        if (inRange.length) cues = cuesFor(entry, inRange[0].index, inRange[inRange.length - 1].index);
+      }
       db.prepare(
         `UPDATE ad_segments SET text = @text, raw_text = @raw_text, duration_ms = @duration_ms,
+                cue_score = COALESCE(@cue_score, cue_score), cues = COALESCE(@cues, cues),
                 exemplar_episode_id = @episode_id, exemplar_start_ms = @start_ms, exemplar_end_ms = @end_ms, updated_at = @now
           WHERE id = @id`,
       ).run({
         id: segmentId,
+        cue_score: cues ? cues.score : null,
+        cues: cues ? JSON.stringify(cues.cues) : null,
         text: text || segment.text,
         raw_text: rawText.trim() || segment.raw_text,
         duration_ms: occurrence.endMs - occurrence.startMs,
@@ -1785,6 +2151,52 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     },
 
     /** Approving or rejecting is one call, because it is one decision. */
+    /**
+     * "Restore here": leaves one cut out of one episode, whatever rule makes it.
+     *
+     * The rule goes on cutting everywhere else. Only this episode is cut again, so the
+     * published copies of every other episode keep their bytes and their addresses.
+     */
+    restoreHere({ segmentId, episodeId }) {
+      const segment = selectSegment.get(segmentId);
+      if (!segment) throw notFound('That cut no longer exists.', 'segment_not_found');
+      const occurrence = db
+        .prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ? AND episode_id = ? ORDER BY start_ms LIMIT 1')
+        .get(segmentId, episodeId);
+      if (!occurrence) throw notFound('That cut is not in this episode.', 'occurrence_not_found');
+      const existing = selectOverrides.all(episodeId).find((restore) => restoreCovers(restore, occurrence));
+      if (existing) return existing;
+      const id = newId();
+      db.prepare(
+        `INSERT INTO ad_cut_overrides (id, episode_id, segment_id, start_ms, end_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, episodeId, segmentId, occurrence.start_ms, occurrence.end_ms, nowIso());
+      markForRecut(segmentId, [episodeId]);
+      events?.emit(EVENTS.SHOW_CHANGED, { showId: segment.show_id });
+      return db.prepare('SELECT * FROM ad_cut_overrides WHERE id = ?').get(id);
+    },
+
+    /** Takes a "restore here" back, so the rule cuts that stretch of the episode again. */
+    undoRestore(overrideId) {
+      const restore = db.prepare('SELECT * FROM ad_cut_overrides WHERE id = ?').get(overrideId);
+      if (!restore) throw notFound('That restore no longer exists.', 'override_not_found');
+      db.prepare('DELETE FROM ad_cut_overrides WHERE id = ?').run(overrideId);
+      markForRecut(restore.segment_id, [restore.episode_id]);
+      const episode = episodes.get(restore.episode_id);
+      if (episode) events?.emit(EVENTS.SHOW_CHANGED, { showId: episode.show_id });
+      return restore;
+    },
+
+    /** Every restore in one episode. */
+    restoresIn(episodeId) {
+      return selectOverrides.all(episodeId);
+    },
+
+    /** Whether a stored occurrence is left in its episode by a restore. */
+    isRestored(episodeId, occurrence) {
+      return selectOverrides.all(episodeId).some((restore) => restoreCovers(restore, occurrence));
+    },
+
     decide(segmentId, status) {
       if (!Object.values(SEGMENT_STATUS).includes(status)) {
         throw notFound('That is not a decision SelfPod records.', 'unknown_status');
@@ -1816,6 +2228,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      * ranges twice would remove more than either of them describes.
      */
     cutListFor(episodeId) {
+      const restores = selectOverrides.all(episodeId);
       const rows = db
         .prepare(
           `SELECT o.start_frame, o.end_frame, o.start_ms, o.end_ms
@@ -1824,7 +2237,9 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             WHERE o.episode_id = ? AND s.status = '${SEGMENT_STATUS.APPROVED}'
             ORDER BY o.start_frame`,
         )
-        .all(episodeId);
+        .all(episodeId)
+        // "Restore here" wins over every rule, in this episode only.
+        .filter((row) => !restores.some((restore) => restoreCovers(restore, row)));
 
       const merged = [];
       for (const row of rows) {

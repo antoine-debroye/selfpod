@@ -37,7 +37,7 @@ export function timeoutFor(audioMs) {
 }
 
 /**
- * @param {{binary: string, model: string, wavPath: string, outputPrefix: string, threads?: number, timeoutMs?: number, language?: string, logger?: object}} options
+ * @param {{binary: string, model: string, wavPath: string, outputPrefix: string, threads?: number, nice?: number, timeoutMs?: number, language?: string, logger?: object}} options
  * @returns {Promise<{json: object, elapsedMs: number}>} the parsed `--output-json-full` file
  */
 export async function runWhisper({
@@ -46,9 +46,11 @@ export async function runWhisper({
   wavPath,
   outputPrefix,
   threads = 2,
+  nice = 15,
   timeoutMs = MAX_RUN_MS,
   language = 'auto',
   logger = null,
+  prints = false,
 }) {
   const args = [
     '-m', model,
@@ -57,10 +59,13 @@ export async function runWhisper({
     '-t', String(threads),
     '--output-json-full',
     '--output-file', outputPrefix,
-    '--no-prints',
+    // Without it whisper also logs which device it used — which is exactly what the
+    // start-up check needs to know, and nothing an ordinary run does.
+    ...(prints ? [] : ['--no-prints']),
     '--suppress-nst',
   ];
   const started = Date.now();
+  let log = '';
 
   await new Promise((resolve, reject) => {
     let child;
@@ -70,6 +75,7 @@ export async function runWhisper({
         args,
         { timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 1 << 20, windowsHide: true },
         (error, stdout, stderr) => {
+          log = String(stderr ?? '');
           if (!error) return resolve();
           if (error.code === 'ENOENT' || error.code === 'EACCES') {
             return reject(new WhisperError('missing', `whisper-cli is not runnable at ${binary}`, { cause: error }));
@@ -90,9 +96,10 @@ export async function runWhisper({
     } catch (error) {
       return reject(new WhisperError('missing', `whisper-cli could not be started at ${binary}`, { cause: error }));
     }
-    if (child?.pid) {
+    // Zero means normal priority, so there is nothing to lower.
+    if (child?.pid && nice > 0) {
       try {
-        setPriority(child.pid, 15);
+        setPriority(child.pid, nice);
       } catch (error) {
         logger?.debug({ err: error }, 'could not lower the priority of whisper-cli');
       }
@@ -112,5 +119,21 @@ export async function runWhisper({
   if (!Array.isArray(json?.transcription)) {
     throw new WhisperError('bad_output', 'whisper-cli wrote a transcript in a shape SelfPod does not know');
   }
-  return { json, elapsedMs };
+  return { json, elapsedMs, log };
+}
+
+/**
+ * Which device a run used, read off whisper's own log (a run with `prints: true`).
+ *
+ * whisper.cpp says `whisper_backend_init_gpu: using CUDA0 backend` when it found a GPU
+ * and `whisper_backend_init_gpu: no GPU found` when it did not — read from the pinned
+ * tag's src/whisper.cpp. A CUDA build with no GPU visible does not fail: it quietly runs
+ * on the CPU, which is the case this exists to catch.
+ */
+export function deviceFromLog(log) {
+  const text = String(log ?? '');
+  const used = /whisper_backend_init_gpu: using (\S+) backend/.exec(text);
+  if (used) return { accelerator: 'gpu', device: used[1] };
+  if (/whisper_backend_init_gpu: no GPU found/.test(text)) return { accelerator: 'cpu', device: null };
+  return { accelerator: null, device: null };
 }

@@ -1,0 +1,12 @@
+<%
+  /* One decision button, as its own form: it posts with JavaScript off and is swapped
+     in place by htmx when it is on. The label comes from the vocabulary
+     (lib/adverts-vocabulary.js), never from here. */
+  const action = it.action;
+%>
+<form method="post" action="<%= action.url %>" hx-post="<%= action.url %>"
+      hx-target="<%= it.target %>" hx-swap="outerHTML" class="inline-form">
+  <% if (it.returnTo) { %><input type="hidden" name="returnTo" value="<%= it.returnTo %>"><% } %>
+  <% if (action.name) { %><input type="hidden" name="<%= action.name %>" value="<%= action.value %>"><% } %>
+  <button class="btn btn-sm <%= action.primary ? 'btn-primary' : 'btn-ghost' %>" type="submit"><%= action.label %></button>
+</form>

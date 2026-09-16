@@ -189,11 +189,14 @@ describe('hearing a sponsor read in the words', () => {
     await addEpisode(dir, 2);
     await server.adPipeline.processShow(show.id);
 
-    let [read] = spoken(show.id);
-    assert.equal(spoken(show.id).length, 1);
-    assert.equal(read.status, SEGMENT_STATUS.CANDIDATE, 'a read heard once was cut on its own');
-    assert.equal(read.hold_reason, 'only_heard_once');
-    assert.equal(read.episode_count, 1);
+    // Heard once, it is not a row to decide about (spec §19.6): nothing is stored, nothing
+    // is cut, and it is offered where the words are shown instead.
+    assert.equal(spoken(show.id).length, 0, 'a read heard once was stored as something to decide');
+    const first = server.episodes.listByShow(show.id).find((row) => row.filename === 'episode-1.mp3');
+    const suggestions = await server.adDetect.sponsorSuggestions(first.id);
+    assert.equal(suggestions.length, 1, 'the read heard once is not offered in its words');
+    assert.match(suggestions[0].rawText, /brought to you by|promo|code/i);
+    assert.equal(first.trim_status, null, 'a read heard once was cut on its own');
     // Automatic mode does not stop the feed for something it will not act on.
     assert.deepEqual(Object.values(holds(show.id)), [null, null]);
 
@@ -202,7 +205,7 @@ describe('hearing a sponsor read in the words', () => {
     const third = await addEpisode(dir, 3);
     await server.adPipeline.processShow(show.id);
 
-    [read] = spoken(show.id);
+    const [read] = spoken(show.id);
     assert.equal(spoken(show.id).length, 1, 'the same read was offered again under a new name');
     assert.equal(read.status, SEGMENT_STATUS.APPROVED);
     assert.equal(read.auto_approved, 1);
@@ -370,5 +373,87 @@ describe('changing the speech recogniser', () => {
     } finally {
       await listening.cleanup();
     }
+  });
+});
+
+describe('a show with more episodes than the searches can index', () => {
+  it('still finds a read that is in every one of seventy episodes', async () => {
+    // The words search leaves out any four-word run seen more than 64 times. Searched
+    // over the whole show, a read in all seventy episodes had every run left out and
+    // was never found — measured: found in 64 episodes, nothing in 65.
+    const numbers = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+    const spell = (n) => String(n).split('').map((digit) => numbers[Number(digit)]).join(' ');
+    const canned = {};
+    for (let n = 0; n < 70; n += 1) {
+      canned[`episode-${n}.mp3`] = whisperJson([
+        { from: 500, to: 13_000, text: READ },
+        { from: 13_600, to: 29_000, text: `Programme number ${spell(n)} talks about item ${spell(n * 7 + 3)} and topic ${spell(n * 13 + 11)}` },
+      ]);
+    }
+    const { show, dir } = await makeShow({ mode: 'review', minEpisodes: 2, whisper: cannedWhisper(canned) });
+    for (let n = 0; n < 70; n += 1) await writeFile(join(dir, `episode-${n}.mp3`), episodeBytes(n));
+    await server.scanner.scanAllNow('manual');
+
+    await server.adPipeline.processShow(show.id);
+
+    const reads = spoken(show.id).filter((row) => /acme/.test(row.text ?? ''));
+    assert.equal(reads.length, 1, `the read in every episode was not found once: ${reads.length} rows`);
+    assert.ok(reads[0].episode_count >= 20, `found in only ${reads[0].episode_count} episodes`);
+  });
+});
+
+describe('a boundary in the wrong half of an episode', () => {
+  it('does not cut a whole episode where the closing tag opens it instead', async () => {
+    // Measured on the show this was built for: the host reads the same sponsor tag to
+    // close one episode and open the next. A short episode is heard as a single window,
+    // so "the closing window" was the whole episode, "cut from these words to the end"
+    // matched at 0:00, and the cut asked for everything.
+    const TAG = 'This was your programme with Acme Bank helping those who build things Acme Bank success is in you';
+    const TALK = 'Today the council met again and argued about the bypass for most of the afternoon';
+    const canned = {
+      'episode-1.mp3': whisperJson([{ from: 500, to: 8_000, text: TAG }, { from: 9_000, to: 29_000, text: TALK }]),
+      'episode-2.mp3': whisperJson([{ from: 500, to: 20_000, text: TALK }, { from: 21_000, to: 29_500, text: TAG }]),
+    };
+    const { show, dir } = await makeShow({ mode: 'auto', whisper: cannedWhisper(canned), minEpisodes: 2 });
+    const opens = await addEpisode(dir, 1);
+    const closes = await addEpisode(dir, 2);
+    server.adDetect.addMarker({ showId: show.id, role: 'programme_ends', inclusive: true, rawText: TAG });
+
+    await server.adPipeline.processShow(show.id);
+
+    const boundary = server.adDetect.listSegments(show.id).find((row) => row.kind === 'boundary_words');
+    assert.ok(boundary, 'the boundary made no cuts at all');
+    const where = Object.fromEntries(boundary.occurrences.map((row) => [row.episode_id, row]));
+    assert.equal(where[opens.id], undefined, `the tag at the start cut ${JSON.stringify(where[opens.id])}`);
+    assert.ok(where[closes.id], 'the tag at the end was not cut');
+    assert.ok(where[closes.id].start_ms >= 15_000, `the closing cut starts at ${where[closes.id].start_ms}`);
+    assert.equal(server.episodes.get(opens.id).trim_status === 'failed', false, 'the opening episode failed to trim');
+  });
+
+  it('does not take the end of a programme to start in its first half', async () => {
+    // Three minutes, the tag said at one minute: cutting from there would take two
+    // thirds of the episode — under the cap on a boundary's share, so only the rule
+    // that an end belongs in the second half stops it.
+    const TAG = 'This was your programme with Acme Bank helping those who build things Acme Bank success is in you';
+    const TALK = 'Today the council met again and argued about the bypass for most of the afternoon';
+    const canned = {
+      'episode-1.mp3': whisperJson([
+        { from: 500, to: 55_000, text: TALK }, { from: 60_000, to: 70_000, text: TAG }, { from: 75_000, to: 175_000, text: TALK },
+      ]),
+      'episode-2.mp3': whisperJson([{ from: 500, to: 165_000, text: TALK }, { from: 168_000, to: 178_000, text: TAG }]),
+    };
+    const { show, dir } = await makeShow({ mode: 'auto', whisper: cannedWhisper(canned), minEpisodes: 2 });
+    server.db.prepare(`UPDATE shows SET ad_transcribe = 'whole' WHERE id = ?`).run(show.id);
+    for (const n of [1, 2]) await writeFile(join(dir, `episode-${n}.mp3`), stitch(segment(900_000 + n * 70_000, framesFor(180))));
+    await server.scanner.scanAllNow('manual');
+    const [early, late] = ['episode-1.mp3', 'episode-2.mp3'].map((name) => server.episodes.listByShow(show.id).find((row) => row.filename === name));
+    server.adDetect.addMarker({ showId: show.id, role: 'programme_ends', inclusive: true, rawText: TAG });
+
+    await server.adPipeline.processShow(show.id);
+
+    const boundary = server.adDetect.listSegments(show.id).find((row) => row.kind === 'boundary_words');
+    const where = Object.fromEntries((boundary?.occurrences ?? []).map((row) => [row.episode_id, row]));
+    assert.equal(where[early.id], undefined, `a tag at one minute of three cut ${JSON.stringify(where[early.id])}`);
+    assert.ok(where[late.id], 'a tag near the end was not cut');
   });
 });

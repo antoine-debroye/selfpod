@@ -62,23 +62,30 @@ const htmx = { 'hx-request': 'true' };
 const episodeNamed = (showId, name) => server.episodes.listByShow(showId).find((row) => row.filename === name);
 
 describe('the review card for words', () => {
-  it('shows the words, the cues that fired, and one sentence saying what happens next', async () => {
+  it('shows the cues that fired and one sentence saying what happens next, and the words on the episode', async () => {
     const show = await setUp({ canned: { 'episode-1.mp3': opening(READ, 1), 'episode-2.mp3': opening(READ_AGAIN, 2) } });
     const page = await server.get(`/shows/${show.slug}/adverts`);
     assert.equal(page.statusCode, 200);
     const html = page.body;
-    assert.match(html, /The same words in 2 episodes/);
-    assert.match(html, /data-tx-word="/, 'no words on the card');
-    assert.match(html, /tx__w--cut/, 'the cut is not marked in the words');
-    assert.match(html, /tx__w--context/, 'no context either side of the cut');
-    assert.match(html, /seg-cue">brought to you by</);
-    assert.match(html, /This sounds like a sponsor read — it says “brought to you by”/);
-    assert.match(html, /Remove it once and SelfPod cuts the same read from later episodes without asking/);
+    // One waiting stretch per episode, each saying why in one sentence that names the cue.
+    assert.equal((html.match(/class="stretch stretch--waiting"/g) ?? []).length, 2);
+    assert.match(html, /Sounds like a sponsor read — it says “brought to you by”/);
+    assert.match(html, /Remove it once and the same read is cut from later episodes/);
+    assert.match(html, /<button[^>]*>Remove<\/button>/);
+    assert.match(html, /<button[^>]*>Keep<\/button>/);
     assert.match(html, /sample\.mp3\?context=3/, 'the player has no context either side');
-    assert.match(html, /name="startWord"/);
-    assert.match(html, /name="endWord"/);
     // The page still obeys the content-security policy: no inline handlers.
     assert.doesNotMatch(html, /\son[a-z]+=/);
+
+    // The words themselves, with the waiting read marked, are on the episode's own page.
+    const episode = episodeNamed(show.id, 'episode-1.mp3');
+    const words = (await server.get(`/shows/${show.slug}/episodes/${episode.id}`)).body;
+    assert.match(words, /data-tx-word="/, 'no words on the episode page');
+    assert.match(words, /tx__w--candidate/, 'the waiting read is not marked in the words');
+    assert.match(words, /tx__w--cue/, 'the cue is not marked in the words');
+    assert.match(words, /name="startWord"/);
+    assert.match(words, /name="endWord"/);
+    assert.doesNotMatch(words, /\son[a-z]+=/);
   });
 
   it('says why an automatic cut was made, on the card and in the JSON', async () => {
@@ -87,15 +94,16 @@ describe('the review card for words', () => {
     const [read] = api.json().segments;
     assert.equal(read.status, 'approved');
     assert.equal(read.why.verdict, 'will_cut');
-    assert.match(read.why.sentence, /SelfPod cuts this on its own: it says “brought to you by”/);
+    assert.match(read.why.sentence, /Cut automatically: it says “brought to you by”/);
     assert.ok(read.cues.some((cue) => cue.id === 'brought_to_you_by'));
     assert.ok(read.excerpt.words.length > 10);
     assert.equal(typeof read.heardClearly, 'boolean');
     const page = await server.get(`/shows/${show.slug}/adverts`);
-    assert.match(page.body, /Removed automatically/);
-    // The button says the small thing; the line under it says what else it undoes.
-    assert.match(page.body, /<button[^>]*>Put it back<\/button>/);
-    assert.match(page.body, /and stop cutting these words/);
+    assert.match(page.body, /class="stretch__why">Cut automatically: it says “brought to you by”/);
+    assert.match(page.body, /Cut automatically · in 2 episodes/);
+    // Two ways back, and the button says which: this episode only, or everywhere for good.
+    assert.match(page.body, /<button[^>]*>Restore here<\/button>/);
+    assert.match(page.body, /<button[^>]*>Restore everywhere and stop<\/button>/);
   });
 
   it('moves the edges to the words you chose, and the words follow', async () => {
@@ -149,9 +157,10 @@ describe('what SelfPod heard, on the episode page', () => {
     assert.match(page.body, /What SelfPod heard/);
     assert.match(page.body, /The whole episode/);
     assert.match(page.body, /tx__w--candidate/, 'the waiting read is not highlighted');
-    assert.match(page.body, /Tell SelfPod about these words/);
-    assert.match(page.body, /This is an advert/);
-    assert.match(page.body, /The programme starts here/);
+    assert.match(page.body, /name="verdict"/);
+    assert.match(page.body, /an advert — remove it/);
+    assert.match(page.body, /where the programme starts/);
+    assert.match(page.body, /<button[^>]*>Teach<\/button>/);
 
     // Teach: the programme's first sentence is an advert too, apparently.
     const words = (await server.get(`/api/episodes/${first.id}/transcript`)).json().transcript.regions[0].words;
@@ -169,9 +178,9 @@ describe('what SelfPod heard, on the episode page', () => {
     const again = await server.get(`/shows/${show.slug}/episodes/${first.id}`);
     assert.match(again.body, /tx__w--approved/, 'the taught words are not struck through');
     // The cut itself is listed in the Adverts card above the words.
-    assert.match(again.body, /Removed from this episode/);
-    assert.match(again.body, /ep-ad__at mono">0:1\d–0:20/);
-    assert.match(again.body, /removed<\/strong> from what your subscribers download/);
+    assert.match(again.body, /class="stretch stretch--cut"/);
+    assert.match(again.body, /stretch__at mono">0:1\d–0:20/);
+    assert.match(again.body, /removed<\/strong>/);
   });
 
   it('turns chosen words into a boundary, and shows the boundary on the review page', async () => {
@@ -200,13 +209,14 @@ describe('what SelfPod heard, on the episode page', () => {
     assert.equal(boundary.episode_count, 2);
 
     const page = await server.get(`/shows/${show.slug}/adverts`);
-    assert.match(page.body, /The boundary you set/);
-    assert.match(page.body, /Everything before “Vous écoutez RMC” is cut, as you asked/);
-    assert.match(page.body, /<button[^>]*>Forget it<\/button>/);
-    assert.match(page.body, /and put back everything it cut/);
+    assert.match(page.body, /rule__title">“Vous écoutez RMC”/);
+    assert.match(page.body, /The programme starts when it says this · heard in 2 of 2/);
+    assert.match(page.body, /Before “Vous écoutez RMC” — the boundary you set/);
+    assert.ok(page.body.includes(`/ad-markers/${markers[0].id}/remove`), 'no way to forget the boundary');
+    assert.match(page.body, /<button[^>]*>Forget<\/button>/);
     const episodePage = await server.get(`/shows/${show.slug}/episodes/${first.id}`);
     assert.match(episodePage.body, /tx__w--approved/);
-    assert.match(episodePage.body, /Everything before/);
+    assert.match(episodePage.body, /Before “Vous écoutez RMC”/);
     const adverts = (await server.get(`/api/episodes/${first.id}/transcript`)).json().adverts;
     assert.equal(adverts.stage, 'cut_before_marker');
     assert.match(adverts.sentence, /Cut the 0:09 before “Vous écoutez RMC”, as you asked/);
@@ -255,7 +265,7 @@ describe('empty states', () => {
     server.db.prepare("UPDATE shows SET ad_trim_mode = 'review', ad_auto_min_episodes = 2 WHERE id = ?").run(show.id);
     await server.adPipeline.processShow(show.id);
     const page = await server.get(`/shows/${show.slug}/adverts`);
-    assert.match(page.body, /SelfPod cannot read the words in this show's episodes/);
+    assert.match(page.body, /SelfPod cannot read the words in this show(?:'|&#39;)s episodes/);
     assert.doesNotMatch(page.body, /still listening/);
     const episode = server.episodes.listByShow(show.id)[0];
     const episodePage = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
@@ -318,7 +328,7 @@ describe('adverts at the end', () => {
     const adverts = (await server.get(`/api/episodes/${first.id}/transcript`)).json().adverts;
     assert.equal(adverts.stage, 'cut_after_marker');
     assert.match(adverts.sentence, /Cut everything from 0:(19|20) — “C'était votre émission/);
-    assert.match((await server.get(`/shows/${show.slug}/adverts`)).body, /Everything from “C(?:'|&#39;)était votre émission[^”]*” to the end is cut, as you asked/);
+    assert.match((await server.get(`/shows/${show.slug}/adverts`)).body, /From “C(?:'|&#39;)était votre émission[^”]*” to the end — the boundary you set/);
   });
 
   it('keeps the sign-off and cuts what follows when told the programme ends there', async () => {
@@ -580,17 +590,19 @@ describe('the Adverts card on an episode page', () => {
     const episode = episodeNamed(show.id, 'episode-1.mp3');
 
     const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
-    assert.match(page.body, /removed<\/strong> from what your subscribers download/);
+    assert.match(page.body, /removed<\/strong>/);
     assert.match(page.body, /On your share/);
     assert.match(page.body, /Published/);
-    assert.match(page.body, /Removed from this episode/);
-    // The identity of the cut, its reason, and a way to hear it — the same wording the
-    // show's page uses for the same decision.
-    assert.match(page.body, /heard in the words/);
-    assert.match(page.body, /brought to you by/);
+    assert.match(page.body, /class="stretch stretch--cut"/);
+    // The cut, its reason, and a way to hear it — the same wording the show's page uses
+    // for the same decision.
+    assert.match(page.body, /stretch__why">The same words as an advert you removed\./);
     assert.match(page.body, /sample\.mp3\?context=3/);
-    assert.match(page.body, /Put it back/);
-    assert.match(page.body, /and stop cutting these words/);
+    assert.match(page.body, /data-play-from="\d+"/);
+    assert.match(page.body, /<button[^>]*>Restore here<\/button>/);
+    assert.match(page.body, /<button[^>]*>Restore everywhere and stop<\/button>/);
+    // Both copies can be heard: what subscribers get, and the file on the share.
+    assert.ok(page.body.includes(`/api/episodes/${episode.id}/audio?copy=original`));
     assert.match(page.body, /All adverts in this show/);
   });
 
@@ -600,7 +612,7 @@ describe('the Adverts card on an episode page', () => {
     assert.ok(server.episodes.get(episode.id).publish_hold, 'nothing is held to test with');
     const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
     assert.match(page.body, /Not in your feed yet: SelfPod is waiting for you to decide/);
-    assert.match(page.body, /Waiting for you/);
+    assert.match(page.body, /class="stretch stretch--waiting"/);
     // And it can be decided from here, without going to the show's page.
     assert.match(page.body, /name="status" value="approved"/);
     assert.match(page.body, /returnTo" value="episode:/);
@@ -617,7 +629,7 @@ describe('the Adverts card on an episode page', () => {
     );
     assert.equal(response.statusCode, 200);
     assert.match(response.body, /id="episode-adverts"/, 'the card did not come back');
-    assert.match(response.body, /Removed from this episode/);
+    assert.match(response.body, /class="stretch stretch--cut"/);
     assert.match(response.body, /What SelfPod heard/, 'the words came back without the card');
     assert.equal(server.adDetect.getSegment(read.id).status, SEGMENT_STATUS.APPROVED);
   });
@@ -626,9 +638,9 @@ describe('the Adverts card on an episode page', () => {
     const show = await setUp({ canned: { 'episode-1.mp3': opening('Just the programme today, nothing else to report at all', 1), 'episode-2.mp3': opening('A different programme entirely, with different words in it', 2) } });
     const episode = episodeNamed(show.id, 'episode-1.mp3');
     const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
-    assert.match(page.body, /Nothing was removed\./);
-    assert.match(page.body, /heard no sponsor read/);
-    assert.doesNotMatch(page.body, /Not looked at yet/);
+    assert.match(page.body, /<strong>Nothing to cut\.<\/strong>/);
+    assert.match(page.body, /What SelfPod heard/);
+    assert.doesNotMatch(page.body, /Not listened to yet/);
   });
 
   it('says the show is not using the feature rather than showing an empty card', async () => {
@@ -637,6 +649,6 @@ describe('the Adverts card on an episode page', () => {
     const episode = episodeNamed(show.id, 'episode-1.mp3');
     const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
     assert.match(page.body, /SelfPod is not looking for adverts in this show/);
-    assert.doesNotMatch(page.body, /Waiting for you/);
+    assert.doesNotMatch(page.body, /stretch--waiting/);
   });
 });

@@ -64,7 +64,7 @@ describe('the adverts page', () => {
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
-    assert.match(body, /cannot tell a sponsor read\s*\n?\s*from a theme tune/i);
+    assert.match(body, /a theme or a read; SelfPod cannot tell/i);
     assert.ok(!/\bdetected ad\b|\bthis is an ad\b/i.test(body), 'it claimed to know what an advert is');
   });
 
@@ -81,13 +81,14 @@ describe('the adverts page', () => {
     assert.match(body, /preload="none"/);
   });
 
-  it('describes where the audio sits, in words', async () => {
+  it('says where the audio sits in each episode', async () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
-    assert.match(body, /every time|very start|very end|Between/i);
+    // A 40-second stretch 45 seconds in, stated as a time rather than left to the bar.
+    assert.match(body, /stretch__at mono">0:4\d–1:2\d</);
   });
 
   it('says how many episodes are being held, and why', async () => {
@@ -96,8 +97,9 @@ describe('the adverts page', () => {
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
-    assert.match(body, /3 episodes are waiting/i);
-    assert.match(body, /published as soon as you have decided/i);
+    assert.match(body, /3 episodes are not in your feed yet/i);
+    assert.match(body, /they go out once you have decided/i);
+    assert.match(body, /<dt>Held<\/dt><dd>3<\/dd>/);
   });
 });
 
@@ -117,10 +119,8 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
-    assert.match(body, /compared 3 episodes and found no repeated audio/i);
-    assert.ok(!/nothing found yet/i.test(body), 'it told them to keep waiting');
-    // And it points at the detector that does still apply.
-    assert.match(body, /fetching one episode twice/i);
+    assert.match(body, /Looked at 3 episodes and found nothing to cut/i);
+    assert.ok(!/Nothing to cut yet/i.test(body), 'it told them to keep waiting');
   });
 
   it('does not announce a verdict before it has listened to anything', async () => {
@@ -141,10 +141,10 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
     assert.ok(
-      !/found no repeated audio/i.test(body),
+      !/found nothing to cut/i.test(body),
       'it declared a result before comparing anything',
     );
-    assert.match(body, /nothing found yet/i);
+    assert.match(body, /Nothing to cut yet — SelfPod needs a few episodes to compare/i);
   });
 
   it('still says "not yet" when it genuinely has not looked at enough', async () => {
@@ -155,8 +155,8 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
 
-    assert.match(body, /nothing found yet/i);
-    assert.ok(!/found no repeated audio/i.test(body));
+    assert.match(body, /Nothing to cut yet/i);
+    assert.ok(!/found nothing to cut/i.test(body));
   });
 });
 
@@ -195,8 +195,9 @@ describe('deciding from the page', () => {
     });
 
     assert.equal(response.statusCode, 200);
-    assert.match(response.body, /Already decided/);
-    assert.match(response.body, /Removed/);
+    assert.match(response.body, /id="ad-panel"/);
+    assert.match(response.body, /class="stretch__state">Cut</);
+    assert.match(response.body, /<dt>Episodes cut<\/dt><dd>3<\/dd>/);
     for (const episode of server.episodes.listByShow(show.id)) {
       assert.ok(episode.trimmed_filename, `${episode.filename} was not cut`);
     }
@@ -224,13 +225,14 @@ describe('deciding from the page', () => {
     await htmxPost(`/ui/shows/${show.slug}/ad-segments/${found.id}`, { status: SEGMENT_STATUS.APPROVED });
 
     const body = (await page(`/shows/${show.slug}/adverts`)).body;
-    assert.match(body, /Put it back/);
+    assert.ok(body.includes(`/ui/shows/${show.slug}/segments/${found.id}/stop`), 'no way to put it back everywhere');
+    assert.match(body, /<button[^>]*>Restore everywhere and stop<\/button>/);
 
-    const response = await htmxPost(`/ui/shows/${show.slug}/ad-segments/${found.id}`, {
-      status: SEGMENT_STATUS.REJECTED,
-    });
+    const response = await htmxPost(`/ui/shows/${show.slug}/segments/${found.id}/stop`, {});
 
-    assert.match(response.body, /Kept/);
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Kept \(1\)/);
+    assert.equal(server.adDetect.getSegment(found.id).status, SEGMENT_STATUS.REJECTED);
     assert.equal(
       server.episodes.get(server.episodes.listByShow(show.id)[0].id).trimmed_filename,
       null,
@@ -269,7 +271,7 @@ describe('changing what SelfPod does', () => {
 
     assert.equal(response.statusCode, 200);
     assert.equal(server.episodes.counts(show.id).held, 0);
-    assert.match(response.body, /not looking for repeated audio/i);
+    assert.match(response.body, /not looking for adverts in this show/i);
   });
 
   it('says how many episodes came back, when the form is a plain POST', async () => {

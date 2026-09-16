@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 
-import { runWhisper, timeoutFor } from '../../src/lib/whisper-runner.js';
+import { deviceFromLog, runWhisper, timeoutFor } from '../../src/lib/whisper-runner.js';
 import { wordsFromWhisper } from '../../src/lib/transcript.js';
 import { pickWhisperBinary } from '../../src/lib/cpu-features.js';
 
@@ -46,6 +46,19 @@ describe('running whisper-cli', () => {
     assert.equal(sentences[0].words[0].w, 'Dans');
     // The JSON file is cleaned up behind it.
     await assert.rejects(readFile(join(dir, 'out.json')));
+  });
+
+  it('lowers the recogniser only as far as it is told, and not at all at zero', async () => {
+    // Reads its own priority after a moment (the runner lowers it just after starting
+    // it) and writes that as the transcript.
+    const binary = await stub(
+      'nice.sh',
+      'while [ $# -gt 0 ]; do if [ "$1" = "--output-file" ]; then out="$2"; fi; shift; done; sleep 0.4; printf \'{"transcription": [], "nice": %s}\' "$(ps -o nice= -p $$ | tr -d \' \')" > "$out.json"',
+    );
+    const polite = await runWhisper({ binary, model: 'm.bin', wavPath: 'in.wav', outputPrefix: join(dir, 'polite'), nice: 10 });
+    assert.equal(polite.json.nice, 10);
+    const normal = await runWhisper({ binary, model: 'm.bin', wavPath: 'in.wav', outputPrefix: join(dir, 'normal'), nice: 0 });
+    assert.equal(normal.json.nice, 0);
   });
 
   it('reports a missing binary as such', async () => {
@@ -95,5 +108,31 @@ describe('choosing the binary for the CPU', () => {
     assert.equal(pickWhisperBinary('/app/whisper', { arch: 'x64', cpuinfo: celeron }), '/app/whisper/whisper-cli-v2');
     assert.equal(pickWhisperBinary('/app/whisper', { arch: 'x64', cpuinfo: '' }), '/app/whisper/whisper-cli-v2');
     assert.equal(pickWhisperBinary('/app/whisper', { arch: 'arm64' }), '/app/whisper/whisper-cli');
+  });
+});
+
+describe('reading which device a run used', () => {
+  // Captured from a real whisper-cli (1.9.2, Metal) run with and without -ng. The CUDA
+  // build names its device CUDA0 on the same line.
+  const withGpu = [
+    'whisper_backend_init_gpu: device 0: BLAS (type: 3)',
+    'whisper_backend_init_gpu: device 1: MTL0 (type: 1)',
+    'whisper_backend_init_gpu: found GPU device 1: MTL0 (type: 1, cnt: 0)',
+    'whisper_backend_init_gpu: using MTL0 backend',
+    'whisper_backend_init: using BLAS backend',
+  ].join('\n');
+  const withoutGpu = ['whisper_backend_init_gpu: no GPU found', 'whisper_backend_init: using BLAS backend'].join('\n');
+
+  it('names the GPU when one was used', () => {
+    assert.deepEqual(deviceFromLog(withGpu), { accelerator: 'gpu', device: 'MTL0' });
+    assert.deepEqual(deviceFromLog('whisper_backend_init_gpu: using CUDA0 backend'), { accelerator: 'gpu', device: 'CUDA0' });
+  });
+
+  it('says CPU when whisper found no GPU, and not a CPU backend mistaken for one', () => {
+    assert.deepEqual(deviceFromLog(withoutGpu), { accelerator: 'cpu', device: null });
+  });
+
+  it('says nothing it cannot read', () => {
+    assert.deepEqual(deviceFromLog(''), { accelerator: null, device: null });
   });
 });
