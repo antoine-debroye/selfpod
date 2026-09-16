@@ -165,7 +165,7 @@ describe('putting a cut back', () => {
     const response = await htmxPost(url);
 
     assert.equal(response.statusCode, 200);
-    assert.match(response.body, /id="ad-panel"/);
+    assert.match(response.body, /id="cuts-panel"/);
     const after = byName(show.id);
     assert.equal(after['episode-1.mp3'].trimmed_filename, null, 'the restored episode is still cut');
     assert.equal(after['episode-0.mp3'].trimmed_filename, before['episode-0.mp3'].trimmed_filename, 'another episode was re-cut');
@@ -271,7 +271,7 @@ describe('the work strip', () => {
     const show = await makeShow({ process: false });
 
     const waiting = await page(`/shows/${show.slug}/adverts`);
-    assert.match(waiting, /<div id="ad-work"[^>]*sse-swap="ad-work-[^"]+"[^>]*>/);
+    assert.match(waiting, /<div id="cuts-work"[^>]*sse-swap="cuts-work-[^"]+"[^>]*>/);
     assert.match(waiting, /3 episodes to read/);
     assert.ok(waiting.includes(`hx-get="/ui/shows/${show.slug}/ad-work" hx-trigger="load delay:10s"`), 'no poll while work is owed');
     const strip = await server.get(`/ui/shows/${show.slug}/ad-work`);
@@ -281,7 +281,7 @@ describe('the work strip', () => {
     await server.adPipeline.processShow(show.id);
 
     const done = await page(`/shows/${show.slug}/adverts`);
-    assert.match(done, /<div id="ad-work"[^>]*hx-swap="innerHTML"><\/div>/, 'the strip is gone, or not empty');
+    assert.match(done, /<div id="cuts-work"[^>]*hx-swap="innerHTML"><\/div>/, 'the strip is gone, or not empty');
     assert.equal((await server.get(`/ui/shows/${show.slug}/ad-work`)).body, '');
     assert.equal((await server.get(`/api/shows/${show.id}/ad-work`)).json().sentence, '');
   });
@@ -465,8 +465,8 @@ describe('the words on these pages', () => {
 
     const adverts = await page(`/shows/${show.slug}/adverts`);
     const episodePage = await page(`/shows/${show.slug}/episodes/${episodes['episode-0.mp3'].id}`);
-    const panel = adverts.slice(adverts.indexOf('<div id="ad-panel"'));
-    const cardStart = episodePage.indexOf('<section class="form-card" id="episode-adverts"');
+    const panel = adverts.slice(adverts.indexOf('<div id="cuts-panel"'));
+    const cardStart = episodePage.indexOf('<section class="form-card" id="episode-cuts"');
     const card = episodePage.slice(cardStart, episodePage.indexOf('</section>', cardStart));
 
     const labels = [...submitLabels(panel), ...submitLabels(card)];

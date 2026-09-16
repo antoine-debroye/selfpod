@@ -99,7 +99,7 @@ export default async function eventRoutes(fastify, { events, logger, shows, adPi
       } catch (err) {
         logger?.debug({ err }, 'could not work out what a show owes for the live strip');
       }
-      send(`ad-work-${show.id}`, workStripHtml(show, owed));
+      send(`cuts-work-${show.id}`, workStripHtml(show, owed));
     };
     /* A trigger only: the panel, the episode table, the card and the episode page each
        fetch themselves again when it arrives. */

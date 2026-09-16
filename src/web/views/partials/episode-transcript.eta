@@ -10,7 +10,7 @@
   const embedded = it.embedded === true;
   const allWords = (tx.regions ?? []).flatMap((region) => region.words);
 %>
-<% if (embedded) { %><div class="ep-ad__heard" id="episode-transcript"><% } else { %><section class="form-card" id="episode-transcript"
+<% if (embedded) { %><div class="ep-cuts__heard" id="episode-transcript"><% } else { %><section class="form-card" id="episode-transcript"
          hx-get="<%= base %>"
          hx-trigger="sse:transcript-<%= episode.id %> from:body<%= tx.state === 'listening' ? ', load delay:10s' : '' %>"
          hx-swap="outerHTML"><% } %>
@@ -39,7 +39,7 @@
       <% } %>
       <% if (allWords.length) { %>
         <form class="tx__teach" method="post" action="<%= base %>/teach" hx-post="<%= base %>/teach"
-              hx-target="<%= embedded ? '#episode-adverts' : '#episode-transcript' %>" hx-swap="outerHTML">
+              hx-target="<%= embedded ? '#episode-cuts' : '#episode-transcript' %>" hx-swap="outerHTML">
           <div class="tx__range muted" data-tx-range aria-live="polite"></div>
           <div class="tx__teach-row">
             <label for="teach-start-<%= episode.id %>">From</label>

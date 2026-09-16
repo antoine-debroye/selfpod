@@ -8,7 +8,7 @@
   const base = `/ui/episodes/${encodeURIComponent(episode.id)}`;
   const listened = ad.listened;
 %>
-<section class="form-card" id="episode-adverts"
+<section class="form-card" id="episode-cuts"
          hx-get="<%= base %>/adverts"
          hx-trigger="sse:transcript-<%= episode.id %> from:body, sse:ad-changed-<%= show.id %> from:body<%= listened.state === 'listening' ? ', load delay:10s' : '' %>"
          hx-swap="outerHTML">
@@ -24,32 +24,32 @@
     <% if (ad.trim.failed) { %>
       <div class="notice warn" role="status"><div><%= ad.trim.failedSentence %></div></div>
     <% } else if (ad.hold) { %>
-      <div class="notice warn ep-ad__hold" role="status"><div><%= ad.hold.sentence %></div></div>
+      <div class="notice warn ep-cuts__hold" role="status"><div><%= ad.hold.sentence %></div></div>
     <% } %>
 
-    <div class="ep-ad__summary">
+    <div class="ep-cuts__summary">
       <% if (ad.trim.isTrimmed && ad.trim.savedSeconds) { %>
-        <div class="ep-ad__headline"><strong><%= ad.trim.savedLabel %> removed</strong></div>
-        <dl class="ep-ad__figures">
+        <div class="ep-cuts__headline"><strong><%= ad.trim.savedLabel %> removed</strong></div>
+        <dl class="ep-cuts__figures">
           <div><dt>On your share</dt><dd class="mono"><%= it.helpers.formatDuration(ad.trim.beforeSeconds) %> · <%= it.helpers.formatBytes(ad.trim.beforeBytes) %></dd></div>
           <div><dt>Published</dt><dd class="mono"><%= it.helpers.formatDuration(ad.trim.afterSeconds) %> · <%= it.helpers.formatBytes(ad.trim.afterBytes) %></dd></div>
           <div><dt>Cuts</dt><dd><%= ad.cut.length %></dd></div>
         </dl>
       <% } else if (ad.bar && ad.bar.state) { %>
-        <div class="ep-ad__headline"><strong><%= ad.bar.state.caption %></strong></div>
+        <div class="ep-cuts__headline"><strong><%= ad.bar.state.caption %></strong></div>
       <% } %>
     </div>
 
     <% if (ad.bar) { %>
-      <%~ include('./cut-bar.eta', { bar: ad.bar, target: '#episode-adverts', returnTo: `episode:${episode.id}` }) %>
+      <%~ include('./cut-bar.eta', { bar: ad.bar, target: '#episode-cuts', returnTo: `episode:${episode.id}` }) %>
     <% } %>
 
-    <div class="ep-ad__players">
-      <div class="ep-ad__player">
+    <div class="ep-cuts__players">
+      <div class="ep-cuts__player">
         <div class="ds-caption">Published copy</div>
         <audio controls preload="none" src="<%= ad.publishedAudioUrl %>"></audio>
       </div>
-      <div class="ep-ad__player">
+      <div class="ep-cuts__player">
         <div class="ds-caption">Original</div>
         <audio controls preload="none" src="<%= ad.originalAudioUrl %>" data-original-player></audio>
       </div>
@@ -57,7 +57,7 @@
 
     <%~ include('./teach-range.eta', { adverts: ad, episode }) %>
 
-    <p class="hint ep-ad__more"><a href="<%= ad.advertsUrl %>#ep-<%= episode.id %>">All adverts in this show</a></p>
+    <p class="hint ep-cuts__more"><a href="<%= ad.advertsUrl %>#ep-<%= episode.id %>">All adverts in this show</a></p>
   <% } %>
 
   <%~ include('./episode-transcript.eta', { transcript: listened, show, episode, helpers: it.helpers, embedded: true }) %>

@@ -98,7 +98,7 @@ describe('the jingle proposal card', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded', 'hx-request': 'true' },
     });
     assert.equal(response.statusCode, 200, 'an htmx request should re-render the panel, not redirect');
-    assert.ok(response.body.includes('id="ad-panel"'), 'the panel did not come back');
+    assert.ok(response.body.includes('id="cuts-panel"'), 'the panel did not come back');
     assert.ok(!response.body.includes('Is this the station jingle?'), 'the dismissed proposal is still shown');
 
     for (const episode of server.episodes.listByShow(show.id)) {

@@ -440,7 +440,7 @@
     var button = event.target.closest('[data-pick-from-player]');
     if (!button) return;
     var form = button.closest('form');
-    var card = button.closest('#episode-adverts') || document;
+    var card = button.closest('#episode-cuts') || document;
     // Whichever copy of the original was listened to last: the player under the bar,
     // or the one a ▶ on a stretch used. Reading only the first would fill in 0:00 for
     // someone who found the moment by pressing ▶.

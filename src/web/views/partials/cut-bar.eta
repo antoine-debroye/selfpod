@@ -3,7 +3,7 @@
      waiting or restored drawn where it is. Positions are computed on the server
      (lib/cut-bar.js), so the bar is right with script off. */
   const bar = it.bar;
-  const target = it.target ?? '#ad-panel';
+  const target = it.target ?? '#cuts-panel';
 %>
 <article class="cutbar" id="ep-<%= bar.id %>" data-cutbar>
   <header class="cutbar__head">

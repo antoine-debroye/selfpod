@@ -68,7 +68,7 @@ export function describeWork(owed) {
 export function workStripHtml(show, owed) {
   const sentence = describeWork(owed);
   if (!sentence) return '';
-  return `<span class="ad-work__text" hx-get="/ui/shows/${escapeHtml(encodeURIComponent(show.slug))}/ad-work" hx-trigger="load delay:10s" hx-target="#ad-work" hx-swap="innerHTML">${escapeHtml(sentence)}</span>`;
+  return `<span class="cuts-work__text" hx-get="/ui/shows/${escapeHtml(encodeURIComponent(show.slug))}/ad-work" hx-trigger="load delay:10s" hx-target="#cuts-work" hx-swap="innerHTML">${escapeHtml(sentence)}</span>`;
 }
 
 export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }) {

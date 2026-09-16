@@ -195,7 +195,7 @@ describe('deciding from the page', () => {
     });
 
     assert.equal(response.statusCode, 200);
-    assert.match(response.body, /id="ad-panel"/);
+    assert.match(response.body, /id="cuts-panel"/);
     assert.match(response.body, /class="stretch__state">Cut</);
     assert.match(response.body, /<dt>Episodes cut<\/dt><dd>3<\/dd>/);
     for (const episode of server.episodes.listByShow(show.id)) {

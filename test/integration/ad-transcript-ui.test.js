@@ -628,7 +628,7 @@ describe('the Adverts card on an episode page', () => {
       htmx,
     );
     assert.equal(response.statusCode, 200);
-    assert.match(response.body, /id="episode-adverts"/, 'the card did not come back');
+    assert.match(response.body, /id="episode-cuts"/, 'the card did not come back');
     assert.match(response.body, /class="stretch stretch--cut"/);
     assert.match(response.body, /What SelfPod heard/, 'the words came back without the card');
     assert.equal(server.adDetect.getSegment(read.id).status, SEGMENT_STATUS.APPROVED);

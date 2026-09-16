@@ -6,7 +6,7 @@
   const episode = it.episode;
 %>
 <form class="teach-range" method="post" action="<%= ad.teachRangeUrl %>"
-      hx-post="<%= ad.teachRangeUrl %>" hx-target="#episode-adverts" hx-swap="outerHTML"
+      hx-post="<%= ad.teachRangeUrl %>" hx-target="#episode-cuts" hx-swap="outerHTML"
       data-cutbar-pick-form>
   <div class="teach-range__row">
     <label for="range-from-<%= episode.id %>">From</label>

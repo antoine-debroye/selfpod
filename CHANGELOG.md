@@ -7,6 +7,17 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## 1.9.1 — 2026-09-16
+
+### Fixed
+
+- **The Adverts page was blank for anyone with an ad blocker.** 1.9.0 named the panel on that
+  page `ad-panel` and its notes `ad-note`. EasyList, which uBlock Origin, AdGuard and most other
+  blockers load by default, hides any element with those names, so the page arrived complete and
+  the browser hid it. Nothing was lost: every cut, rule and decision was there all along. The
+  names on these pages no longer contain "ad", "advert" or "sponsor" as a word, and a test now
+  fails if one comes back. The same change covers the cuts on the episode page and the dashboard.
+
 ## 1.9.0 — 2026-09-16
 
 ### Changed — adverts you can see, and put back
