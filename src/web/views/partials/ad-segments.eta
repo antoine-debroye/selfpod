@@ -44,6 +44,45 @@
     </div>
   <% } %>
 
+  <%
+    /*
+     * A jingle found by its sound, not its words (spec §19.6) — the one card that
+     * appears whatever `ad_transcribe` is set to, because finding it needs no
+     * transcript at all. Confirming it is the one-press "yes, that's the jingle" this
+     * feature is built around; a proposal on its own has cut nothing.
+     */
+    const anchor = it.anchor ?? null;
+  %>
+  <% if (!off && anchor && !anchor.confirmed) { %>
+    <div class="form-card">
+      <p><strong>Is this the jingle?</strong> <%= anchor.sentence %></p>
+      <% if (anchor.exemplarEpisodeId) { %>
+        <audio controls preload="none" src="/api/ad-anchors/<%= anchor.id %>/sample.mp3?context=2"></audio>
+      <% } %>
+      <div class="seg-actions">
+        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/confirm"
+              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/confirm"
+              hx-target="#ad-segments" hx-swap="outerHTML" class="inline-form">
+          <button class="btn btn-sm" type="submit">Yes, cut everything before it</button>
+        </form>
+        <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/dismiss"
+              hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/dismiss"
+              hx-target="#ad-segments" hx-swap="outerHTML" class="inline-form">
+          <button class="btn btn-ghost btn-sm" type="submit">No, that's not the jingle</button>
+        </form>
+      </div>
+    </div>
+  <% } else if (!off && anchor && anchor.confirmed) { %>
+    <div class="notice" role="status">
+      <strong>Listening for the station jingle.</strong> <%= anchor.sentence ?? 'Confirmed.' %>
+      <form method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/remove"
+            hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/ad-anchors/<%= anchor.id %>/remove"
+            hx-target="#ad-segments" hx-swap="outerHTML" class="inline-form">
+        <button class="btn btn-ghost btn-xs" type="submit">Forget it</button>
+      </form>
+    </div>
+  <% } %>
+
   <% if (off) { %>
     <div class="empty">
       SelfPod is not looking for repeated audio in this show. Your episodes are

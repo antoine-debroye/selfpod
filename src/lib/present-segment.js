@@ -25,6 +25,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
   const positionLabel = describePosition(occurrences, episodes);
   const spoken = segment.source === SEGMENT_SOURCES.TRANSCRIPT || Boolean(segment.text);
   const isMarker = String(segment.signature ?? '').startsWith('marker:');
+  const isAnchor = String(segment.signature ?? '').startsWith('anchor:');
   const cues = parseCues(segment.cues);
 
   /*
@@ -59,7 +60,9 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
      */
     sourceLabel: isMarker
       ? 'The boundary you set'
-      : segment.source === SEGMENT_SOURCES.DIFF
+      : isAnchor
+        ? 'The station jingle'
+        : segment.source === SEGMENT_SOURCES.DIFF
         ? 'Changed between two downloads of the same episode'
         : segment.source === SEGMENT_SOURCES.TRANSCRIPT
           ? segment.episode_count > 1
@@ -79,6 +82,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
     /* ---- the words (spec §19.6) ---- */
     spoken,
     isMarker,
+    isAnchor,
     text: segment.text ?? null,
     rawText: segment.raw_text ?? null,
     language: segment.language ?? null,
@@ -89,7 +93,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
     // test that refuses a key called "confidence" for exactly that reason.
     heardClearly: confidence === null ? null : confidence >= LOW_CONFIDENCE,
     /** What SelfPod is going to do, and why, in one sentence. Only for what was heard. */
-    why: spoken ? describeVerdict(segment, { mode, positionLabel, confidence, occurrences }) : null,
+    why: spoken || isAnchor ? describeVerdict(segment, { mode, positionLabel, confidence, occurrences }) : null,
     excerpt,
     contextSampleUrl: exemplarOccurrence ? `/api/ad-segments/${segment.id}/sample.mp3?context=3` : null,
     exemplar: segment.exemplar_episode_id

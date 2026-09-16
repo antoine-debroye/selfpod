@@ -45,7 +45,42 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
     };
   }
 
+  /** The one anchor worth showing: confirmed first, else the newest not-yet-dismissed proposal. */
+  function currentAnchorFor(showId) {
+    const rows = adDetect.listAnchors(showId).filter((row) => !row.dismissed_at);
+    return rows.find((row) => row.confirmed_at) ?? rows[rows.length - 1] ?? null;
+  }
+
+  /**
+   * What the page (and the API) say about the jingle SelfPod is listening for —
+   * built here so a confirmed-or-not proposal is described the same way wherever it
+   * appears, the same reason everything else in this file exists.
+   */
+  function presentAnchor(anchor) {
+    if (!anchor) return null;
+    const summary = adDetect.anchorSummary(anchor.id);
+    return {
+      id: anchor.id,
+      origin: anchor.origin,
+      confirmed: Boolean(anchor.confirmed_at),
+      markerId: anchor.marker_id,
+      heard: summary.heard,
+      missed: summary.missed,
+      checked: summary.total,
+      exemplarEpisodeId: anchor.exemplar_episode_id,
+      createdAt: anchor.created_at,
+      sentence: !anchor.confirmed_at
+        ? `Every episode has the same few seconds near the start, at a different point each time — which is what a station jingle behind a changing pre-roll sounds like. Confirm it and SelfPod will cut whatever comes before it, every day, without hearing the words.`
+        : summary.total
+          ? `Heard in ${summary.heard} of ${summary.total} episode${summary.total === 1 ? '' : 's'} checked.`
+          : null,
+    };
+  }
+
   const api = {
+    currentAnchorFor,
+    presentAnchor,
+
     /** The context behind the review panel and the Adverts page. */
     async segmentsContext(show) {
       const rows = adDetect.listSegments(show.id);
@@ -79,6 +114,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
         minEpisodes: show.ad_auto_min_episodes ?? 3,
         held: episodes.counts(show.id).held,
         segments,
+        anchor: presentAnchor(currentAnchorFor(show.id)),
         listening,
         listen: {
           headMinutes: Math.round((show.ad_transcribe_head_seconds ?? 300) / 60),
@@ -321,6 +357,8 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
         pending: engineState() === 'ready' && Boolean(episode.publish_hold) && Boolean(transcriber?.needsTranscript?.(episode, show)),
         engineMissing: engineState() === 'missing' || engineState() === 'failing',
         listenLabel: describeListenScope(show),
+        anchorStatus: adDetect.anchorStatusFor(episode.id),
+        anchorCut: adDetect.anchorCutFor(episode.id),
       });
     },
 
