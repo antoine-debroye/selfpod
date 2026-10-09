@@ -138,6 +138,30 @@ changes what your listeners see, it says so.
   technology, the current breadcrumb is marked, and a refused sign-in puts the cursor on the
   password.
 
+### Fixed — the statistics, the rest of the way
+
+- **The day boundaries were an hour out on clock-change days in Sydney, Auckland, Lord
+  Howe and Santiago.** Local midnight was found by probing the zone's offset once, at a
+  moment ten or eleven hours later than the real one — on the far side of a 02:00 change.
+  A second probe lands it. London and New York were never affected, and every day of a
+  year in eight zones is now checked by a test.
+- **Deleting an episode no longer deletes its history.** The request log cascaded away
+  with the episode row, so the show's and the instance's totals shrank. The rows stay,
+  and the log says "An episode since deleted" where the title was. Removing a show still
+  removes its log, as it should.
+- **"vs the previous 30 days" compares like with like.** The current period runs to
+  tomorrow and so held twenty-nine days and a morning, measured against thirty whole
+  days: every card read "down" until the evening. The previous period is now measured
+  to the same point, and the card says so.
+- **Filtering the statistics page to a show filters the whole page.** The link from a
+  show's page landed on instance-wide cards, chart and tables above a show-only log. Now
+  every figure follows the show, with a note and a link back to every show.
+- **"Failed requests" and "Failures only" agree.** The card counted only audio that
+  failed; the log showed every failure, a cover that would not serve included. Both now
+  count every kind. Bytes and "episodes fetched" are still audio only.
+- **The CSV holds every row.** It stopped quietly at fifty thousand while the page
+  promised all of them; it is now streamed, batch by batch, with no ceiling.
+
 ### Changed — the advert pass no longer gets in the way of listeners
 
 - **Reading an episode no longer stalls everything else.** Decoding an hour-long MP3 to

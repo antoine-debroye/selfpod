@@ -2,7 +2,9 @@
   const o = it.overview;
   const rows = it.showStats || [];
   const busiest = it.busiest || [];
-  const periodLabel = it.range.days ? `the previous ${it.range.days} days` : 'the previous period';
+  // "To this point": the previous period is measured as far into itself as today is
+  // into this one, so a morning does not read as a slump.
+  const periodLabel = it.range.days ? `the previous ${it.range.days} days, to this point` : 'the previous period';
 
   /* One place decides whether a movement is good news. More downloads and more failures
      are not the same news, so the card says which way it reads and the helper works out
@@ -16,6 +18,10 @@
     <div class="sub">
       <% if (o.lastEverAt) { %>last request <%= it.helpers.relativeTime(o.lastEverAt) %><% } else { %>no requests recorded yet<% } %>
       · <%= it.range.label.toLowerCase() %>
+      <% if (it.scopedShow) { %>
+        · <strong><%= it.scopedShow.title %></strong> only
+        <a href="<%= it.allShowsHref %>">(every show)</a>
+      <% } %>
     </div>
     <h1>Statistics</h1>
   </div>

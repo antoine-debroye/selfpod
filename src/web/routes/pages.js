@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream';
+
 import { ITEM_DECISION, PREVIOUS_BASE_URL_WINDOW_DAYS, SCAN_TRIGGER_LABELS, SHOW_STATUS } from '../../constants.js';
 import { presentItem, presentSubscription } from '../../lib/present-subscription.js';
 import { notFound } from '../../lib/errors.js';
@@ -536,9 +538,10 @@ export default async function pageRoutes(fastify, services) {
    * file, so it must behave the same with JavaScript off, and an expired session
    * should land on the sign-in page rather than write a JSON 401 into someone's
    * downloads folder. Paging is ignored on purpose — what is on screen is a window,
-   * the export is what the filters describe.
+   * the export is what the filters describe. Streamed, batch by batch, so the file
+   * holds every matching row however many there are: it used to stop quietly at
+   * fifty thousand while the page promised all of them.
    */
-  const CSV_MAX_ROWS = 50_000;
 
   const CSV_COLUMNS = [
     'requested_at_utc',
@@ -570,15 +573,16 @@ export default async function pageRoutes(fastify, services) {
 
   fastify.get('/stats/access-log.csv', guarded, async (request, reply) => {
     const filter = logFilter(request);
-    const rows = services.stats.list({ ...filter.query, limit: CSV_MAX_ROWS, offset: 0 });
 
-    const lines = [CSV_COLUMNS.join(',')];
-    for (const row of rows) {
-      lines.push(
-        [
+    function* lines() {
+      // A BOM, so a spreadsheet opens an accented episode title as UTF-8 rather than
+      // as mojibake — the difference between a working export and a support question.
+      yield `\uFEFF${CSV_COLUMNS.join(',')}\r\n`;
+      for (const row of services.stats.each({ ...filter.query, offset: 0 })) {
+        yield `${[
           row.requestedAt,
           row.showTitle,
-          row.episodeTitle,
+          row.episodeDeleted ? '(deleted episode)' : row.episodeTitle,
           row.episodeFilename,
           row.kind,
           row.statusCode,
@@ -590,8 +594,8 @@ export default async function pageRoutes(fastify, services) {
           row.error,
         ]
           .map(csvCell)
-          .join(','),
-      );
+          .join(',')}\r\n`;
+      }
     }
 
     const parts = ['selfpod-access-log', filter.slug ?? 'all-shows', filter.range.key];
@@ -602,9 +606,7 @@ export default async function pageRoutes(fastify, services) {
     reply.header('content-type', 'text/csv; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="${filename}"`);
     reply.header('cache-control', 'no-store');
-    // A BOM, so a spreadsheet opens an accented episode title as UTF-8 rather than
-    // as mojibake — the difference between a working export and a support question.
-    return reply.send(`﻿${lines.join('\r\n')}\r\n`);
+    return reply.send(Readable.from(lines()));
   });
 
   const LOG_PAGE_SIZE = 40;
@@ -746,7 +748,11 @@ export default async function pageRoutes(fastify, services) {
   function statsContext(request) {
     const filter = logFilter(request);
     const { range } = filter;
-    const scope = { from: range.from, to: range.to };
+    // The show in the filter scopes every figure on the page, not only the log: a
+    // link that reads "this show's access log" used to land on instance-wide cards
+    // above a show-only log, with nothing to say so.
+    const scopedShow = filter.slug ? shows.getBySlug(filter.slug) : null;
+    const scope = { from: range.from, to: range.to, showId: scopedShow?.id ?? null };
 
     const entries = services.stats.list({
       ...filter.query,
@@ -756,15 +762,18 @@ export default async function pageRoutes(fastify, services) {
     const total = services.stats.count(filter.query);
 
     // One grouped query for every show, rather than four per show in a loop.
-    const rollups = services.stats.forShows(scope);
+    const rollups = services.stats.forShows({ from: scope.from, to: scope.to });
     const clients = services.stats.byClient(scope);
+    const listed = scopedShow ? shows.list().filter((show) => show.id === scopedShow.id) : shows.list();
 
     return {
       title: 'Statistics',
       active: 'stats',
       crumbs: [{ label: 'Statistics' }],
-      overview: services.stats.overview({ ...scope, prevFrom: range.prevFrom }),
-      showStats: shows.list().map((show) => ({
+      overview: services.stats.overview({ ...scope, prevFrom: range.prevFrom, prevTo: range.prevTo }),
+      scopedShow: scopedShow ? { id: scopedShow.id, slug: scopedShow.slug, title: scopedShow.title } : null,
+      allShowsHref: statsPageUrl(filter, { showId: null }),
+      showStats: listed.map((show) => ({
         id: show.id,
         slug: show.slug,
         title: show.title,
@@ -776,7 +785,7 @@ export default async function pageRoutes(fastify, services) {
       })),
       busiest: services.stats.busiest(10, scope),
       failures: services.stats.recentFailures(6, scope),
-      daily: services.stats.daily({ buckets: chartBuckets(range) }),
+      daily: services.stats.daily({ buckets: chartBuckets(range), showId: scope.showId }),
       clients,
       range,
       rangeOptions: RANGE_OPTIONS,

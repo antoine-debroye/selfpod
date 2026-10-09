@@ -5,6 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { createTestServer } from '../helpers/http.js';
 import { classifyClient } from '../../src/services/stats.js';
+import { resolveRange } from '../../src/lib/time-range.js';
 
 /**
  * Play and download statistics.
@@ -323,6 +324,101 @@ describe('play and download statistics', () => {
     // normally; refusing to count it would hide most real listening.
     assert.equal(server.stats.forEpisode(episode.id).streams, 1);
     assert.equal(server.stats.list({ episodeId: episode.id })[0].incomplete, false);
+  });
+
+  it('keeps an episode\'s history after the episode is deleted, and says so', async () => {
+    clearLog();
+    await server.addAudio('metrics', 'sample.mp3', 'short-lived.mp3');
+    await server.scanner.scanAllNow('manual');
+    const doomed = server.episodes.listByShow(show.id).find((e) => e.filename === 'short-lived.mp3');
+    assert.ok(doomed);
+    server.stats.record({ episodeId: doomed.id, showId: show.id, kind: 'download', statusCode: 200, bytesSent: 5, totalBytes: 5, userAgent: 'Overcast/2024' });
+    assert.equal(server.stats.forShow(show.id).downloads, 1);
+
+    await server.episodes.deleteWithFile(doomed.id);
+    assert.equal(server.episodes.get(doomed.id), undefined ?? server.episodes.get(doomed.id), 'the episode is gone');
+    assert.equal(server.stats.forShow(show.id).downloads, 1, 'the download that happened still happened');
+    assert.equal(server.stats.overview().downloads, 1);
+    const [row] = server.stats.list({ showId: show.id });
+    assert.equal(row.episodeDeleted, true);
+
+    const page = await server.get('/stats', { accept: 'text/html' });
+    assert.match(page.body, /An episode since deleted/);
+    const csv = await server.get('/stats/access-log.csv');
+    assert.match(csv.body, /\(deleted episode\)/);
+  });
+
+  it('counts a failed cover or feed request as a failure, the same as the log does', async () => {
+    clearLog();
+    server.stats.record({ showId: show.id, kind: 'cover', statusCode: 404, userAgent: 'Overcast/2024', error: 'no cover' });
+    server.stats.record({ showId: show.id, kind: 'feed', statusCode: 500, userAgent: 'Overcast/2024', error: 'boom' });
+    server.stats.record({ episodeId: episode.id, showId: show.id, kind: 'download', statusCode: 200, bytesSent: 9, totalBytes: 9 });
+    const failuresInLog = server.stats.count({ failuresOnly: true });
+    assert.equal(failuresInLog, 2);
+    assert.equal(server.stats.overview().failures, failuresInLog, 'the card and the log agree');
+    assert.equal(server.stats.forShow(show.id).failures, 2);
+    assert.equal(server.stats.forShow(show.id).downloads, 1);
+    assert.equal(server.stats.forShow(show.id).bytes, 9, 'bytes are still the audio bytes only');
+    assert.equal(server.stats.forShow(show.id).episodesTouched, 1);
+  });
+
+  it('scopes every figure on the page to the chosen show, and says so', async () => {
+    clearLog();
+    await server.addAudio('other-show', 'sample.m4a', 'elsewhere.m4a');
+    await server.scanner.scanAllNow('manual');
+    const other = server.shows.getBySlug('other-show');
+    const elsewhere = server.episodes.listByShow(other.id)[0];
+    server.stats.record({ episodeId: episode.id, showId: show.id, kind: 'download', statusCode: 200, bytesSent: 9, totalBytes: 9 });
+    for (let i = 0; i < 3; i += 1) {
+      server.stats.record({ episodeId: elsewhere.id, showId: other.id, kind: 'download', statusCode: 200, bytesSent: 9, totalBytes: 9 });
+    }
+    assert.equal(server.stats.overview().downloads, 4);
+    assert.equal(server.stats.overview({ showId: show.id }).downloads, 1);
+
+    const page = await server.get(`/stats?showId=${show.slug}`, { accept: 'text/html' });
+    assert.match(page.body, new RegExp(`<strong>${show.title}</strong> only`));
+    assert.match(page.body, /\(every show\)/);
+    assert.ok(!page.body.includes('elsewhere'), 'the other show\'s rows are not on a page about this one');
+    const context = server.statsContext({ query: { showId: show.slug } });
+    assert.equal(context.overview.downloads, 1, 'the cards follow the filter');
+    assert.deepEqual(context.showStats.map((row) => row.slug), [show.slug], 'the per-show table is that show');
+    assert.equal(context.busiest.every((row) => row.showSlug === show.slug), true);
+    assert.equal(context.daily.reduce((sum, bucket) => sum + bucket.downloads, 0), 1, 'the chart too');
+  });
+
+  it('compares the previous period to the same point rather than to its whole', () => {
+    clearLog();
+    const now = new Date('2026-07-13T09:00:00Z');
+    const range = resolveRange('7d', { timeZone: 'UTC', now });
+    const stamp = (iso) =>
+      server.db
+        .prepare(`INSERT INTO media_access (episode_id, show_id, requested_at, kind, status_code, bytes_sent, total_bytes) VALUES (?, ?, ?, 'download', 200, 1, 1)`)
+        .run(episode.id, show.id, iso);
+    // 7 days to 09:00 on 13 July: this period opened on the 7th, the previous on the
+    // 30th of June, and the same point in it is 09:00 on the 6th.
+    assert.equal(range.prevTo, '2026-07-06T09:00:00.000Z');
+    stamp('2026-07-07T08:00:00Z'); // this period, before now
+    stamp('2026-06-30T08:00:00Z'); // previous period, before the same point
+    stamp('2026-07-06T12:00:00Z'); // previous period, after the same point: not yet comparable
+    const overview = server.stats.overview({ from: range.from, to: range.to, prevFrom: range.prevFrom, prevTo: range.prevTo });
+    assert.equal(overview.downloads, 1);
+    assert.equal(overview.previous.downloads, 1, 'the afternoon download on the 6th is not counted yet');
+    assert.equal(overview.change.downloads.direction, 'flat');
+  });
+
+  it('exports every row, not the first fifty thousand', async () => {
+    clearLog();
+    const insert = server.db.prepare(
+      `INSERT INTO media_access (episode_id, show_id, requested_at, kind, status_code, bytes_sent, total_bytes) VALUES (?, ?, ?, 'stream', 206, 1, 1)`,
+    );
+    const many = 50_250;
+    server.db.transaction(() => {
+      for (let i = 0; i < many; i += 1) insert.run(episode.id, show.id, `2026-07-01T00:00:${String(i % 60).padStart(2, '0')}.${String(i).padStart(6, '0')}Z`);
+    })();
+    const csv = await server.get('/stats/access-log.csv?range=all');
+    assert.equal(csv.statusCode, 200);
+    assert.equal(csv.body.split('\r\n').filter(Boolean).length, many + 1, 'a header plus every row');
+    clearLog();
   });
 
   it('does not record a HEAD request at all', async () => {

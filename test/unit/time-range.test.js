@@ -77,6 +77,19 @@ describe('time ranges', () => {
       assert.ok(new Date(prevFrom) < new Date(from), 'the previous period comes first');
     });
 
+    it('measures the previous period to the same point, not to its end', () => {
+      // 09:00 on the 13th of July: the current 30 days are 29 whole days and nine hours.
+      const now = new Date('2026-07-13T09:00:00Z');
+      const { from, prevFrom, prevTo } = resolveRange('30d', { timeZone: 'UTC', now });
+      assert.equal(new Date(prevTo) - new Date(prevFrom), now - new Date(from), 'same elapsed time in both windows');
+      // 29 days and nine hours into the previous period, which opened on 15 May.
+      assert.equal(prevTo, '2026-06-13T09:00:00.000Z');
+      assert.ok(new Date(prevTo) <= new Date(from), 'the comparison never reaches into the current period');
+      // At one minute to midnight the two windows are all but the same length.
+      const late = resolveRange('7d', { timeZone: 'UTC', now: new Date('2026-07-13T23:59:00Z') });
+      assert.equal(late.prevTo, '2026-07-06T23:59:00.000Z');
+    });
+
     it('returns null bounds for all time, so a query can skip the date filter entirely', () => {
       const range = resolveRange('all', { timeZone: 'Europe/London', now: NOW });
       assert.equal(range.key, 'all', 'the key survives');

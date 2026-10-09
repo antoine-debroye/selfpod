@@ -33,6 +33,8 @@
           <% } else { %>
             <%= row.episodeTitle %>
           <% } %>
+        <% } else if (row.episodeDeleted) { %>
+          <span class="dim">An episode since deleted</span>
         <% } else if (row.showTitle && row.showSlug) { %>
           <a href="/shows/<%= encodeURIComponent(row.showSlug) %>"><%= row.showTitle %></a>
         <% } else { %>
