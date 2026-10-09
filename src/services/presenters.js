@@ -1,7 +1,18 @@
 import { SHOW_STATUS } from '../constants.js';
 import { publishedAudio } from '../lib/published-audio.js';
 import { coverUrl, episodeArtUrl, feedUrl, mediaUrl } from '../lib/urls.js';
+import { THUMBNAIL_WIDTH } from './covers.js';
 import { NO_ACCESS } from './stats.js';
+
+/** A show nothing has fetched, in the shape `stats.forShow` answers with. */
+const NO_SHOW_ACCESS = Object.freeze({
+  ...NO_ACCESS,
+  episodesTouched: 0,
+  feedFetches: 0,
+  feedLastAt: null,
+  feedLastClient: null,
+  clients: [],
+});
 
 /**
  * Turns database rows into the shape the API returns and the templates render.
@@ -29,7 +40,13 @@ const BADGE_CHECKS = new Set([
 ]);
 
 export function createPresenters({ settings, shows, episodes, covers, activity, stats, readiness }) {
-  function presentShow(show, { includeEpisodes = false, includeReadiness = false } = {}) {
+  /**
+   * `access`, when given, is this show's row from `stats.forShows()` — the rollup
+   * already fetched for every show at once — and stands in for the four queries
+   * `stats.forShow` would run. It lacks the client list and last feed client, which
+   * only the show page reads, so those come back empty rather than wrong.
+   */
+  function presentShow(show, { includeEpisodes = false, includeReadiness = false, access } = {}) {
     const baseUrl = settings.publicBaseUrl();
     const counts = episodes.counts(show.id);
     const lastScan = activity.latestForShow(show.id);
@@ -78,6 +95,9 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
             // Same-origin variant, so the admin UI shows artwork even before a
             // public base URL has been configured.
             localUrl: `/media/${tokenPath}/cover.jpg?v=${encodeURIComponent(show.cover_mtime ?? '')}`,
+            // The 400 px copy for the dashboard card. Served as the full cover when
+            // the small one cannot be made, so it is always safe to ask for.
+            thumbUrl: `/media/${tokenPath}/cover-${THUMBNAIL_WIDTH}.jpg?v=${encodeURIComponent(show.cover_mtime ?? '')}`,
             warning: coverWarning,
             needsResize: Boolean(coverWarning),
           }
@@ -107,9 +127,26 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
         : null,
       createdAt: show.created_at,
       updatedAt: show.updated_at,
-      stats: stats?.forShow(show.id) ?? null,
+      stats:
+        access !== undefined
+          ? { ...NO_SHOW_ACCESS, ...(access ?? {}) }
+          : (stats?.forShow(show.id) ?? null),
       ...(includeEpisodes ? { episodes: presentEpisodesOf(show) } : {}),
     };
+  }
+
+  /**
+   * Every show in one go, for the dashboard.
+   *
+   * `presentShow` on its own asks the access log four questions per show; on a
+   * dashboard of forty shows that was a hundred and sixty queries to paint cards that
+   * show none of the answers. The rollups come from two grouped queries instead,
+   * exactly as the statistics page already fetches them, and each show's row is
+   * handed to `presentShow` so the shape is the same one everything else reads.
+   */
+  function presentShows(list, options = {}) {
+    const rollups = stats?.forShows() ?? {};
+    return list.map((show) => presentShow(show, { ...options, access: rollups[show.id] ?? null }));
   }
 
   /**
@@ -213,5 +250,5 @@ export function createPresenters({ settings, shows, episodes, covers, activity, 
     };
   }
 
-  return { presentShow, presentEpisode };
+  return { presentShow, presentShows, presentEpisode };
 }

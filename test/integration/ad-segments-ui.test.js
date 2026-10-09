@@ -62,7 +62,7 @@ describe('the adverts page', () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     assert.match(body, /a theme or a read; SelfPod cannot tell/i);
     assert.ok(!/\bdetected ad\b|\bthis is an ad\b/i.test(body), 'it claimed to know what an advert is');
@@ -73,9 +73,9 @@ describe('the adverts page', () => {
     await server.adPipeline.processShow(show.id);
     const [found] = server.adDetect.listSegments(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
-    assert.ok(body.includes(`/api/ad-segments/${found.id}/sample.mp3`), 'no way to listen');
+    assert.ok(body.includes(`/api/cuts/segments/${found.id}/sample.mp3`), 'no way to listen');
     // Not preloaded: a review session can hold a dozen of these, and each is a slice
     // of a real episode read off the disk.
     assert.match(body, /preload="none"/);
@@ -85,7 +85,7 @@ describe('the adverts page', () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     // A 40-second stretch 45 seconds in, stated as a time rather than left to the bar.
     assert.match(body, /stretch__at mono">0:4\d–1:2\d</);
@@ -95,7 +95,7 @@ describe('the adverts page', () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     assert.match(body, /3 episodes are not in your feed yet/i);
     assert.match(body, /they go out once you have decided/i);
@@ -117,7 +117,7 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
     await server.scanner.scanAllNow('manual');
     await server.adPipeline.processShow(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     assert.match(body, /Looked at 3 episodes and found nothing to cut/i);
     assert.ok(!/Nothing to cut yet/i.test(body), 'it told them to keep waiting');
@@ -138,7 +138,7 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
     await server.scanner.scanAllNow('manual');
     // Scanned, so the files are there — but nothing has been fingerprinted yet.
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     assert.ok(
       !/found nothing to cut/i.test(body),
@@ -153,7 +153,7 @@ describe('a show whose episodes cannot be compared byte for byte', () => {
     await server.scanner.scanAllNow('manual');
     await server.adPipeline.processShow(show.id);
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     assert.match(body, /Nothing to cut yet/i);
     assert.ok(!/found nothing to cut/i.test(body));
@@ -170,7 +170,7 @@ describe('the show page', () => {
     const body = (await page(`/shows/${show.slug}`)).body;
 
     assert.match(body, /3 episodes are not in your feed yet/i);
-    assert.ok(body.includes(`/shows/${show.slug}/adverts`), 'no way to get to the decision');
+    assert.ok(body.includes(`/shows/${show.slug}/cuts`), 'no way to get to the decision');
   });
 
   it('says nothing about holds when there are none', async () => {
@@ -180,7 +180,7 @@ describe('the show page', () => {
 
     assert.ok(!/not in your feed yet/i.test(body));
     // The positive control: the page did render, and the link is there regardless.
-    assert.ok(body.includes(`/shows/${show.slug}/adverts`));
+    assert.ok(body.includes(`/shows/${show.slug}/cuts`));
   });
 });
 
@@ -190,7 +190,7 @@ describe('deciding from the page', () => {
     await server.adPipeline.processShow(show.id);
     const [found] = server.adDetect.listSegments(show.id);
 
-    const response = await htmxPost(`/ui/shows/${show.slug}/ad-segments/${found.id}`, {
+    const response = await htmxPost(`/ui/shows/${show.slug}/segments/${found.id}/decide`, {
       status: SEGMENT_STATUS.APPROVED,
     });
 
@@ -209,12 +209,12 @@ describe('deciding from the page', () => {
     await server.adPipeline.processShow(show.id);
     const [found] = server.adDetect.listSegments(show.id);
 
-    const response = await post(`/ui/shows/${show.slug}/ad-segments/${found.id}`, {
+    const response = await post(`/ui/shows/${show.slug}/segments/${found.id}/decide`, {
       status: SEGMENT_STATUS.APPROVED,
     });
 
     assert.equal(response.statusCode, 303);
-    assert.equal(response.headers.location, `/shows/${show.slug}/adverts`);
+    assert.equal(response.headers.location, `/shows/${show.slug}/cuts`);
     assert.equal(server.episodes.listByShow(show.id)[0].trimmed_filename !== null, true);
   });
 
@@ -222,9 +222,9 @@ describe('deciding from the page', () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
     const [found] = server.adDetect.listSegments(show.id);
-    await htmxPost(`/ui/shows/${show.slug}/ad-segments/${found.id}`, { status: SEGMENT_STATUS.APPROVED });
+    await htmxPost(`/ui/shows/${show.slug}/segments/${found.id}/decide`, { status: SEGMENT_STATUS.APPROVED });
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
     assert.ok(body.includes(`/ui/shows/${show.slug}/segments/${found.id}/stop`), 'no way to put it back everywhere');
     assert.match(body, /<button[^>]*>Restore everywhere and stop<\/button>/);
 
@@ -248,7 +248,7 @@ describe('deciding from the page', () => {
     await writeFile(join(other, 'x.mp3'), stitch(segment(1, framesFor(10))));
     await server.scanner.scanAllNow('manual');
 
-    const response = await htmxPost(`/ui/shows/other-club/ad-segments/${found.id}`, {
+    const response = await htmxPost(`/ui/shows/other-club/segments/${found.id}/decide`, {
       status: SEGMENT_STATUS.APPROVED,
     });
 
@@ -267,7 +267,7 @@ describe('changing what SelfPod does', () => {
     await server.adPipeline.processShow(show.id);
     assert.equal(server.episodes.counts(show.id).held, 3);
 
-    const response = await htmxPost(`/ui/shows/${show.slug}/ad-trim`, { mode: 'off', minEpisodes: '3' });
+    const response = await htmxPost(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'off', minEpisodes: '3' });
 
     assert.equal(response.statusCode, 200);
     assert.equal(server.episodes.counts(show.id).held, 0);
@@ -278,17 +278,17 @@ describe('changing what SelfPod does', () => {
     const show = await makeShow();
     await server.adPipeline.processShow(show.id);
 
-    const response = await post(`/ui/shows/${show.slug}/ad-trim`, { mode: 'off', minEpisodes: '3' });
+    const response = await post(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'off', minEpisodes: '3' });
 
     assert.equal(response.statusCode, 303);
-    const flash = (await page(`/shows/${show.slug}/adverts`)).body;
+    const flash = (await page(`/shows/${show.slug}/cuts`)).body;
     assert.match(flash, /3 episodes are now in your feed/i);
   });
 
   it('keeps the current setting rather than accepting a mode it does not have', async () => {
     const show = await makeShow();
 
-    await htmxPost(`/ui/shows/${show.slug}/ad-trim`, { mode: 'aggressive', minEpisodes: '3' });
+    await htmxPost(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'aggressive', minEpisodes: '3' });
 
     assert.equal(server.shows.get(show.id).ad_trim_mode, 'review', 'a made-up mode was stored');
   });
@@ -296,7 +296,7 @@ describe('changing what SelfPod does', () => {
   it('keeps the current window rather than accepting one that compares nothing', async () => {
     const show = await makeShow();
 
-    await htmxPost(`/ui/shows/${show.slug}/ad-trim`, { mode: 'review', minEpisodes: '1' });
+    await htmxPost(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'review', minEpisodes: '1' });
 
     assert.equal(server.shows.get(show.id).ad_auto_min_episodes, 3);
   });
@@ -304,7 +304,7 @@ describe('changing what SelfPod does', () => {
   it('will not read the episodes of a show that has it switched off', async () => {
     const show = await makeShow({ mode: 'off' });
 
-    const response = await post(`/ui/shows/${show.slug}/ad-detect`, {});
+    const response = await post(`/ui/shows/${show.slug}/cuts-check`, {});
 
     assert.equal(response.statusCode, 303);
     assert.equal(server.adDetect.listSegments(show.id).length, 0);
@@ -323,7 +323,7 @@ describe('text that came from somewhere else', () => {
       title: '<img src=x onerror="alert(1)">Ep',
     });
 
-    const body = (await page(`/shows/${show.slug}/adverts`)).body;
+    const body = (await page(`/shows/${show.slug}/cuts`)).body;
 
     // Positive control first: the title did reach the page, so the absence below is
     // about escaping and not about the value never arriving.
@@ -335,7 +335,7 @@ describe('text that came from somewhere else', () => {
 describe('signing in', () => {
   it('is required for the adverts page', async () => {
     const show = await makeShow();
-    const response = await server.app.inject({ method: 'GET', url: `/shows/${show.slug}/adverts` });
+    const response = await server.app.inject({ method: 'GET', url: `/shows/${show.slug}/cuts` });
     assert.ok([302, 303, 401].includes(response.statusCode), `got ${response.statusCode}`);
   });
 });

@@ -5,7 +5,7 @@
 <div class="page-title">
   <div>
     <div class="sub">Following a feed into <%= show.title %></div>
-    <h1>Subscription</h1>
+    <h1>Follow a feed</h1>
   </div>
   <div class="actions">
     <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>">Back to show</a>

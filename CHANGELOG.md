@@ -231,6 +231,45 @@ changes what your listeners see, it says so.
   by digest, whisper.cpp by commit rather than a tag that could be moved, and every GitHub
   Action by commit. The build workflow's token is read-only except where it publishes.
 
+### Changed — the pages no longer ask for anything an ad blocker would refuse
+
+- **The Adverts page and its parts live at addresses no filter list matches.** 1.9.1 renamed
+  the things on the page that an ad blocker hides by name; the addresses the page fetches
+  were still named after adverts — `/ad-panel`, `/ad-work`, `/adverts`, the clip a ▶ plays
+  from `/api/ad-segments/…` — and uBlock Origin and AdGuard carry rules that block a request
+  by its path just as they hide an element by its name. A blocked fetch fails without a word,
+  so the page would have sat there half-drawn with nothing to say why. The page is now
+  `/shows/<show>/cuts`, everything it fetches is named for cuts, jingles and boundaries, and
+  the clips play from `/api/cuts/…`. The old page address still arrives, for bookmarks, and
+  the `/api/ad-…` addresses still answer for scripts. The test that refuses an advert-like
+  class or id now refuses one in any address the browser fetches too.
+- **The dashboard is lighter.** Each card used to load the show's full cover — 1400 pixels or
+  more, often a few megabytes — into a 250-pixel tile, so a dozen shows over a tunnel was tens
+  of megabytes of artwork. A card now loads a 400-pixel copy, made once per cover and kept
+  under `/data/.covers`; a cover the resizer cannot read is served in full rather than as a
+  broken image. *Rescan all* re-reads the grid once when the sweep finishes, rather than every
+  card re-reading itself as its show's turn came — one fetch instead of one per show. And the
+  page asks the access log for every show at once rather than four questions per show.
+- **The sidebar says when there are more shows than it lists.** It stops at eight, and used to
+  stop silently; past eight there is now *All N shows…*, which goes to the dashboard.
+- **Typing into the ledger's search no longer fills the Back button.** Each pause while typing
+  pushed a history entry, so going back stepped through "t", "ta", "tap". Typing now replaces
+  the address; picking from the two selects still pushes one, as choosing a view should.
+- **The first tap on a transcript word picks that word**, not everything from it to the end
+  ("Removing 4,000 words" until the second tap). Tap the first word, then the last.
+- **Names, made consistent.** Following a feed is *Follow a feed* on the page, in its crumb and
+  in Settings, rather than "Subscription" here and "Follow podcast feeds" there. The episode
+  page is headed by the episode's title, with "Edit episode" as the small line above it, and
+  the crumb is the title. The button beside an episode's reach figures, which went to this
+  show's statistics, now says *Show statistics* rather than "All shows". The cut-settings Save
+  sits in the same right-aligned row every other form uses, and a few quiet notes that were
+  styled by a class nothing defined are now actually quiet. One clock formats every position
+  in an episode, on every page and in the API; the day a remembered cut was decided is now
+  shown in your time zone like every other date, rather than the server's.
+- Under the hood of the stylesheet, the colours that were spelt out by hand in a dozen places
+  are named once, with the values they always had, and twenty-odd rules nothing used are gone.
+  Nothing looks different.
+
 ## 1.9.1 — 2026-09-16
 
 ### Fixed

@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import { EPISODE_STATUS, SHOW_STATUS, TRIM_STATUS, imageMimeType } from '../constants.js';
+import { THUMBNAIL_WIDTH } from '../services/covers.js';
 import { ACCESS_KIND } from '../services/stats.js';
 import { resolveContained } from '../lib/contained-path.js';
 import { notFound } from '../lib/errors.js';
@@ -260,7 +261,8 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
    * file served is whatever was actually detected — so a `cover.png` on disk
    * works without the feed's image URL changing (spec §10.3).
    */
-  fastify.get('/media/:slug/:token/cover.jpg', async (request, reply) => {
+  /** The show, the cover's path inside its folder, its size and its ETag — or a 404. */
+  async function locateCover(request) {
     const { slug, token } = request.params;
     const show = resolveShow(slug, token);
     if (!show.cover_filename) throw notFound('No artwork for this show.', 'no_cover');
@@ -284,8 +286,11 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     } catch {
       throw notFound('No artwork for this show.', 'no_cover');
     }
+    return { show, path, size: coverStats.size, etag: await covers.etag(path) };
+  }
 
-    const etag = await covers.etag(path);
+  /** Sends an image file with the cover's headers, or a 304 when the browser has it. */
+  function sendCover(request, reply, { show, path, size, etag, contentType }) {
     // The same two fixes as the feed above, for the same reasons: a validator rewritten
     // in transit still has to match, and a conditional fetch is still a fetch. Two
     // routes answering the same question differently is where the next bug hides.
@@ -294,7 +299,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
       trackAccess(request, reply, {
         kind: ACCESS_KIND.COVER,
         showId: show.id,
-        totalBytes: coverStats.size,
+        totalBytes: size,
         name: show.cover_filename,
         bytesSent: 0,
       });
@@ -302,7 +307,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     }
 
     reply
-      .header('content-type', covers.mimeTypeFor(show.cover_filename))
+      .header('content-type', contentType)
       // Deliberately short (spec §10.3): artwork changes, and a long max-age at a
       // CDN meant an updated cover stayed stale for a day. The ETag is what keeps
       // well-behaved caches from re-downloading unchanged art anyway.
@@ -315,13 +320,45 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     trackAccess(request, reply, {
       kind: ACCESS_KIND.COVER,
       showId: show.id,
-      totalBytes: coverStats.size,
+      totalBytes: size,
       name: show.cover_filename,
     });
     return reply.sendFile(basename(path), dirname(path), {
       cacheControl: false,
       contentType: false,
       etag: false,
+    });
+  }
+
+  fastify.get('/media/:slug/:token/cover.jpg', async (request, reply) => {
+    const cover = await locateCover(request);
+    return sendCover(request, reply, { ...cover, contentType: covers.mimeTypeFor(cover.show.cover_filename) });
+  });
+
+  /**
+   * The same cover at 400 px, for the dashboard card. Same token, same containment,
+   * same headers; the ETag is the cover's with the width on the end, so a new cover
+   * is a new thumbnail everywhere a cache is involved. When the small copy cannot be
+   * made or read, the full cover is served under this address rather than an error:
+   * a card with artwork that is merely larger than it needed, never a broken image.
+   */
+  fastify.get(`/media/:slug/:token/cover-${THUMBNAIL_WIDTH}.jpg`, async (request, reply) => {
+    const cover = await locateCover(request);
+    const full = { ...cover, contentType: covers.mimeTypeFor(cover.show.cover_filename) };
+    const thumb = await covers.thumbnail(cover.path, { width: THUMBNAIL_WIDTH, etag: cover.etag, scope: cover.show.id });
+    if (!thumb) return sendCover(request, reply, full);
+    let thumbStats;
+    try {
+      thumbStats = await stat(thumb);
+    } catch {
+      return sendCover(request, reply, full);
+    }
+    return sendCover(request, reply, {
+      show: cover.show,
+      path: thumb,
+      size: thumbStats.size,
+      etag: cover.etag ? cover.etag.replace(/"$/, `-${THUMBNAIL_WIDTH}"`) : null,
+      contentType: 'image/jpeg',
     });
   });
 

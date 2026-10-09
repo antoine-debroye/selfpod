@@ -2,6 +2,7 @@ import { HOLD_REASONS, SEGMENT_KINDS, SEGMENT_SOURCES } from '../constants.js';
 import { WORD_KINDS, inferKind } from './segment-kind.js';
 import { describeVerdict, flattenTranscript, parseCues, presentExcerpt, LOW_CONFIDENCE } from './present-transcript.js';
 import { describeCues } from './advert-cues.js';
+import { formatClock } from './dates.js';
 import { meanConfidence } from './transcript.js';
 
 /**
@@ -73,7 +74,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
             : 'Sounds like a sponsor read, heard once'
           : `Repeats across ${segment.episode_count} ${segment.episode_count === 1 ? 'episode' : 'episodes'}`,
     durationSeconds,
-    durationLabel: formatDuration(segment.duration_ms ?? 0),
+    durationLabel: formatClock(segment.duration_ms ?? 0),
     episodeCount: segment.episode_count,
     occurrenceCount: segment.occurrence_count,
     autoApproved: Boolean(segment.auto_approved),
@@ -114,7 +115,7 @@ export function presentSegment(segment, { episodes, transcripts = null, mode = '
       episodeTitle: episodes?.get(row.episode_id)?.title ?? null,
       startMs: row.start_ms,
       endMs: row.end_ms,
-      atLabel: formatDuration(row.start_ms),
+      atLabel: formatClock(row.start_ms),
     })),
     firstSeenAt: segment.first_seen_at,
     decidedAt: segment.decided_at,
@@ -145,19 +146,10 @@ function describePosition(occurrences, episodes) {
     if (atEnd) return 'At the very end of every episode';
   }
 
-  if (latest - earliest < 10_000) return `Around ${formatDuration(earliest)} in, every time`;
-  return `Between ${formatDuration(earliest)} and ${formatDuration(latest)} in`;
+  if (latest - earliest < 10_000) return `Around ${formatClock(earliest)} in, every time`;
+  return `Between ${formatClock(earliest)} and ${formatClock(latest)} in`;
 }
 
-/** `m:ss`, or `h:mm:ss` past an hour. Segments are seconds; positions can be hours. */
-function formatDuration(ms) {
-  const total = Math.max(0, Math.round((ms ?? 0) / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
-}
 
 /**
  * Whether SelfPod has looked properly and found nothing — which is not "not yet".

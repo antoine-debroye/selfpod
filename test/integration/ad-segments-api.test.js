@@ -164,6 +164,12 @@ describe('hearing the segment before deciding', () => {
 
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers['content-type'], 'audio/mpeg');
+    // The pages play the clip from an address no ad blocker's network rule matches;
+    // it is the same bytes, and the `/ad-segments/` address stays for scripts.
+    const unblockable = await server.get(`/api/cuts/segments/${found.id}/sample.mp3`);
+    assert.equal(unblockable.statusCode, 200);
+    assert.equal(unblockable.headers['content-type'], 'audio/mpeg');
+    assert.ok(Buffer.from(unblockable.rawPayload).equals(Buffer.from(response.rawPayload)), 'the two addresses serve different clips');
     const frames = frameProfile(response.rawPayload).frameCount;
     assert.ok(
       Math.abs(frames * (FRAME_MS / 1000) - 40) < 1.5,

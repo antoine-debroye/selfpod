@@ -32,6 +32,16 @@ export function formatDuration(totalSeconds) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+/**
+ * The same `m:ss` / `h:mm:ss` from milliseconds, for positions and lengths inside an
+ * episode — "cut 0:39", "between 2:10 and 2:14 in". One implementation, so a stretch
+ * reads the same on the Adverts page, the episode page, the ledger and in the API;
+ * app.js carries a copy of exactly this for what it formats on the client.
+ */
+export function formatClock(ms) {
+  return formatDuration((ms ?? 0) / 1000) ?? '0:00';
+}
+
 /** Zero-padded `HH:MM:SS` for the feed, where a leading hour of 00 is harmless. */
 export function formatDurationFeed(totalSeconds) {
   if (totalSeconds === null || totalSeconds === undefined) return null;

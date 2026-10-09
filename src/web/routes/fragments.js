@@ -30,7 +30,7 @@ import { DEFAULT_SUBSCRIBE_TARGET } from '../lib/subscribe-links.js';
  * with htmx it returns the re-rendered fragment.
  */
 export default async function fragmentRoutes(fastify, services) {
-  const { config, settings, shows, episodes, activity, scanner, watcher, feeds, covers, presentShow, presentEpisode } = services;
+  const { config, settings, shows, episodes, activity, scanner, watcher, feeds, covers, presentShow, presentShows, presentEpisode } = services;
 
   fastify.register(async (scoped) => {
     scoped.addHook('onRequest', async (request, reply) => {
@@ -95,8 +95,8 @@ export default async function fragmentRoutes(fastify, services) {
 
     /* ----------------------------------------------------------- ad segments */
 
-    function advertsPath(slug) {
-      return `/shows/${encodeURIComponent(slug)}/adverts`;
+    function cutsPath(slug) {
+      return `/shows/${encodeURIComponent(slug)}/cuts`;
     }
 
     /** The one place the Adverts panel is rendered, so htmx and a reload agree. */
@@ -146,11 +146,10 @@ export default async function fragmentRoutes(fastify, services) {
       return null;
     }
 
-    scoped.get('/ui/shows/:slug/ad-segments', async (request, reply) => renderSegments(reply, findShow(request.params.slug)));
-    scoped.get('/ui/shows/:slug/ad-panel', async (request, reply) => renderSegments(reply, findShow(request.params.slug)));
+    scoped.get('/ui/shows/:slug/cuts-panel', async (request, reply) => renderSegments(reply, findShow(request.params.slug)));
 
     /** The inside of the work strip: a sentence while work is owed, nothing once it is not. */
-    scoped.get('/ui/shows/:slug/ad-work', async (request, reply) => {
+    scoped.get('/ui/shows/:slug/cuts-work', async (request, reply) => {
       const show = findShow(request.params.slug);
       return reply
         .type('text/html; charset=utf-8')
@@ -159,7 +158,7 @@ export default async function fragmentRoutes(fastify, services) {
     });
 
     /** The next page of episodes, appended in place of the "Show older" link. */
-    scoped.get('/ui/shows/:slug/ad-timeline', async (request, reply) => {
+    scoped.get('/ui/shows/:slug/cuts-timeline', async (request, reply) => {
       const show = findShow(request.params.slug);
       const before = request.query?.before ? String(request.query.before) : null;
       return reply.view('partials/ad-timeline-items.eta', {
@@ -169,7 +168,7 @@ export default async function fragmentRoutes(fastify, services) {
       });
     });
 
-    scoped.post('/ui/shows/:slug/ad-trim', async (request, reply) => {
+    scoped.post('/ui/shows/:slug/cuts-settings', async (request, reply) => {
       const show = findShow(request.params.slug);
       const body = request.body ?? {};
       const mode = AD_TRIM_MODES.includes(body.mode) ? body.mode : show.ad_trim_mode ?? 'off';
@@ -181,7 +180,7 @@ export default async function fragmentRoutes(fastify, services) {
 
       const listen = services.advertsView.listenSettingsFrom(body, show);
       if (listen.error) {
-        if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), listen.error, 'err');
+        if (!isHtmx(request)) return redirectBack(request, reply, cutsPath(show.slug), listen.error, 'err');
         reply.status(422);
         return renderSegments(reply, show, { formError: listen.error });
       }
@@ -213,25 +212,25 @@ export default async function fragmentRoutes(fastify, services) {
         const note = settled.released
           ? `Saved. ${settled.released} ${settled.released === 1 ? 'episode is' : 'episodes are'} now in your feed.`
           : 'Saved.';
-        return redirectBack(request, reply, advertsPath(show.slug), note);
+        return redirectBack(request, reply, cutsPath(show.slug), note);
       }
       return renderSegments(reply, updated);
     });
 
     // The same caps as the JSON routes, and for the same reason: these run the
     // identical work. A limit on one URL and not the other is not a limit.
-    scoped.post('/ui/shows/:slug/ad-detect', { preHandler: [fastify.rateLimit(DETECT_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/cuts-check', { preHandler: [fastify.rateLimit(DETECT_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       if (!show.ad_trim_mode || show.ad_trim_mode === 'off') {
         return isHtmx(request)
           ? renderSegments(reply, show)
-          : redirectBack(request, reply, advertsPath(show.slug), 'Advert detection is off for this show.', 'err');
+          : redirectBack(request, reply, cutsPath(show.slug), 'Advert detection is off for this show.', 'err');
       }
       if (!isHtmx(request)) {
         // A plain form post has nothing on the page to follow the work with, so it
         // waits and says what happened; the browser shows its own loading state.
         await services.adPipeline.processShow(show.id);
-        return redirectBack(request, reply, advertsPath(show.slug), 'Checked.');
+        return redirectBack(request, reply, cutsPath(show.slug), 'Checked.');
       }
       // Started, not awaited: the work strip above the panel follows the pass.
       startPass(show.id);
@@ -240,13 +239,13 @@ export default async function fragmentRoutes(fastify, services) {
       });
     });
 
-    scoped.post('/ui/shows/:slug/ad-segments/:segmentId', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/segments/:segmentId/decide', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const status = request.body?.status;
       if (!['approved', 'rejected', 'programme_starts', 'tail_starts'].includes(status)) {
         return isHtmx(request)
           ? renderSegments(reply, show)
-          : redirectBack(request, reply, advertsPath(show.slug), 'A segment is either removed or kept.', 'err');
+          : redirectBack(request, reply, cutsPath(show.slug), 'A segment is either removed or kept.', 'err');
       }
 
       const segment = services.adDetect.getSegment(request.params.segmentId);
@@ -268,7 +267,7 @@ export default async function fragmentRoutes(fastify, services) {
         const range = await services.advertsView.wordRange(episode, body.startWord, body.endWord);
         if (!range) {
           const message = 'The last word has to come after the first.';
-          if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), message, 'err');
+          if (!isHtmx(request)) return redirectBack(request, reply, cutsPath(show.slug), message, 'err');
           reply.status(422);
           return renderSegments(reply, show, { formError: message });
         }
@@ -309,7 +308,7 @@ export default async function fragmentRoutes(fastify, services) {
               : status === 'tail_starts'
                 ? `From now on everything from “${segment.raw_text}” to the end is cut, in every episode where SelfPod hears it.`
                 : 'Kept.';
-        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note);
+        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : cutsPath(show.slug), note);
       }
       if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id));
       return renderSegments(reply, shows.get(show.id));
@@ -320,7 +319,7 @@ export default async function fragmentRoutes(fastify, services) {
     }
 
     /** Forgetting a boundary puts back everything it cut. */
-    scoped.post('/ui/shows/:slug/ad-markers/:markerId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/boundaries/:markerId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const marker = services.adDetect.getMarker(request.params.markerId);
       if (!marker || marker.show_id !== show.id) throw notFound('That boundary no longer exists.', 'marker_not_found');
@@ -328,7 +327,7 @@ export default async function fragmentRoutes(fastify, services) {
       services.adDetect.removeMarker(marker.id);
       await services.adPipeline.applyDecisions(show.id);
       if (!isHtmx(request)) {
-        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), 'Forgotten, and the audio put back.');
+        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : cutsPath(show.slug), 'Forgotten, and the audio put back.');
       }
       if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id));
       return renderSegments(reply, shows.get(show.id));
@@ -337,7 +336,7 @@ export default async function fragmentRoutes(fastify, services) {
     /* ---------------------------------------------------- the sound of a jingle */
 
     /** "Yes, that's the jingle" — confirmed, and cut for on the same request. */
-    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/confirm', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/jingles/:anchorId/confirm', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const anchor = services.adDetect.getAnchor(request.params.anchorId);
       if (!anchor || anchor.show_id !== show.id) throw notFound('That jingle no longer exists.', 'anchor_not_found');
@@ -345,30 +344,30 @@ export default async function fragmentRoutes(fastify, services) {
       const result = await services.adPipeline.processShow(show.id);
       if (!isHtmx(request)) {
         const cut = result.trimmed?.trimmed ?? 0;
-        return redirectBack(request, reply, advertsPath(show.slug), cut ? `Confirmed. ${cut} ${cut === 1 ? 'episode' : 'episodes'} trimmed to it.` : 'Confirmed.');
+        return redirectBack(request, reply, cutsPath(show.slug), cut ? `Confirmed. ${cut} ${cut === 1 ? 'episode' : 'episodes'} trimmed to it.` : 'Confirmed.');
       }
       return renderSegments(reply, shows.get(show.id));
     });
 
     /** "No, that's not the jingle" — a proposal only; nothing was ever cut by it. */
-    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/dismiss', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/jingles/:anchorId/dismiss', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const anchor = services.adDetect.getAnchor(request.params.anchorId);
       if (!anchor || anchor.show_id !== show.id) throw notFound('That proposal no longer exists.', 'anchor_not_found');
       if (!anchor.confirmed_at) services.adDetect.dismissAnchor(anchor.id);
       await services.adPipeline.applyDecisions(show.id);
-      if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), 'Noted — not offered again.');
+      if (!isHtmx(request)) return redirectBack(request, reply, cutsPath(show.slug), 'Noted — not offered again.');
       return renderSegments(reply, shows.get(show.id));
     });
 
     /** Forgetting a confirmed jingle puts back everything it cut. */
-    scoped.post('/ui/shows/:slug/ad-anchors/:anchorId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/jingles/:anchorId/remove', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const anchor = services.adDetect.getAnchor(request.params.anchorId);
       if (!anchor || anchor.show_id !== show.id) throw notFound('That jingle no longer exists.', 'anchor_not_found');
       services.adDetect.removeAnchor(anchor.id);
       await services.adPipeline.applyDecisions(show.id);
-      if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), 'Forgotten, and the audio put back.');
+      if (!isHtmx(request)) return redirectBack(request, reply, cutsPath(show.slug), 'Forgotten, and the audio put back.');
       return renderSegments(reply, shows.get(show.id));
     });
 
@@ -379,7 +378,7 @@ export default async function fragmentRoutes(fastify, services) {
     async function afterDecision(request, reply, show, note, { level = 'ok', toast = false } = {}) {
       const back = returnTarget(request, show);
       if (!isHtmx(request)) {
-        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note, level);
+        return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : cutsPath(show.slug), note, level);
       }
       // `toast: true` says the note is worth saying out loud on the htmx path too —
       // for work that was started rather than finished, where the re-rendered panel
@@ -396,7 +395,7 @@ export default async function fragmentRoutes(fastify, services) {
     }
 
     /** "The programme starts when it says…", typed rather than picked from the words. */
-    scoped.post('/ui/shows/:slug/ad-markers', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
+    scoped.post('/ui/shows/:slug/boundaries', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
       const show = findShow(request.params.slug);
       const body = request.body ?? {};
       const text = String(body.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -408,7 +407,7 @@ export default async function fragmentRoutes(fastify, services) {
           ? 'Type at least two words the programme says, exactly as it says them.'
           : null;
       if (problem) {
-        if (!isHtmx(request)) return redirectBack(request, reply, advertsPath(show.slug), problem, 'err');
+        if (!isHtmx(request)) return redirectBack(request, reply, cutsPath(show.slug), problem, 'err');
         reply.status(422);
         return renderSegments(reply, show, { formError: problem });
       }
@@ -510,7 +509,7 @@ export default async function fragmentRoutes(fastify, services) {
       });
     });
 
-    scoped.get('/ui/episodes/:id/adverts', async (request, reply) => {
+    scoped.get('/ui/episodes/:id/cuts', async (request, reply) => {
       const { episode, show } = findEpisode(request.params.id);
       return renderEpisodeAdverts(reply, episode, show);
     });
@@ -778,8 +777,13 @@ export default async function fragmentRoutes(fastify, services) {
       const subscription = services.subscriptions.getOrThrow(request.params.id);
       const show = shows.getOrThrow(subscription.show_id);
       const context = services.ledgerContext(subscription, request);
+      // Picking from a select is a navigation and earns a history entry. Typing into
+      // the search box is one navigation however many pauses it took, so each
+      // keystroke's result replaces the address rather than pushing another: Back
+      // leaves the page, it does not step through "t", "ta", "tap", "tape".
+      const typed = request.headers['hx-trigger'] === 'ledger-q';
       reply.header(
-        'HX-Push-Url',
+        typed ? 'HX-Replace-Url' : 'HX-Push-Url',
         `${subscriptionPath(show.slug)}${context.filter.qs ? `?${context.filter.qs}` : ''}`,
       );
       return reply.view('partials/subscription-ledger.eta', context);
@@ -933,8 +937,13 @@ export default async function fragmentRoutes(fastify, services) {
       });
     });
 
+    /* The whole grid, which the dashboard re-reads once when a library-wide scan
+       finishes — rather than every card re-reading itself as its show's part of the
+       sweep ends, N fetches for one press of Rescan all. */
     scoped.get('/ui/dashboard/grid', async (request, reply) => {
-      const all = shows.list().map((show) => ({ ...presentShow(show), advertsCaption: services.advertsView.showCaption(show) }));
+      const rows = shows.list();
+      const presented = presentShows(rows);
+      const all = rows.map((show, index) => ({ ...presented[index], advertsCaption: services.advertsView.showCaption(show) }));
       return reply.view('partials/show-grid.eta', {
         shows: all.filter((s) => s.status === 'active'),
         showsDir: config.showsDir,

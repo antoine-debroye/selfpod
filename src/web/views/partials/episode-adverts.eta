@@ -9,7 +9,7 @@
   const listened = ad.listened;
 %>
 <section class="form-card" id="episode-cuts"
-         hx-get="<%= base %>/adverts"
+         hx-get="<%= base %>/cuts"
          hx-trigger="sse:transcript-<%= episode.id %> from:body, sse:ad-changed-<%= show.id %> from:body<%= listened.state === 'listening' ? ', load delay:10s' : '' %>"
          hx-swap="outerHTML">
   <h2 class="ftitle">Adverts</h2>

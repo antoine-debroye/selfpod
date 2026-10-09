@@ -322,13 +322,13 @@ export function createScanner({
             },
           ],
         });
-        events?.emit(EVENTS.SCAN_FINISHED, { scope: 'show', showId, slug: show.slug, trigger, scanId });
+        events?.emit(EVENTS.SCAN_FINISHED, { scope: 'show', showId, slug: show.slug, trigger, scanId, parentScanId });
         return { filesFound: 0, added: 0, updated: 0, missing: 0, removed: 0, errors: record.errors, warnings: [] };
       }
       const formatted = activity.formatFileError(dir, err);
       health.set(`show_read_${showId}`, { level: 'error', message: formatted.message });
       const record = activity.finish(scanId, { errors: [formatted] });
-      events?.emit(EVENTS.SCAN_FINISHED, { scope: 'show', showId, slug: show.slug, trigger, scanId });
+      events?.emit(EVENTS.SCAN_FINISHED, { scope: 'show', showId, slug: show.slug, trigger, scanId, parentScanId });
       return { filesFound: 0, added: 0, updated: 0, missing: 0, removed: 0, errors: record.errors, warnings: [] };
     }
     health.clear(`show_read_${showId}`);
@@ -647,6 +647,7 @@ export function createScanner({
       slug: show.slug,
       trigger,
       scanId,
+      parentScanId,
       totals: { filesFound, added, updated, missing: missingCount },
     });
 

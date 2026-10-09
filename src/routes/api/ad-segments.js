@@ -343,8 +343,14 @@ export default async function adSegmentRoutes(fastify, services) {
    * exemplar occurrence — read straight from the file by their offsets, so what you
    * hear is what would go, and serving it costs the clip's own bytes rather than the
    * whole episode.
+   *
+   * Two addresses for the same clip. The pages play it from `/api/cuts/…`, because an
+   * ad blocker's network rules match a request by its path, and `/ad-segments/` in
+   * an `<audio src>` is exactly what they match — a blocked clip plays nothing and
+   * says nothing. The `/ad-segments/` address stays for scripts that use the JSON
+   * API directly, which the README says they may.
    */
-  fastify.get('/ad-segments/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, async (request, reply) => {
+  const segmentSample = async (request, reply) => {
     const segment = adDetect.getSegment(request.params.id);
     if (!segment) throw notFound('That segment no longer exists.', 'segment_not_found');
 
@@ -359,7 +365,9 @@ export default async function adSegmentRoutes(fastify, services) {
     const from = Math.max(0, occurrence.start_frame - contextFrames);
     const to = Math.min(source.table.frameCount, occurrence.end_frame + contextFrames);
     return sendClip(reply, source, from, to);
-  });
+  };
+  fastify.get('/cuts/segments/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, segmentSample);
+  fastify.get('/ad-segments/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, segmentSample);
 
   /* ---- the cuts, episode by episode ---- */
 
@@ -518,9 +526,10 @@ export default async function adSegmentRoutes(fastify, services) {
   /**
    * The jingle's own exemplar clip, as audio, so a proposal can be heard before it is
    * confirmed. The exemplar range, never an arbitrary range chosen by the request,
-   * read the same way a segment's sample is.
+   * read the same way a segment's sample is. Two addresses, for the reason the
+   * segment's clip has two.
    */
-  fastify.get('/ad-anchors/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, async (request, reply) => {
+  const anchorSample = async (request, reply) => {
     const anchor = adDetect.getAnchor(request.params.id);
     if (!anchor) throw notFound('That jingle no longer exists.', 'anchor_not_found');
 
@@ -533,5 +542,7 @@ export default async function adSegmentRoutes(fastify, services) {
     const from = Math.max(0, msToFrame(anchor.exemplar_start_ms, timing) - contextFrames);
     const to = Math.min(source.table.frameCount, msToFrame(anchor.exemplar_end_ms, timing) + 1 + contextFrames);
     return sendClip(reply, source, from, to);
-  });
+  };
+  fastify.get('/cuts/anchors/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, anchorSample);
+  fastify.get('/ad-anchors/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, anchorSample);
 }

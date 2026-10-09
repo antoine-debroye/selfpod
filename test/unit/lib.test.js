@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { AUDIO_MIME_TYPES, COVER_FILENAMES, SUPPORTED_EXTENSIONS, audioMimeType } from '../../src/constants.js';
-import { formatDurationFeed, fromLocalInputValue, toLocalInputValue, toRFC2822 } from '../../src/lib/dates.js';
+import { formatClock, formatDuration, formatDurationFeed, fromLocalInputValue, toLocalInputValue, toRFC2822 } from '../../src/lib/dates.js';
 import { computeIdentityKey, WHOLE_FILE_THRESHOLD, WINDOW_BYTES } from '../../src/lib/identity.js';
 import { encodePathSegment, feedUrl, mediaUrl, normaliseBaseUrl } from '../../src/lib/urls.js';
 import { newFeedToken, tokensMatch } from '../../src/lib/tokens.js';
@@ -92,6 +92,22 @@ describe('dates (spec §8.3 requirement 4)', () => {
 
   it('returns null for unparseable input instead of "Invalid Date"', () => {
     assert.equal(toRFC2822('not a date'), null);
+  });
+
+  it('formats a position in an episode as one m:ss everywhere', () => {
+    // The one clock behind the Adverts page, the episode page, the ledger and the
+    // API; app.js carries a copy of exactly this for what it formats on the client.
+    assert.equal(formatClock(0), '0:00');
+    assert.equal(formatClock(39_400), '0:39');
+    assert.equal(formatClock(39_600), '0:40');
+    assert.equal(formatClock(754_000), '12:34');
+    assert.equal(formatClock(3_764_000), '1:02:44');
+    assert.equal(formatClock(null), '0:00');
+    assert.equal(formatClock(undefined), '0:00');
+    assert.equal(formatClock(-5_000), '0:00');
+    assert.equal(formatClock(Number.NaN), '0:00');
+    // And it agrees with the seconds-based form the feed's duration uses.
+    assert.equal(formatClock(3_492_000), formatDuration(3492));
   });
 
   it('formats durations as zero-padded HH:MM:SS for the feed', () => {

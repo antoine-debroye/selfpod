@@ -138,6 +138,10 @@ describe('the jingle proposal, over the API', () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers['content-type'], 'audio/mpeg');
     assert.ok(Buffer.from(response.rawPayload).length > 0);
+    // The same clip from the address the pages use, which no ad blocker rule matches.
+    const unblockable = await server.get(`/api/cuts/anchors/${anchor.id}/sample.mp3?context=1`);
+    assert.equal(unblockable.statusCode, 200);
+    assert.ok(Buffer.from(unblockable.rawPayload).equals(Buffer.from(response.rawPayload)), 'the two addresses serve different clips');
     assert.ok(
       Buffer.from(response.rawPayload).length < JINGLE.length,
       'the sample returned the whole jingle file or more, not a short clip of it',

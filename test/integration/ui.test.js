@@ -1158,7 +1158,7 @@ describe('a check started from the Adverts page', () => {
     server.db.prepare('UPDATE shows SET ad_trim_mode = ? WHERE id = ?').run('review', show.id);
     await server.login();
 
-    const response = await server.post(`/ui/shows/${show.slug}/ad-detect`, {}, { 'hx-request': 'true' });
+    const response = await server.post(`/ui/shows/${show.slug}/cuts-check`, {}, { 'hx-request': 'true' });
     assert.equal(response.statusCode, 200);
     assert.ok(response.body.includes('id="cuts-panel"'), 'the panel comes back');
     assert.ok(response.body.includes('Checking this show now'), 'and says the check has started');
@@ -1169,7 +1169,7 @@ describe('a check started from the Adverts page', () => {
     // already recorded a run for it, by the time the response is out.
     const ran = await server.adPipeline.processShow(show.id);
     assert.ok(ran && !ran.skipped, 'the pass over this show ran');
-    const after = await server.get(`/ui/shows/${show.slug}/ad-panel`, { 'hx-request': 'true' });
+    const after = await server.get(`/ui/shows/${show.slug}/cuts-panel`, { 'hx-request': 'true' });
     assert.equal(after.statusCode, 200);
   });
 });

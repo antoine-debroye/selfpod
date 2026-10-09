@@ -503,6 +503,23 @@ describe('the status buttons, with JavaScript on', () => {
     assert.equal(flash.level, 'ok');
   });
 
+  it('typing into the ledger search replaces the address; picking a filter pushes one', async () => {
+    const subscription = await followed();
+    const table = `/ui/subscriptions/${subscription.id}/items/table`;
+
+    // htmx names the element that fired the request in HX-Trigger: the search box
+    // is `ledger-q`, and every pause while typing into it is the same navigation.
+    const typed = await server.get(`${table}?q=tape`, { ...htmx, 'hx-trigger': 'ledger-q' });
+    assert.equal(typed.statusCode, 200);
+    assert.equal(typed.headers['hx-replace-url'], '/shows/tape-club/subscription?q=tape');
+    assert.equal(typed.headers['hx-push-url'], undefined, 'a keystroke must not push a history entry');
+
+    const picked = await server.get(`${table}?decision=downloaded`, { ...htmx, 'hx-trigger': 'ledger-decision' });
+    assert.equal(picked.statusCode, 200);
+    assert.equal(picked.headers['hx-push-url'], '/shows/tape-club/subscription?decision=downloaded');
+    assert.equal(picked.headers['hx-replace-url'], undefined);
+  });
+
   it('Pause and Resume say which they did', async () => {
     const subscription = await followed();
     const paused = await post(`/ui/subscriptions/${subscription.id}/toggle`, {}, htmx);
@@ -602,7 +619,7 @@ describe('the switch that grants network access', () => {
     const response = await server.get('/settings', { authed: true });
 
     assert.equal(response.statusCode, 200);
-    assert.match(response.body, /Follow podcast feeds/);
+    assert.match(response.body, /Follow a feed/);
     assert.match(
       response.body,
       /only thing that makes SelfPod fetch from the internet/,

@@ -90,14 +90,9 @@ export default async function eventRoutes(fastify, { events, logger, shows, adPi
     };
 
     const onScanFinished = (payload) => {
-      const scope = payload.scope === 'all' ? 'all' : payload.showId;
-      // An empty swap clears the strip once the scan is done — queued behind any
-      // strip still rendering, or the clear would arrive before what it clears.
-      sendAfterStrips(`scan-progress-${scope}`, '');
-      // These are used as triggers (hx-trigger="sse:scan-finished-…"), where the
-      // payload is irrelevant — only the event name matters.
-      if (payload.showId) sendAfterStrips(`scan-finished-${payload.showId}`, 'done');
-      if (payload.scope === 'all') sendAfterStrips('scan-finished-all', 'done');
+      // Queued behind any strip still rendering, or the clear would arrive before
+      // what it clears.
+      for (const [event, data] of scanFinishedEvents(payload)) sendAfterStrips(event, data);
     };
 
     /*
@@ -160,6 +155,30 @@ export default async function eventRoutes(fastify, { events, logger, shows, adPi
     // Returning the raw reply tells Fastify this response is managed by hand.
     return reply;
   });
+}
+
+/**
+ * What the stream says when a scan finishes, as [event, data] pairs. The events are
+ * triggers (hx-trigger="sse:scan-finished-…"), so only the names matter.
+ *
+ * Three names, because three things listen. `scan-finished-<show>` is the show's
+ * own page: the readiness card re-reads itself whenever its show was scanned, as
+ * part of a sweep or alone. `show-scanned-<show>` is the dashboard card, and is only
+ * sent for a scan of that show on its own: during a library-wide sweep every show
+ * finishes in turn, and a card that re-read itself at each would be N fetches for
+ * one press of Rescan all. The grid re-reads itself once instead, on
+ * `scan-finished-all`.
+ */
+export function scanFinishedEvents(payload) {
+  const scope = payload.scope === 'all' ? 'all' : payload.showId;
+  // An empty swap clears the strip once the scan is done.
+  const events = [[`scan-progress-${scope}`, '']];
+  if (payload.showId) {
+    events.push([`scan-finished-${payload.showId}`, 'done']);
+    if (!payload.parentScanId) events.push([`show-scanned-${payload.showId}`, 'done']);
+  }
+  if (payload.scope === 'all') events.push(['scan-finished-all', 'done']);
+  return events;
 }
 
 /**

@@ -12,7 +12,7 @@
     <h1><%= show.title %></h1>
   </div>
   <div class="actions">
-    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Adverts</a>
+    <a class="btn btn-ghost btn-sm" href="/shows/<%= encodeURIComponent(show.slug) %>/cuts">Adverts</a>
     <span class="badge <%= badge.cls %>"><span class="d" aria-hidden="true"></span><%= badge.label %></span>
   </div>
 </div>
@@ -31,7 +31,7 @@
       <strong><%= show.counts.held %> episode<%= show.counts.held === 1 ? ' is' : 's are' %> not in your feed yet.</strong>
       They are waiting on a decision about the audio this show repeats — nothing is lost,
       and they go out as soon as it is settled.
-      <a href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Take a look</a>
+      <a href="/shows/<%= encodeURIComponent(show.slug) %>/cuts">Take a look</a>
     </div>
   </div>
 <% } %>

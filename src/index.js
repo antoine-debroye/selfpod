@@ -77,6 +77,7 @@ async function main() {
     await mkdir(config.tempDir, { recursive: true });
     await mkdir(config.episodeArtDir, { recursive: true });
     await mkdir(config.fingerprintDir, { recursive: true });
+    await mkdir(config.coverThumbDir, { recursive: true });
     await mkdir(config.trimmedDir, { recursive: true });
     await mkdir(config.transcriptDir, { recursive: true });
   } catch (err) {
@@ -138,7 +139,7 @@ async function main() {
   const trimmer = createTrimmer({
     config, events, logger, health, shows, episodes, adDetect, metadata,
   });
-  const advertsView = createAdvertsView({ db, adDetect, transcriber, episodes, shows });
+  const advertsView = createAdvertsView({ db, config, adDetect, transcriber, episodes, shows });
   const adPipeline = createAdPipeline({
     db, events, logger, health, shows, episodes, adDetect, trimmer, activity, transcriber,
     // A new or changed file starts a pass straight away, and one runs after the startup scan.

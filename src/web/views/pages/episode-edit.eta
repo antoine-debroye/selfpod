@@ -4,9 +4,9 @@
 %>
 <div class="page-title">
   <div>
-    <div class="sub mono"><%= episode.filename %> · <%= episode.mimeType %> · <span
-      title="SelfPod first saw this file on <%= it.helpers.formatDateTime(episode.createdAt) %>">added <%= it.helpers.relativeTime(episode.createdAt) %></span></div>
-    <h1>Edit episode</h1>
+    <div class="sub">Edit episode · <span class="mono"><%= episode.filename %> · <%= episode.mimeType %> · <span
+      title="SelfPod first saw this file on <%= it.helpers.formatDateTime(episode.createdAt) %>">added <%= it.helpers.relativeTime(episode.createdAt) %></span></span></div>
+    <h1><%= episode.title %></h1>
   </div>
   <div class="actions">
     <button class="btn btn-danger btn-sm" type="button" id="episode-remove-or-delete"
@@ -87,7 +87,7 @@
         <% } %>
       </div>
     </div>
-    <a class="btn btn-ghost btn-sm" href="/stats?showId=<%= encodeURIComponent(show.slug) %>">All shows</a>
+    <a class="btn btn-ghost btn-sm" href="/stats?showId=<%= encodeURIComponent(show.slug) %>">Show statistics</a>
   </div>
 
   <div class="reach-row">

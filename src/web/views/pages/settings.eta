@@ -121,7 +121,7 @@
 
   <div class="set-row">
     <div class="info">
-      <div class="t" id="subscriptions-enabled-title">Follow podcast feeds</div>
+      <div class="t" id="subscriptions-enabled-title">Follow a feed</div>
       <div class="d">
         Lets SelfPod check a remote podcast feed and download the episodes matching rules you set,
         into a show of your own. You choose the rules per show, on that show's page.

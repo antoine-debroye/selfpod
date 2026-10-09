@@ -25,7 +25,7 @@ const BARE_LAYOUT = { layout: 'layouts/bare.eta' };
  * single form-handling pattern used throughout the app.
  */
 export default async function pageRoutes(fastify, services) {
-  const { config, settings, shows, episodes, activity, health, watcher, presentShow, presentEpisode } = services;
+  const { config, settings, shows, episodes, activity, health, watcher, presentShow, presentShows, presentEpisode } = services;
 
   /** Shared context every page in the app shell needs. */
   function shell(request, extra = {}) {
@@ -235,7 +235,11 @@ export default async function pageRoutes(fastify, services) {
   /* ------------------------------------------------------------- dashboard */
 
   fastify.get('/', guarded, async (request, reply) => {
-    const all = shows.list().map((show) => ({ ...presentShow(show), advertsCaption: services.advertsView.showCaption(show) }));
+    // Every show at once: two grouped queries for the access figures rather than
+    // four per show (presenters.js, presentShows).
+    const rows = shows.list();
+    const presented = presentShows(rows);
+    const all = rows.map((show, index) => ({ ...presented[index], advertsCaption: services.advertsView.showCaption(show) }));
     return reply.view(
       'pages/dashboard.eta',
       shell(request, {
@@ -420,12 +424,12 @@ export default async function pageRoutes(fastify, services) {
     return reply.view(
       'pages/subscription.eta',
       shell(request, {
-        title: `${show.title} — subscription`,
+        title: `${show.title} — follow a feed`,
         activeSlug: show.slug,
         crumbs: [
           { label: 'Dashboard', href: '/' },
           { label: show.title, href: `/shows/${encodeURIComponent(show.slug)}` },
-          { label: 'Subscription' },
+          { label: 'Follow a feed' },
         ],
         show: presentShow(show),
         subscription: ledger?.subscription ?? null,
@@ -438,7 +442,20 @@ export default async function pageRoutes(fastify, services) {
 
   /* ---------------------------------------------------------- ad segments */
 
-  fastify.get('/shows/:slug/adverts', guarded, async (request, reply) => {
+  /*
+   * The page lives at /cuts, and every fragment it fetches is named for cuts, jingles
+   * and boundaries. 1.9.1 renamed the classes and ids an ad blocker hides; the URLs
+   * were still named after adverts, and a network rule in uBlock Origin or AdGuard
+   * blocks a request by its path just as a cosmetic rule hides an element by its
+   * name — silently, and the page then looks broken for no reason anyone can see.
+   * A test refuses any such word in a path the browser fetches.
+   */
+  fastify.get('/shows/:slug/adverts', guarded, async (request, reply) =>
+    // Bookmarks and the links in older notifications still work.
+    reply.redirect(`/shows/${encodeURIComponent(request.params.slug)}/cuts`, 301),
+  );
+
+  fastify.get('/shows/:slug/cuts', guarded, async (request, reply) => {
     const show = shows.getBySlug(request.params.slug);
     if (!show) throw notFound('That show does not exist.', 'show_not_found');
 
@@ -480,7 +497,7 @@ export default async function pageRoutes(fastify, services) {
         crumbs: [
           { label: 'Dashboard', href: '/' },
           { label: show.title, href: `/shows/${encodeURIComponent(show.slug)}` },
-          { label: 'Edit episode' },
+          { label: episode.title },
         ],
         show: presentShow(show),
         episode: presentEpisode(episode, show),
