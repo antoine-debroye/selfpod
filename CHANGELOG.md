@@ -7,7 +7,11 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
-## Unreleased
+## 1.10.0 — 2026-10-09
+
+The release that came out of a full audit of SelfPod: what the statistics count, what a
+stranger can reach, what slows a small NAS down, and what the admin pages get wrong on a
+phone or behind an ad blocker. The audit itself is in `doc/audit-2026-10-09.md`.
 
 ### Fixed — the statistics said more than had happened
 
@@ -269,6 +273,25 @@ changes what your listeners see, it says so.
 - Under the hood of the stylesheet, the colours that were spelt out by hand in a dozen places
   are named once, with the values they always had, and twenty-odd rules nothing used are gone.
   Nothing looks different.
+
+### Upgrading
+
+- Change the image tag and redeploy, as always. The database migrates itself: migration 012
+  adds indexes, and migration 013 rebuilds the request log so that it no longer cascades away
+  with a deleted episode. Every row is kept; on a large log the first start takes a moment
+  longer. 1.9.1 still runs against the migrated database if you need to roll back.
+- **The statistics will read lower than they did, and that is the fix.** 304s and downloads
+  the app abandoned drop out of every total at once, past ones included. HEAD requests and
+  Apple Podcasts' `bytes=0-` downloads recorded *before* this release were stored as they were
+  counted, and stay that way; everything from now on is counted correctly.
+- The Adverts page lives at `/shows/<show>/cuts` now. An old bookmark redirects.
+- You stay signed in for the configured number of hours from when you signed in, rather than
+  from your last click. Changing your password signs every other device out.
+- A filename starting with a date sets the publish date only for episodes SelfPod has not
+  seen before; nothing already in a feed moves.
+- New and optional: `TRUST_PROXY`, to stop trusting forwarded headers from anything but your
+  proxy, and the `WHISPER_MODELS` build argument for anyone building their own image. With
+  neither set, nothing changes.
 
 ## 1.9.1 — 2026-09-16
 
