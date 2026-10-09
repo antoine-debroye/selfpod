@@ -10,7 +10,7 @@
       <% if (crumb.href && i < crumbs.length - 1) { %>
         <a href="<%= crumb.href %>"><%= crumb.label %></a>
       <% } else { %>
-        <b><%= crumb.label %></b>
+        <b aria-current="page"><%= crumb.label %></b>
       <% } %>
     <% } %>
   </nav>

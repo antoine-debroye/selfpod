@@ -1,5 +1,9 @@
 <%
   const errors = it.errors || {};
+  /* What was typed, echoed back after a refusal. Kept apart from `it.title`, which is
+     the page's <title> — this field once rendered that, so the form opened with
+     "New show" already typed into the name. */
+  const form = it.form || {};
 %>
 <div class="page-title">
   <div>
@@ -11,17 +15,17 @@
 <form class="form-card form-card--narrow" method="post" action="/shows/new">
   <div class="field<%= errors.title ? ' is-invalid' : '' %>">
     <label for="title">Show name</label>
-    <input id="title" name="title" value="<%= it.title || '' %>" required autofocus maxlength="300"
-           data-slug-source>
-    <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+    <input id="title" name="title" value="<%= form.title || '' %>" required autofocus maxlength="300"
+           data-slug-source<%~ errors.title ? ' aria-invalid="true" aria-describedby="title-error"' : '' %>>
+    <% if (errors.title) { %><div class="field-error" id="title-error"><%= errors.title %></div><% } %>
   </div>
 
   <div class="field<%= errors.slug ? ' is-invalid' : '' %>">
     <label for="slug">Folder name <span class="label-hint">(appears in the feed URL)</span></label>
-    <input id="slug" name="slug" value="<%= it.slug || '' %>" class="mono mono-input" data-slug-target
-           pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="96">
+    <input id="slug" name="slug" value="<%= form.slug || '' %>" class="mono mono-input" data-slug-target
+           pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="96"<%~ errors.slug ? ' aria-invalid="true" aria-describedby="slug-error"' : '' %>>
     <% if (errors.slug) { %>
-      <div class="field-error"><%= errors.slug %></div>
+      <div class="field-error" id="slug-error"><%= errors.slug %></div>
     <% } else { %>
       <div class="hint">Leave blank to derive it from the name. Letters, numbers, dots, dashes and underscores.</div>
     <% } %>

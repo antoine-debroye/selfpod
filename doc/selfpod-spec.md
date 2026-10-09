@@ -246,7 +246,12 @@ Required behavior:
      used only as a *suggested* title if the user hasn't set one, never
      silently overwrites a user-edited title on rescan.
    - Compute/assign a stable GUID (§7.2).
-   - Insert into the database with `pub_date` defaulting to file mtime.
+   - Insert into the database with `pub_date` defaulting to the date the filename
+     starts with (`YYYY-MM-DD`, with `-`, `_`, `.` or nothing between the parts,
+     at midnight in `TZ`) when there is one and the file mtime falls on another
+     day; otherwise to the file mtime. First insert only — a rescan never
+     rewrites `pub_date`, and a user-set date (`pub_date_is_custom`) is never
+     touched.
 3. For each file previously known but no longer present on disk, mark
    the episode `missing` (soft state, not deleted) rather than removing
    it from the feed immediately — avoids apps re-downloading/duplicating

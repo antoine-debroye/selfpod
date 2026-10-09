@@ -37,7 +37,7 @@
     <% if (it.engineSentence) { %><p class="cuts-note cuts-note--warn"><%= it.engineSentence %></p><% } %>
 
     <section class="form-card" id="cuts-rules">
-      <div class="ftitle">What SelfPod cuts</div>
+      <h2 class="ftitle">What SelfPod cuts</h2>
       <% if (rules.rows.length) { %>
         <ul class="rules">
           <% for (const rule of rules.rows) { %>
@@ -60,7 +60,8 @@
       <% } %>
 
       <form class="rule-teach" method="post" action="/ui/shows/<%= slug %>/ad-markers"
-            hx-post="/ui/shows/<%= slug %>/ad-markers" hx-target="#cuts-panel" hx-swap="outerHTML">
+            hx-post="/ui/shows/<%= slug %>/ad-markers" hx-target="#cuts-panel" hx-swap="outerHTML"
+            hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
         <label class="rule-teach__lead" for="boundary-position">The programme</label>
         <select id="boundary-position" name="position">
           <option value="starts">starts when it says</option>
@@ -95,7 +96,7 @@
     </section>
 
     <section class="form-card" id="cuts-timeline">
-      <div class="ftitle">Episode by episode</div>
+      <h2 class="ftitle">Episode by episode</h2>
       <%~ include('./ad-timeline-items.eta', { show, timeline }) %>
     </section>
   <% } %>
@@ -103,7 +104,8 @@
   <details class="form-card cuts-settings" <%= mode === 'off' ? 'open' : '' %>>
     <summary class="ftitle">Settings</summary>
     <form method="post" action="/ui/shows/<%= slug %>/ad-trim"
-          hx-post="/ui/shows/<%= slug %>/ad-trim" hx-target="#cuts-panel" hx-swap="outerHTML">
+          hx-post="/ui/shows/<%= slug %>/ad-trim" hx-target="#cuts-panel" hx-swap="outerHTML"
+          hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
       <fieldset class="modal__choices">
         <legend class="sr-only">What should SelfPod do about adverts?</legend>
         <label class="choice">
@@ -170,10 +172,15 @@
     </form>
 
     <% if (mode !== 'off') { %>
+      <%
+        /* With script on the check is started, not waited for: the panel comes back at
+           once and the work strip at the top follows the pass (fragments.js, ad-detect). */
+      %>
       <form class="cuts-settings__check" method="post" action="/ui/shows/<%= slug %>/ad-detect"
-            hx-post="/ui/shows/<%= slug %>/ad-detect" hx-target="#cuts-panel" hx-swap="outerHTML">
+            hx-post="/ui/shows/<%= slug %>/ad-detect" hx-target="#cuts-panel" hx-swap="outerHTML"
+            hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
         <span class="muted">SelfPod checks after every scan.</span>
-        <button class="btn btn-ghost btn-sm" type="submit">Check now</button>
+        <button class="btn btn-ghost btn-sm" type="submit" id="cuts-check-now">Check now</button>
       </form>
     <% } %>
   </details>

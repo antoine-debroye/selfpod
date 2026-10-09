@@ -87,13 +87,17 @@
 <%~ include('../partials/stats-chart-apps', it) %>
 
 <div class="form-card" style="margin-bottom:18px">
-  <div class="ftitle">Per show</div>
+  <h2 class="ftitle">Per show</h2>
   <div class="fdesc">Downloads and streams counted separately, plus how often podcast apps checked the feed.</div>
   <% if (!rows.length) { %>
     <div class="empty"><div class="empty__title">No shows yet</div></div>
   <% } else { %>
+    <%
+      /* .ep-table--stack and data-label: on a phone each row becomes a block with the
+         column name written in front of every value (app.css §14b). */
+    %>
     <div class="table-scroll">
-      <table class="ep-table">
+      <table class="ep-table ep-table--stack">
         <thead>
           <tr>
             <th scope="col">Show</th>
@@ -107,22 +111,22 @@
         <tbody>
           <% for (const row of rows) { %>
             <tr>
-              <td>
+              <td class="ep-table__lead">
                 <div class="ep-title">
                   <a href="/shows/<%= encodeURIComponent(row.slug) %>"><%= row.title %></a>
                   <small><%= row.episodesTouched %> episode<%= row.episodesTouched === 1 ? '' : 's' %> fetched</small>
                 </div>
               </td>
-              <td class="mono"><%= row.downloads.toLocaleString('en') %></td>
-              <td class="mono"><%= row.streams.toLocaleString('en') %></td>
-              <td class="size"><%= it.helpers.formatBytes(row.bytes) %></td>
-              <td class="mono" title="<%= row.feedLastAt ? 'Last checked ' + it.helpers.formatDateTime(row.feedLastAt) + (row.feedLastClient ? ' by ' + row.feedLastClient : '') : 'No podcast app has checked this feed yet' %>">
+              <td class="mono" data-label="Downloads"><%= row.downloads.toLocaleString('en') %></td>
+              <td class="mono" data-label="Streams"><%= row.streams.toLocaleString('en') %></td>
+              <td class="size" data-label="Served"><%= it.helpers.formatBytes(row.bytes) %></td>
+              <td class="mono" data-label="Feed checks" title="<%= row.feedLastAt ? 'Last checked ' + it.helpers.formatDateTime(row.feedLastAt) + (row.feedLastClient ? ' by ' + row.feedLastClient : '') : 'No podcast app has checked this feed yet' %>">
                 <%= row.feedFetches.toLocaleString('en') %>
                 <% if (row.feedLastAt) { %>
                   <small class="dim">· <%= it.helpers.relativeTime(row.feedLastAt) %></small>
                 <% } %>
               </td>
-              <td>
+              <td data-label="Failures">
                 <% if (row.failures) { %>
                   <a class="badge badge-err badge--tight" href="/stats?showId=<%= encodeURIComponent(row.slug) %>&failuresOnly=1"><span class="d" aria-hidden="true"></span><%= row.failures %></a>
                 <% } else { %>
@@ -139,10 +143,10 @@
 
 <% if (busiest.length) { %>
   <div class="form-card" style="margin-bottom:18px">
-    <div class="ftitle">Most fetched episodes</div>
+    <h2 class="ftitle">Most fetched episodes</h2>
     <div class="fdesc">Across every show, by downloads then streams.</div>
     <div class="table-scroll">
-      <table class="ep-table">
+      <table class="ep-table ep-table--stack">
         <thead>
           <tr>
             <th scope="col">Episode</th>
@@ -155,16 +159,16 @@
         <tbody>
           <% for (const row of busiest) { %>
             <tr>
-              <td>
+              <td class="ep-table__lead">
                 <div class="ep-title">
                   <a href="/shows/<%= encodeURIComponent(row.showSlug) %>/episodes/<%= encodeURIComponent(row.episodeId) %>"><%= row.title %></a>
                   <small><%= row.showTitle %></small>
                 </div>
               </td>
-              <td class="mono"><%= row.downloads.toLocaleString('en') %></td>
-              <td class="mono"><%= row.streams.toLocaleString('en') %></td>
-              <td class="size"><%= it.helpers.formatBytes(row.bytes) %></td>
-              <td class="ep-date mono"><%= it.helpers.relativeTime(row.lastAt) %></td>
+              <td class="mono" data-label="Downloads"><%= row.downloads.toLocaleString('en') %></td>
+              <td class="mono" data-label="Streams"><%= row.streams.toLocaleString('en') %></td>
+              <td class="size" data-label="Served"><%= it.helpers.formatBytes(row.bytes) %></td>
+              <td class="ep-date mono" data-label="Last fetched"><%= it.helpers.relativeTime(row.lastAt) %></td>
             </tr>
           <% } %>
         </tbody>
@@ -174,7 +178,7 @@
 <% } %>
 
 <div class="form-card">
-  <div class="ftitle">Access log</div>
+  <h2 class="ftitle">Access log</h2>
   <div class="fdesc">
     <%= it.total.toLocaleString('en') %> request<%= it.total === 1 ? '' : 's' %> match<%= it.total === 1 ? 'es' : '' %>
     these filters. The CSV holds every one of them, not only the rows loaded here.

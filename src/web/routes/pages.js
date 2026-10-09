@@ -238,6 +238,7 @@ export default async function pageRoutes(fastify, services) {
       'pages/dashboard.eta',
       shell(request, {
         title: 'Dashboard',
+        active: 'dashboard',
         crumbs: [{ label: 'Dashboard' }],
         shows: all.filter((s) => s.status === SHOW_STATUS.ACTIVE),
         pausedShows: all.filter((s) => s.status === SHOW_STATUS.FOLDER_MISSING),
@@ -272,8 +273,8 @@ export default async function pageRoutes(fastify, services) {
         shell(request, {
           title: 'New show',
           crumbs: [{ label: 'Dashboard', href: '/' }, { label: 'New show' }],
-          title_: request.body?.title,
-          slug: request.body?.slug,
+          // Echoed back as the field values, so a refusal never discards what was typed.
+          form: { title: request.body?.title, slug: request.body?.slug },
           errors: err.fields ?? { title: err.message },
         }),
         APP_LAYOUT,
@@ -980,9 +981,17 @@ export default async function pageRoutes(fastify, services) {
   });
 }
 
+/*
+ * Topbar actions. A button that makes a request is held and shows it is working until
+ * the answer comes (`hx-disabled-elt`, and htmx's own `htmx-request` class, which the
+ * stylesheet draws as a spinner), and a second press while one is in flight is dropped
+ * rather than queued as a second scan.
+ */
+const BUSY = 'hx-disabled-elt="this" hx-sync="this:drop"';
+
 function dashboardActions() {
   return `
-    <button class="btn btn-ghost btn-sm" type="button"
+    <button class="btn btn-ghost btn-sm" type="button" ${BUSY}
             hx-post="/ui/rescan-all" hx-target="#scan-progress-slot" hx-swap="innerHTML">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>
       Rescan all
@@ -997,7 +1006,7 @@ function dashboardActions() {
 function showActions(slug) {
   const safe = encodeURIComponent(slug);
   return `
-    <button class="btn btn-ghost btn-sm" type="button"
+    <button class="btn btn-ghost btn-sm" type="button" ${BUSY}
             hx-post="/ui/shows/${safe}/rescan" hx-target="#scan-progress-slot" hx-swap="innerHTML">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>
       Rescan

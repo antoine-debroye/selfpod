@@ -3,12 +3,15 @@
   const errors = it.errors || {};
   const saved = it.saved;
   const err = (field) => errors[field] ? ' is-invalid' : '';
+  /* A refused field says so to assistive technology as well: the error text below it
+     is named as its description, and it is marked invalid. */
+  const aria = (field, id) => errors[field] ? ` aria-invalid="true" aria-describedby="${id}-error"` : '';
 %>
 <form class="form-card" id="show-meta-form"
       method="post" action="/ui/shows/<%= encodeURIComponent(show.slug) %>/meta"
       hx-post="/ui/shows/<%= encodeURIComponent(show.slug) %>/meta"
       hx-target="#show-meta-form" hx-swap="outerHTML">
-  <div class="ftitle">Show metadata</div>
+  <h2 class="ftitle">Show metadata</h2>
   <div class="fdesc">
     Saved to SelfPod's database, and mirrored to <span class="mono">show.json</span> in the show's folder
     so your settings stay portable.
@@ -17,22 +20,22 @@
   <div class="form-row" style="margin-bottom:14px">
     <div class="field<%= err('title') %>" style="margin:0">
       <label for="f-title">Title</label>
-      <input id="f-title" name="title" value="<%= show.title %>" required maxlength="300">
-      <% if (errors.title) { %><div class="field-error"><%= errors.title %></div><% } %>
+      <input id="f-title" name="title" value="<%= show.title %>" required maxlength="300"<%~ aria('title', 'f-title') %>>
+      <% if (errors.title) { %><div class="field-error" id="f-title-error"><%= errors.title %></div><% } %>
     </div>
     <div class="field<%= err('authorName') %>" style="margin:0">
       <label for="f-author">Author name</label>
-      <input id="f-author" name="authorName" value="<%= show.authorName %>" maxlength="200">
-      <% if (errors.authorName) { %><div class="field-error"><%= errors.authorName %></div><% } %>
+      <input id="f-author" name="authorName" value="<%= show.authorName %>" maxlength="200"<%~ aria('authorName', 'f-author') %>>
+      <% if (errors.authorName) { %><div class="field-error" id="f-author-error"><%= errors.authorName %></div><% } %>
     </div>
   </div>
 
   <div class="form-row" style="margin-bottom:14px">
     <div class="field<%= err('authorEmail') %>" style="margin:0">
       <label for="f-email">Author email</label>
-      <input id="f-email" name="authorEmail" type="email" class="mono mono-input" value="<%= show.authorEmail %>" maxlength="200">
+      <input id="f-email" name="authorEmail" type="email" class="mono mono-input" value="<%= show.authorEmail %>" maxlength="200"<%~ aria('authorEmail', 'f-email') %>>
       <% if (errors.authorEmail) { %>
-        <div class="field-error"><%= errors.authorEmail %></div>
+        <div class="field-error" id="f-email-error"><%= errors.authorEmail %></div>
       <% } else { %>
         <div class="hint">Podcast directories require an owner email to verify who owns the show.</div>
       <% } %>
@@ -55,16 +58,16 @@
   <div class="form-row">
     <div class="field<%= err('category') %>" style="margin:0">
       <label for="f-category">Category (Apple)</label>
-      <select id="f-category" name="category" data-category-select>
+      <select id="f-category" name="category" data-category-select<%~ aria('category', 'f-category') %>>
         <% for (const name of it.helpers.categoryNames) { %>
           <option value="<%= name %>"<%= show.category === name ? ' selected' : '' %>><%= name %></option>
         <% } %>
       </select>
-      <% if (errors.category) { %><div class="field-error"><%= errors.category %></div><% } %>
+      <% if (errors.category) { %><div class="field-error" id="f-category-error"><%= errors.category %></div><% } %>
     </div>
     <div class="field<%= err('subcategory') %>" style="margin:0">
       <label for="f-subcategory">Subcategory</label>
-      <select id="f-subcategory" name="subcategory" data-subcategory-select>
+      <select id="f-subcategory" name="subcategory" data-subcategory-select<%~ aria('subcategory', 'f-subcategory') %>>
         <option value="">(none)</option>
         <% for (const [category, subs] of Object.entries(it.helpers.categories)) { %>
           <% if (subs.length) { %>
@@ -76,7 +79,7 @@
           <% } %>
         <% } %>
       </select>
-      <% if (errors.subcategory) { %><div class="field-error"><%= errors.subcategory %></div><% } %>
+      <% if (errors.subcategory) { %><div class="field-error" id="f-subcategory-error"><%= errors.subcategory %></div><% } %>
     </div>
   </div>
 
@@ -92,12 +95,12 @@
     </div>
     <div class="field<%= err('itunesType') %>" style="margin:0">
       <label for="f-itunes-type">Episode order</label>
-      <select id="f-itunes-type" name="itunesType">
+      <select id="f-itunes-type" name="itunesType"<%~ aria('itunesType', 'f-itunes-type') %>>
         <option value="episodic"<%= show.itunesType === 'episodic' ? ' selected' : '' %>>Episodic — newest first</option>
         <option value="serial"<%= show.itunesType === 'serial' ? ' selected' : '' %>>Serial — meant to be heard in order</option>
       </select>
       <% if (errors.itunesType) { %>
-        <div class="field-error"><%= errors.itunesType %></div>
+        <div class="field-error" id="f-itunes-type-error"><%= errors.itunesType %></div>
       <% } else { %>
         <div class="hint">Serial tells a podcast app to open the show at the first episode rather than
           the latest. It changes nothing about the order of the feed itself.</div>
@@ -108,12 +111,12 @@
   <div class="form-row" style="margin-top:14px">
     <div class="field<%= err('directoryListing') %>" style="margin:0">
       <label for="f-listing">Podcast directories</label>
-      <select id="f-listing" name="directoryListing">
+      <select id="f-listing" name="directoryListing"<%~ aria('directoryListing', 'f-listing') %>>
         <option value="allowed"<%= show.directoryListing === 'allowed' ? ' selected' : '' %>>Allow directories to list it</option>
         <option value="blocked"<%= show.directoryListing === 'blocked' ? ' selected' : '' %>>Keep this show out of directories</option>
       </select>
       <% if (errors.directoryListing) { %>
-        <div class="field-error"><%= errors.directoryListing %></div>
+        <div class="field-error" id="f-listing-error"><%= errors.directoryListing %></div>
       <% } else { %>
         <div class="hint">This feed's URL is its own password, so blocking asks Apple and the others to
           leave it out of their index if it ever leaks. Change it only if you mean to submit the show —

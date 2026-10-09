@@ -1,7 +1,11 @@
 <%
   /* One episode as a bar: the whole length of the file on the share, with what is cut,
      waiting or restored drawn where it is. Positions are computed on the server
-     (lib/cut-bar.js), so the bar is right with script off. */
+     (lib/cut-bar.js), so the bar is right with script off.
+
+     The tap target is the wrapper, not the 14px track: on a touch screen the wrapper
+     gets padding (app.css, pointer: coarse) so a thumb can land on it, and app.js reads
+     the position off the track inside (data-cutbar-rail) so the look does not change. */
   const bar = it.bar;
   const target = it.target ?? '#cuts-panel';
 %>
@@ -11,8 +15,10 @@
     <% if (bar.state) { %><span class="cut-pill cut-pill--<%= bar.state.state %>"><%= bar.state.pill %></span><% } %>
     <% if (bar.lengthsLabel) { %><span class="cutbar__lengths mono"><%= bar.lengthsLabel %></span><% } %>
   </header>
-  <div class="cutbar__track" data-cutbar-pick data-duration-ms="<%= bar.durationMs %>">
-    <% for (const s of bar.stretches) { %><span class="cutbar__mark cutbar__mark--<%= s.state %>" style="<%= s.style %>" title="<%= s.atLabel %> · <%= s.stateLabel %>"></span><% } %>
+  <div class="cutbar__hit" data-cutbar-pick data-duration-ms="<%= bar.durationMs %>">
+    <div class="cutbar__track" data-cutbar-rail>
+      <% for (const s of bar.stretches) { %><span class="cutbar__mark cutbar__mark--<%= s.state %>" style="<%= s.style %>" title="<%= s.atLabel %> · <%= s.stateLabel %>"></span><% } %>
+    </div>
   </div>
   <audio data-cut-audio preload="none" src="<%= bar.audioUrl %>"></audio>
   <% if (bar.stretches.length) { %>

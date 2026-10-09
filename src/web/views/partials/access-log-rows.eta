@@ -7,21 +7,25 @@
 
      "Show older" appends by swapping the pager row for the next page of rows plus a
      fresh pager, so every byte of this response has to be a <tr>: anything else in a
-     response bound for a <tbody> is dropped by the HTML parser before htmx sees it. */
+     response bound for a <tbody> is dropped by the HTML parser before htmx sees it.
+
+     `data-label` on each cell is the column's name, for the phone layout: at 640px the
+     table becomes a stack of blocks and the stylesheet writes the label in front of
+     each value (app.css, .ep-table--stack), since the header row is no longer beside it. */
 %>
 <% for (const row of entries) { %>
   <tr<%~ row.ok && !row.incomplete ? '' : ' class="is-missing"' %>>
-    <td class="ep-date mono" title="<%= it.helpers.formatDateTime(row.requestedAt) %>">
+    <td class="ep-date mono" data-label="When" title="<%= it.helpers.formatDateTime(row.requestedAt) %>">
       <%= it.helpers.relativeTime(row.requestedAt) %>
     </td>
-    <td>
+    <td data-label="What">
       <span class="badge badge-mute badge--tight"><%= kindLabels[row.kind] || row.kind %></span>
       <% if (!showEpisode && row.rangeHeader) { %>
         <div class="log-range mono"><%= row.rangeHeader %></div>
       <% } %>
     </td>
     <% if (showEpisode) { %>
-    <td>
+    <td data-label="Episode">
       <div class="ep-title">
         <% if (row.episodeTitle) { %>
           <% if (row.showSlug) { %>
@@ -42,14 +46,14 @@
       </div>
     </td>
     <% } %>
-    <td class="dim"><%= row.client || 'Unknown' %></td>
-    <td class="size">
+    <td class="dim" data-label="App"><%= row.client || 'Unknown' %></td>
+    <td class="size" data-label="Sent">
       <%= it.helpers.formatBytes(row.bytesSent) %><%
       %><% if (row.totalBytes && row.bytesSent !== null && row.bytesSent < row.totalBytes) { %><%
         %><small class="dim"> of <%= it.helpers.formatBytes(row.totalBytes) %></small><%
       %><% } %>
     </td>
-    <td>
+    <td data-label="Result">
       <% if (!row.ok) { %>
         <span class="badge badge-err badge--tight"><span class="d" aria-hidden="true"></span><%= row.statusCode %></span>
       <% } else if (row.incomplete) { %>
@@ -68,7 +72,7 @@
   <tr class="log-more-row" id="access-log-more">
     <td colspan="<%= cols %>">
       <div class="log-more">
-        <button class="btn btn-ghost btn-sm" type="button"
+        <button class="btn btn-ghost btn-sm" type="button" id="access-log-older" hx-disabled-elt="this" hx-sync="this:drop"
                 hx-get="/ui/stats/log/rows?<%= it.log.qs %><%= it.log.qs ? '&' : '' %>offset=<%= it.nextOffset %>"
                 hx-target="#access-log-more" hx-swap="outerHTML">
           Show older

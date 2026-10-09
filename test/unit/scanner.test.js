@@ -210,6 +210,80 @@ describe('episode scanning (spec §6.3)', () => {
     assert.equal(app.episodes.listByShow(show.id)[0].pub_date, when.toISOString());
   });
 
+  /**
+   * Three files named for three Mondays, copied onto the share together, all carried
+   * the minute they were copied — one episode on the same moment, three times, in an
+   * order the feed could not know. The name says when; the date is taken from it.
+   */
+  describe('a date at the start of the filename', () => {
+    const copied = new Date('2026-03-04T05:06:07.000Z');
+
+    it('is the publish date, at midnight in the instance zone, when the mtime is some other day', async () => {
+      const zoned = await createTestInstance({ env: { TZ: 'Europe/London' } });
+      try {
+        // Three different recordings: identity is content-derived, so three copies of
+        // one fixture would be one episode.
+        for (const [fixture, name] of [['sample.mp3', '2026-09-01-one.mp3'], ['prog-a.mp3', '2026_09_08-two.mp3'], ['prog-b.mp3', '20260915-three.mp3']]) {
+          await utimes(await zoned.addAudio('dated', fixture, name), copied, copied);
+        }
+        await zoned.scanner.scanAllNow(SCAN_TRIGGER.MANUAL);
+        const show = zoned.shows.getBySlug('dated');
+        const byName = Object.fromEntries(zoned.episodes.listByShow(show.id).map((row) => [row.filename, row]));
+        // British Summer Time: midnight in London is 23:00 UTC the evening before.
+        assert.equal(byName['2026-09-01-one.mp3'].pub_date, '2026-08-31T23:00:00.000Z');
+        assert.equal(byName['2026_09_08-two.mp3'].pub_date, '2026-09-07T23:00:00.000Z');
+        assert.equal(byName['20260915-three.mp3'].pub_date, '2026-09-14T23:00:00.000Z');
+        assert.deepEqual(
+          zoned.episodes.listByShow(show.id).map((row) => row.filename),
+          ['20260915-three.mp3', '2026_09_08-two.mp3', '2026-09-01-one.mp3'],
+          'newest first, by the dates in the names rather than the one moment they were copied',
+        );
+        assert.equal(byName['2026-09-01-one.mp3'].pub_date_is_custom, 0, 'a date from the name is not a date the user set');
+      } finally {
+        await zoned.cleanup();
+      }
+    });
+
+    it('keeps the mtime when it already falls on that day, so the time of day survives', async () => {
+      // What the remote fetcher produces: a dated name and an mtime set to the exact
+      // moment of publication. The name agrees with it, so the moment is kept.
+      const sameDay = new Date('2026-09-01T14:30:00.000Z');
+      await utimes(await app.addAudio('agree', 'sample.mp3', '2026-09-01-remote.mp3'), sameDay, sameDay);
+      await scanAll();
+      const show = app.shows.getBySlug('agree');
+      assert.equal(app.episodes.listByShow(show.id)[0].pub_date, sameDay.toISOString());
+    });
+
+    it('is ignored when it is not a day that exists, and when there is none', async () => {
+      await utimes(await app.addAudio('odd', 'sample.mp3', '2026-13-40-not-a-date.mp3'), copied, copied);
+      await utimes(await app.addAudio('odd', 'sample.m4a', 'plain-name.m4a'), copied, copied);
+      await scanAll();
+      const show = app.shows.getBySlug('odd');
+      for (const row of app.episodes.listByShow(show.id)) {
+        assert.equal(row.pub_date, copied.toISOString(), `${row.filename} should fall back to the mtime`);
+      }
+    });
+
+    it('never overwrites a publish date the user set, even when the file is touched again', async () => {
+      const path = await app.addAudio('edited', 'sample.mp3', '2026-09-01-edited.mp3');
+      await utimes(path, copied, copied);
+      await scanAll();
+      const show = app.shows.getBySlug('edited');
+      const [episode] = app.episodes.listByShow(show.id);
+      app.episodes.update(episode.id, { pubDate: '2027-01-02T03:04:00.000Z' });
+
+      const later = new Date('2026-10-10T10:10:10.000Z');
+      await utimes(path, later, later);
+      await scanAll();
+      await app.scanner.scanShowNow(show.id, SCAN_TRIGGER.MANUAL, { rehash: true });
+
+      const after = app.episodes.get(episode.id);
+      assert.equal(after.pub_date, '2027-01-02T03:04:00.000Z');
+      assert.equal(after.pub_date_is_custom, 1);
+      assert.equal(after.file_mtime, later.toISOString(), 'the new mtime was noticed, and still left the date alone');
+    });
+  });
+
   it('skips re-hashing unchanged files but still notices a new one', async () => {
     await app.addAudio('incremental', 'sample.mp3', 'one.mp3');
     const first = await scanAll();

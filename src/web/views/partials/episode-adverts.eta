@@ -12,7 +12,7 @@
          hx-get="<%= base %>/adverts"
          hx-trigger="sse:transcript-<%= episode.id %> from:body, sse:ad-changed-<%= show.id %> from:body<%= listened.state === 'listening' ? ', load delay:10s' : '' %>"
          hx-swap="outerHTML">
-  <div class="ftitle">Adverts</div>
+  <h2 class="ftitle">Adverts</h2>
 
   <% if (ad.off) { %>
     <p class="muted"><%= ad.offSentence %> <a href="<%= ad.advertsUrl %>">Adverts settings</a></p>
@@ -57,7 +57,7 @@
 
     <%~ include('./teach-range.eta', { adverts: ad, episode }) %>
 
-    <p class="hint ep-cuts__more"><a href="<%= ad.advertsUrl %>#ep-<%= episode.id %>">All adverts in this show</a></p>
+    <p class="hint ep-cuts__more"><a href="<%= ad.advertsUrl %>">All adverts in this show</a></p>
   <% } %>
 
   <%~ include('./episode-transcript.eta', { transcript: listened, show, episode, helpers: it.helpers, embedded: true }) %>

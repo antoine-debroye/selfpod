@@ -14,7 +14,7 @@
      hx-trigger="sse:ad-changed-<%= show.id %> from:body"
      hx-swap="outerHTML">
   <div class="episode-table__head">
-    <div class="ftitle" style="margin:0">Episodes</div>
+    <h2 class="ftitle" style="margin:0">Episodes</h2>
     <span class="badge badge-mute"><%= inFeed.length %></span>
     <% if (scheduled.length) { %>
       <span class="badge badge-info badge--tight"><span class="d" aria-hidden="true"></span><%= scheduled.length %> scheduled</span>

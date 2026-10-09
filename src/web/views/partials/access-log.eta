@@ -13,10 +13,11 @@
     const active = log.sort === key;
     const next = active && log.dir === 'desc' ? 'ascending' : 'descending';
     const query = log.sortLink(key);
+    /* The id survives the swap the link causes, so app.js can put focus back on it. */
     return {
       aria: active ? ` aria-sort="${log.dir === 'asc' ? 'ascending' : 'descending'}"` : '',
       open:
-        `<a class="th-sort" href="/stats${query ? `?${query}` : ''}" title="Sort by ${label.toLowerCase()}, ${next === 'ascending' ? 'smallest' : 'largest'} first"` +
+        `<a class="th-sort" id="access-log-sort-${key}" href="/stats${query ? `?${query}` : ''}" title="Sort by ${label.toLowerCase()}, ${next === 'ascending' ? 'smallest' : 'largest'} first"` +
         ` hx-get="/ui/stats/log${query ? `?${query}` : ''}" hx-target="#access-log" hx-swap="outerHTML">`,
       close: `<span class="th-sort__arrow" aria-hidden="true">${active ? (log.dir === 'asc' ? '▲' : '▼') : '▼'}</span></a>`,
     };
@@ -46,7 +47,11 @@
     </div>
   <% } else { %>
     <div class="table-scroll">
-      <table class="ep-table log-table">
+      <%
+        /* .ep-table--stack: on a phone each row becomes a block with the column name
+           in front of every value, instead of a six-column table scrolling sideways. */
+      %>
+      <table class="ep-table log-table ep-table--stack">
         <thead>
           <tr>
             <th scope="col"<%~ when.aria %>><%~ when.open %>When<%~ when.close %></th>

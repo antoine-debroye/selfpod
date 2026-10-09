@@ -14,9 +14,16 @@
       <h3 class="modal__option-title">Remove from the feed</h3>
       <p>Subscribers stop seeing this episode. The audio file stays on disk, rescans leave it alone,
         and you can restore it at any time.</p>
+      <%
+        /* `returnTo` says the modal was opened on the episode's own page. The show page
+           re-renders its episode table in place; the episode page has no table, so the
+           response there is a redirect to the show with the message on the flash. */
+      %>
       <form method="post" action="/ui/episodes/<%= encodeURIComponent(episode.id) %>/remove"
             hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>/remove"
-            hx-target="#modal-root" hx-swap="innerHTML">
+            hx-target="#modal-root" hx-swap="innerHTML"
+            hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
+        <% if (it.returnTo) { %><input type="hidden" name="returnTo" value="<%= it.returnTo %>"><% } %>
         <button class="btn btn-ghost btn-sm" type="submit">Remove from feed</button>
       </form>
     </section>
@@ -30,7 +37,9 @@
         <code><%= show.folder %></code>. This cannot be undone.</p>
       <form method="post" action="/ui/episodes/<%= encodeURIComponent(episode.id) %>/delete-file"
             hx-post="/ui/episodes/<%= encodeURIComponent(episode.id) %>/delete-file"
-            hx-target="#modal-root" hx-swap="innerHTML">
+            hx-target="#modal-root" hx-swap="innerHTML"
+            hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
+        <% if (it.returnTo) { %><input type="hidden" name="returnTo" value="<%= it.returnTo %>"><% } %>
         <label class="checkbox">
           <input type="checkbox" name="confirm" value="1"
                  data-confirm-check data-confirm-target="#confirm-delete-file">

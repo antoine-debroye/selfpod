@@ -473,6 +473,72 @@ describe('the ledger on the page', () => {
   });
 });
 
+/*
+ * The status buttons with JavaScript on. They used to post with `hx-swap="none"` to a
+ * handler that always answered 303: the XHR followed the redirect, threw the page
+ * away, and the message waited for a reload nobody knew to make. Now each answers with
+ * `HX-Redirect` back to this page and the message on the flash — so the page re-reads
+ * itself and says what happened — and stopping asks first.
+ */
+describe('the status buttons, with JavaScript on', () => {
+  async function followed() {
+    await post('/ui/shows/tape-club/subscription', { feedUrl: `${origin}/feed.xml`, backfillCount: '10' });
+    return server.subscriptions.getForShow(show.id);
+  }
+
+  async function flashOnPage() {
+    const page = await server.get('/shows/tape-club/subscription', { accept: 'text/html' });
+    const match = page.body.match(/<script type="application\/json" id="flash-data">([\s\S]*?)<\/script>/);
+    return match ? JSON.parse(match[1]) : null;
+  }
+
+  it('Check now sends the browser back here with what the check found', async () => {
+    const subscription = await followed();
+    const response = await post(`/ui/subscriptions/${subscription.id}/poll`, {}, htmx);
+    assert.equal(response.statusCode, 200, 'an htmx request gets a fragment status, not a 303 the XHR would swallow');
+    assert.equal(response.headers['hx-redirect'], '/shows/tape-club/subscription');
+    const flash = await flashOnPage();
+    assert.ok(flash, 'the message is on the flash for the page the browser reloads');
+    assert.match(flash.message, /Checked — \d+ new episodes? downloaded\./);
+    assert.equal(flash.level, 'ok');
+  });
+
+  it('Pause and Resume say which they did', async () => {
+    const subscription = await followed();
+    const paused = await post(`/ui/subscriptions/${subscription.id}/toggle`, {}, htmx);
+    assert.equal(paused.headers['hx-redirect'], '/shows/tape-club/subscription');
+    assert.equal(server.subscriptions.get(subscription.id).enabled, 0);
+    assert.match((await flashOnPage()).message, /^Paused\./);
+
+    await post(`/ui/subscriptions/${subscription.id}/toggle`, {}, htmx);
+    assert.equal(server.subscriptions.get(subscription.id).enabled, 1);
+    assert.equal((await flashOnPage()).message, 'Following again.');
+  });
+
+  it('Stop following asks first, then leaves with the message and the episodes untouched', async () => {
+    const subscription = await followed();
+    await server.remoteFeeds.pollNow(subscription.id);
+    const before = server.episodes.listByShow(show.id).length;
+
+    const page = await server.get('/shows/tape-club/subscription', { accept: 'text/html' });
+    assert.ok(page.body.includes(`hx-get="/ui/modals/stop-following/${subscription.id}"`), 'the button opens a confirmation rather than acting');
+    assert.ok(page.body.includes(`action="/ui/subscriptions/${subscription.id}/delete"`), 'and still posts without JavaScript');
+
+    const modal = await server.get(`/ui/modals/stop-following/${subscription.id}`, htmx);
+    assert.equal(modal.statusCode, 200);
+    assert.ok(modal.body.includes('<dialog'), 'a native dialog, like every other confirmation');
+    assert.ok(modal.body.includes('Stop following this feed?'));
+    assert.ok(modal.body.includes('data-modal-close'), 'with a way out');
+
+    const response = await post(`/ui/subscriptions/${subscription.id}/delete`, {}, htmx);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['hx-redirect'], '/shows/tape-club/subscription');
+    assert.equal(server.subscriptions.getForShow(show.id), null);
+    assert.equal(server.episodes.listByShow(show.id).length, before, 'the episodes stay');
+    assert.match((await flashOnPage()).message, /^Stopped following that feed\./);
+  });
+});
+
 describe('a remote feed cannot inject markup into the admin UI', () => {
   it('escapes a hostile episode title', async () => {
     // Titles come from a stranger. The CSP blocks <script> and inline handlers, but an

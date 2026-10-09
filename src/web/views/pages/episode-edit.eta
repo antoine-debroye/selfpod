@@ -9,8 +9,8 @@
     <h1>Edit episode</h1>
   </div>
   <div class="actions">
-    <button class="btn btn-danger btn-sm" type="button"
-            hx-get="/ui/modals/delete-episode/<%= encodeURIComponent(episode.id) %>"
+    <button class="btn btn-danger btn-sm" type="button" id="episode-remove-or-delete"
+            hx-get="/ui/modals/delete-episode/<%= encodeURIComponent(episode.id) %>?from=episode"
             hx-target="#modal-root" hx-swap="innerHTML">Remove or delete…</button>
   </div>
 </div>
@@ -78,7 +78,7 @@
 <section class="form-card">
   <div class="episode-table__head" style="justify-content:space-between">
     <div>
-      <div class="ftitle" style="margin:0">This episode's reach</div>
+      <h2 class="ftitle" style="margin:0">This episode's reach</h2>
       <div class="fdesc" style="margin:2px 0 0">
         <% if (reach.lastAt) { %>
           Last fetched <%= it.helpers.relativeTime(reach.lastAt) %>.

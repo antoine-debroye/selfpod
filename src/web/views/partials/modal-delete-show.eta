@@ -2,7 +2,8 @@
   <h2 class="modal__title" id="modal-title">Remove “<%= it.show.title %>”?</h2>
   <form class="modal__body" method="post" action="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/delete"
         hx-post="/ui/shows/<%= encodeURIComponent(it.show.slug) %>/delete"
-        hx-target="#modal-root" hx-swap="innerHTML">
+        hx-target="#modal-root" hx-swap="innerHTML"
+        hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
 
     <p>Anyone subscribed to this show's feed will stop receiving episodes.</p>
 
@@ -29,8 +30,8 @@
     <div class="field<%= it.errors && it.errors.confirm ? ' is-invalid' : '' %>">
       <label for="confirm-slug">Type the folder name to confirm: <code><%= it.show.slug %></code></label>
       <input id="confirm-slug" name="confirm" class="mono mono-input" autocomplete="off" autofocus
-             data-confirm-match="<%= it.show.slug %>" data-confirm-target="#confirm-delete-show">
-      <% if (it.errors && it.errors.confirm) { %><div class="field-error"><%= it.errors.confirm %></div><% } %>
+             data-confirm-match="<%= it.show.slug %>" data-confirm-target="#confirm-delete-show"<%~ it.errors && it.errors.confirm ? ' aria-invalid="true" aria-describedby="confirm-slug-error"' : '' %>>
+      <% if (it.errors && it.errors.confirm) { %><div class="field-error" id="confirm-slug-error"><%= it.errors.confirm %></div><% } %>
     </div>
 
     <div class="modal__actions">

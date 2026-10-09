@@ -53,6 +53,46 @@ export default async function fragmentRoutes(fastify, services) {
       return reply.redirect(path, 303);
     }
 
+    /**
+     * The htmx answer to "go somewhere else, and say why": the flash is stored for the
+     * page that loads next, and `HX-Redirect` sends the browser there. Used wherever a
+     * fragment swap would leave the page describing something that is gone — a show
+     * that was removed, an episode deleted from the page about it — and wherever the
+     * only honest result is the whole page re-read.
+     */
+    function redirectWithFlash(request, reply, path, message, level = 'ok') {
+      if (message) services.setFlash(request, message, level);
+      reply.header('HX-Redirect', path);
+      return reply.send('');
+    }
+
+    /**
+     * Sends a fragment with a toast riding along out of band. `viewAsync` rather than
+     * `view`, because `reply.view` renders *and sends*, and anything appended to its
+     * return value reaches nobody — which is how confirmations were lost here twice.
+     */
+    async function sendWithToast(reply, html, toast) {
+      if (!toast) return reply.type('text/html; charset=utf-8').send(html);
+      const oob = await reply.viewAsync('partials/toast.eta', {
+        message: toast.message,
+        level: toast.level ?? 'ok',
+        helpers: fastify.viewHelpers,
+      });
+      return reply.type('text/html; charset=utf-8').send(`${html}${oob}`);
+    }
+
+    /**
+     * Starts a pass over a show without waiting for it. A pass reads every episode and
+     * may listen for minutes, which is far too long for a request from a phone to hang
+     * on; the work strip on the page follows it over SSE, and the panel re-reads itself
+     * when the pass says it changed something. The returned promise is only for tests.
+     */
+    function startPass(showId) {
+      const run = services.adPipeline.processShow(showId);
+      run.catch((err) => services.logger?.warn({ err, showId }, 'a pass started from the page failed'));
+      return run;
+    }
+
     /* ----------------------------------------------------------- ad segments */
 
     function advertsPath(slug) {
@@ -60,13 +100,14 @@ export default async function fragmentRoutes(fastify, services) {
     }
 
     /** The one place the Adverts panel is rendered, so htmx and a reload agree. */
-    async function renderSegments(reply, show, extra = {}) {
-      return reply.view('partials/ad-panel.eta', {
+    async function renderSegments(reply, show, extra = {}, { toast = null } = {}) {
+      const html = await reply.viewAsync('partials/ad-panel.eta', {
         show: presentShow(show),
         ...(await services.advertsView.panel(show, { owed: services.adPipeline.workOwed(show.id) })),
         helpers: fastify.viewHelpers,
         ...extra,
       });
+      return sendWithToast(reply, html, toast);
     }
 
     /**
@@ -74,14 +115,15 @@ export default async function fragmentRoutes(fastify, services) {
      * waiting, and the words underneath it. One target, so a decision made there
      * re-renders the whole story rather than half of it.
      */
-    async function renderEpisodeAdverts(reply, episode, show, extra = {}) {
-      return reply.view('partials/episode-adverts.eta', {
+    async function renderEpisodeAdverts(reply, episode, show, extra = {}, { toast = null } = {}) {
+      const html = await reply.viewAsync('partials/episode-adverts.eta', {
         show: presentShow(show),
         episode: presentEpisode(episode, show),
         adverts: await services.advertsView.episodeAdverts(episode, show),
         helpers: fastify.viewHelpers,
         ...extra,
       });
+      return sendWithToast(reply, html, toast);
     }
 
     /** Just the words, for anything that wants them on their own. */
@@ -185,11 +227,17 @@ export default async function fragmentRoutes(fastify, services) {
           ? renderSegments(reply, show)
           : redirectBack(request, reply, advertsPath(show.slug), 'Advert detection is off for this show.', 'err');
       }
-      await services.adPipeline.processShow(show.id);
       if (!isHtmx(request)) {
+        // A plain form post has nothing on the page to follow the work with, so it
+        // waits and says what happened; the browser shows its own loading state.
+        await services.adPipeline.processShow(show.id);
         return redirectBack(request, reply, advertsPath(show.slug), 'Checked.');
       }
-      return renderSegments(reply, shows.get(show.id));
+      // Started, not awaited: the work strip above the panel follows the pass.
+      startPass(show.id);
+      return renderSegments(reply, shows.get(show.id), {}, {
+        toast: { message: 'Checking this show now. What it finds appears here as it goes.' },
+      });
     });
 
     scoped.post('/ui/shows/:slug/ad-segments/:segmentId', { preHandler: [fastify.rateLimit(DECIDE_LIMIT)] }, async (request, reply) => {
@@ -328,13 +376,17 @@ export default async function fragmentRoutes(fastify, services) {
      * The reply every cut decision ends with: back where it was made. htmx gets the
      * panel or the episode card re-rendered; a plain form gets a redirect and a flash.
      */
-    async function afterDecision(request, reply, show, note, { level = 'ok' } = {}) {
+    async function afterDecision(request, reply, show, note, { level = 'ok', toast = false } = {}) {
       const back = returnTarget(request, show);
       if (!isHtmx(request)) {
         return redirectBack(request, reply, back ? episodePath(show.slug, back.episode.id) : advertsPath(show.slug), note, level);
       }
-      if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id));
-      return renderSegments(reply, shows.get(show.id));
+      // `toast: true` says the note is worth saying out loud on the htmx path too —
+      // for work that was started rather than finished, where the re-rendered panel
+      // alone would not show what the press achieved.
+      const extra = toast ? { toast: { message: note, level } } : {};
+      if (back) return renderEpisodeAdverts(reply, episodes.get(back.episode.id), shows.get(show.id), {}, extra);
+      return renderSegments(reply, shows.get(show.id), {}, extra);
     }
 
     function segmentOf(show, segmentId) {
@@ -367,9 +419,15 @@ export default async function fragmentRoutes(fastify, services) {
         rawText: text,
         language: show.language ? String(show.language).slice(0, 2) : null,
       });
-      // New words to listen for in every episode: a pass, not a cut.
-      await services.adPipeline.processShow(show.id);
-      return afterDecision(request, reply, show, `SelfPod now listens for “${text}” in every episode.`);
+      // New words to listen for in every episode: a pass, not a cut. The page gets the
+      // new rule at once and the strip follows the pass; a plain form waits for it.
+      const note = `SelfPod now listens for “${text}” in every episode.`;
+      if (!isHtmx(request)) {
+        await services.adPipeline.processShow(show.id);
+        return afterDecision(request, reply, show, note);
+      }
+      startPass(show.id);
+      return afterDecision(request, reply, show, note, { toast: true });
     });
 
     /** "Restore everywhere and stop": the rule behind a cut, undone for the whole show. */
@@ -441,10 +499,15 @@ export default async function fragmentRoutes(fastify, services) {
         if (error.status && error.status < 500) return fail(error.message);
         throw error;
       }
-      await services.adPipeline.processShow(show.id);
-      const note = kind === 'jingle' ? 'SelfPod now cuts whatever comes before that jingle, in every episode.' : 'Taught.';
-      if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), note);
-      return renderEpisodeAdverts(reply, episodes.get(episode.id), shows.get(show.id));
+      const jingleNote = 'SelfPod now cuts whatever comes before that jingle, in every episode.';
+      if (!isHtmx(request)) {
+        await services.adPipeline.processShow(show.id);
+        return redirectBack(request, reply, episodePath(show.slug, episode.id), kind === 'jingle' ? jingleNote : 'Taught.');
+      }
+      startPass(show.id);
+      return renderEpisodeAdverts(reply, episodes.get(episode.id), shows.get(show.id), {}, {
+        toast: { message: kind === 'jingle' ? jingleNote : 'Taught. The cut lands as soon as the pass reaches this episode.' },
+      });
     });
 
     scoped.get('/ui/episodes/:id/adverts', async (request, reply) => {
@@ -482,9 +545,14 @@ export default async function fragmentRoutes(fastify, services) {
           ...range,
           status: verdict === 'advert' ? STATUS.APPROVED : STATUS.REJECTED,
         });
+        const span = `${fastify.viewHelpers.formatDuration(Math.round(range.startMs / 1000))}–${fastify.viewHelpers.formatDuration(Math.round(range.endMs / 1000))}`;
+        // Past tense once the pass has run (the plain form waits for it); the page,
+        // which only starts the pass, is told what is under way.
         note =
           verdict === 'advert'
-            ? `Removed ${fastify.viewHelpers.formatDuration(Math.round(range.startMs / 1000))}–${fastify.viewHelpers.formatDuration(Math.round(range.endMs / 1000))} from this episode. The same words will be cut from later episodes.`
+            ? isHtmx(request)
+              ? `Removing ${span} from this episode. The same words will be cut from later episodes.`
+              : `Removed ${span} from this episode. The same words will be cut from later episodes.`
             : 'Kept, and SelfPod will not offer those words again.';
       } else if (verdict === 'programme_starts' || verdict === 'programme_ends' || verdict === 'tail_starts') {
         services.adDetect.addMarker({
@@ -503,9 +571,12 @@ export default async function fragmentRoutes(fastify, services) {
       } else {
         return fail('Say what those words are.');
       }
-      await services.adPipeline.processShow(show.id);
-      if (!isHtmx(request)) return redirectBack(request, reply, episodePath(show.slug, episode.id), note);
-      return renderEpisodeAdverts(reply, episodes.get(episode.id), shows.get(show.id));
+      if (!isHtmx(request)) {
+        await services.adPipeline.processShow(show.id);
+        return redirectBack(request, reply, episodePath(show.slug, episode.id), note);
+      }
+      startPass(show.id);
+      return renderEpisodeAdverts(reply, episodes.get(episode.id), shows.get(show.id), {}, { toast: { message: note } });
     });
 
     /* ---------------------------------------------------------- subscription */
@@ -635,7 +706,7 @@ export default async function fragmentRoutes(fastify, services) {
         message = error.message;
         level = 'err';
       }
-      return redirectBack(request, reply, subscriptionPath(show.slug), message, level);
+      return afterSubscriptionAction(request, reply, show, message, level);
     });
 
     scoped.post('/ui/subscriptions/:id/toggle', async (request, reply) => {
@@ -644,25 +715,48 @@ export default async function fragmentRoutes(fastify, services) {
       const updated = services.subscriptions.update(subscription.id, {
         enabled: !subscription.enabled,
       });
-      return redirectBack(
+      return afterSubscriptionAction(
         request,
         reply,
-        subscriptionPath(show.slug),
+        show,
         updated.enabled ? 'Following again.' : 'Paused. Nothing new will be downloaded until you resume.',
       );
+    });
+
+    /** Asks before the feed is forgotten, like every other action that cannot be undone. */
+    scoped.get('/ui/modals/stop-following/:id', async (request, reply) => {
+      const subscription = services.subscriptions.getOrThrow(request.params.id);
+      const show = shows.getOrThrow(subscription.show_id);
+      return reply.view('partials/modal-stop-following.eta', {
+        show: presentShow(show),
+        subscription: presentSubscription(subscription, services),
+        helpers: fastify.viewHelpers,
+      });
     });
 
     scoped.post('/ui/subscriptions/:id/delete', async (request, reply) => {
       const subscription = services.subscriptions.getOrThrow(request.params.id);
       const show = shows.getOrThrow(subscription.show_id);
       services.subscriptions.remove(subscription.id);
-      return redirectBack(
+      return afterSubscriptionAction(
         request,
         reply,
-        subscriptionPath(show.slug),
+        show,
         'Stopped following that feed. The episodes it already downloaded are untouched.',
       );
     });
+
+    /**
+     * Every one of these changes the status card, the next-check time and the ledger
+     * at once, which is the whole page; so the page is re-read, and the message rides
+     * on the flash either way. The buttons used to swap nothing and follow the 303
+     * inside the XHR, which left the page unchanged and the message waiting for a
+     * reload nobody knew to do.
+     */
+    function afterSubscriptionAction(request, reply, show, message, level = 'ok') {
+      if (!isHtmx(request)) return redirectBack(request, reply, subscriptionPath(show.slug), message, level);
+      return redirectWithFlash(request, reply, subscriptionPath(show.slug), message, level);
+    }
 
     scoped.get('/ui/subscriptions/:id/items', async (request, reply) => {
       const subscription = services.subscriptions.getOrThrow(request.params.id);
@@ -1100,6 +1194,17 @@ export default async function fragmentRoutes(fastify, services) {
       }
     });
 
+    /**
+     * Where the delete-episode modal was opened from. On the show page the episode
+     * table is re-rendered in place; on the episode's own page there is no table, and
+     * the page is about something that is now gone, so the answer is the show page
+     * with the message on the flash. The modal carries this as a hidden field, since
+     * SelfPod sends `Referrer-Policy: no-referrer` and the referer cannot say.
+     */
+    function cameFromEpisodePage(request, episode) {
+      return String(request.body?.returnTo ?? '') === `episode:${episode.id}`;
+    }
+
     scoped.post('/ui/episodes/:id/remove', async (request, reply) => {
       const episode = episodes.get(request.params.id);
       if (!episode) throw notFound('That episode does not exist.', 'episode_not_found');
@@ -1107,9 +1212,9 @@ export default async function fragmentRoutes(fastify, services) {
       episodes.removeFromFeed(episode.id);
 
       const message = 'Removed from the feed. The audio file is untouched, and rescans will leave it out.';
-      if (!isHtmx(request)) {
-        return redirectBack(request, reply, `/shows/${encodeURIComponent(show.slug)}`, message);
-      }
+      const showPage = `/shows/${encodeURIComponent(show.slug)}`;
+      if (!isHtmx(request)) return redirectBack(request, reply, showPage, message);
+      if (cameFromEpisodePage(request, episode)) return redirectWithFlash(request, reply, showPage, message);
       return renderEpisodeTableWithToast(reply, show, message);
     });
 
@@ -1142,9 +1247,9 @@ export default async function fragmentRoutes(fastify, services) {
 
       const result = await episodes.deleteWithFile(episode.id);
       const message = `Deleted ${result.filename} from disk.`;
-      if (!isHtmx(request)) {
-        return redirectBack(request, reply, `/shows/${encodeURIComponent(show.slug)}`, message, 'warn');
-      }
+      const showPage = `/shows/${encodeURIComponent(show.slug)}`;
+      if (!isHtmx(request)) return redirectBack(request, reply, showPage, message, 'warn');
+      if (cameFromEpisodePage(request, episode)) return redirectWithFlash(request, reply, showPage, message, 'warn');
       return renderEpisodeTableWithToast(reply, show, message, 'warn');
     });
 
@@ -1497,9 +1602,9 @@ export default async function fragmentRoutes(fastify, services) {
       },
     };
 
-    function renderSettingRow(reply, key, { editing = false, errors = null } = {}) {
+    async function renderSettingRow(reply, key, { editing = false, errors = null } = {}, { toast = null } = {}) {
       const row = SETTING_ROWS[key];
-      return reply.view('partials/settings-row.eta', {
+      const html = await reply.viewAsync('partials/settings-row.eta', {
         key,
         title: row.title,
         description: row.description,
@@ -1515,6 +1620,7 @@ export default async function fragmentRoutes(fastify, services) {
         errors,
         helpers: fastify.viewHelpers,
       });
+      return sendWithToast(reply, html, toast);
     }
 
     scoped.get('/ui/settings/:key', async (request, reply) => {
@@ -1544,7 +1650,10 @@ export default async function fragmentRoutes(fastify, services) {
       }
 
       if (!isHtmx(request)) return redirectBack(request, reply, '/settings', `${row.title} updated.`);
-      return renderSettingRow(reply, key, { editing: false });
+      // The row re-renders as its display view; the toast is what says it was saved,
+      // because a row that quietly stops being a form looks much like one that was
+      // cancelled.
+      return renderSettingRow(reply, key, { editing: false }, { toast: { message: `${row.title} updated.` } });
     });
 
     scoped.post('/ui/settings/watcher', async (request, reply) => {
@@ -1552,16 +1661,12 @@ export default async function fragmentRoutes(fastify, services) {
       settings.update({ [SETTING_KEYS.WATCHER_ENABLED]: enabled ? '1' : '0' });
       await watcher?.restart();
 
-      if (!isHtmx(request)) {
-        return redirectBack(
-          request,
-          reply,
-          '/settings',
-          enabled ? 'Live file detection switched on.' : 'Live file detection switched off.',
-        );
-      }
+      const message = enabled ? 'Live file detection switched on.' : 'Live file detection switched off.';
+      if (!isHtmx(request)) return redirectBack(request, reply, '/settings', message);
       // Re-render the whole settings page section by asking the browser to reload
-      // it: the watcher's mode label depends on state this fragment doesn't own.
+      // it: the watcher's mode label depends on state this fragment doesn't own. The
+      // flash survives the reload, so the switch is seen to have done something.
+      services.setFlash(request, message);
       reply.header('HX-Refresh', 'true');
       return reply.send('');
     });
@@ -1571,18 +1676,13 @@ export default async function fragmentRoutes(fastify, services) {
         request.body?.subscriptionsEnabled === '1' || request.body?.subscriptionsEnabled === 'on';
       settings.update({ [SETTING_KEYS.SUBSCRIPTIONS_ENABLED]: enabled ? '1' : '0' });
 
-      if (!isHtmx(request)) {
-        return redirectBack(
-          request,
-          reply,
-          '/settings',
-          enabled
-            ? 'SelfPod can now follow podcast feeds. Set the rules on a show\'s own page.'
-            : 'Feed following switched off. SelfPod will not fetch from the internet.',
-        );
-      }
+      const message = enabled
+        ? 'SelfPod can now follow podcast feeds. Set the rules on a show\'s own page.'
+        : 'Feed following switched off. SelfPod will not fetch from the internet.';
+      if (!isHtmx(request)) return redirectBack(request, reply, '/settings', message);
       // Whole-page refresh: every show page's subscription section reads this, and
       // the banner it controls is not part of this fragment.
+      services.setFlash(request, message);
       reply.header('HX-Refresh', 'true');
       return reply.send('');
     });
@@ -1611,6 +1711,7 @@ export default async function fragmentRoutes(fastify, services) {
       if (!isHtmx(request)) return redirectBack(request, reply, '/settings', 'Password changed.');
       return reply.view('partials/modal-closed.eta', {
         toast: { message: 'Password changed.', level: 'ok' },
+        helpers: fastify.viewHelpers,
       });
     });
 
@@ -1647,6 +1748,9 @@ export default async function fragmentRoutes(fastify, services) {
       return reply.view('partials/modal-delete-episode.eta', {
         episode: presentEpisode(episode, show),
         show: presentShow(show),
+        // `?from=episode`: opened on the episode's own page, which the action then
+        // has to leave (see cameFromEpisodePage).
+        returnTo: request.query?.from === 'episode' ? `episode:${episode.id}` : null,
         helpers: fastify.viewHelpers,
       });
     });

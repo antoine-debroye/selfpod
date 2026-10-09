@@ -1,9 +1,11 @@
 <%
   /* Swapped out-of-band into #toast-root, so any fragment response can raise a
-     notice without owning the toast container. */
+     notice without owning the toast container. An error is an alert — announced at
+     once, and kept until dismissed (app.js) — everything else is a status. */
+  const level = it.level || 'ok';
 %>
 <div id="toast-root" hx-swap-oob="beforeend:#toast-root">
-  <div class="toast toast--<%= it.level || 'ok' %>" role="status">
+  <div class="toast toast--<%= level %>" role="<%= level === 'err' ? 'alert' : 'status' %>">
     <div class="toast__body"><%= it.message %></div>
     <button class="toast__close" type="button" data-toast-close aria-label="Dismiss">×</button>
   </div>

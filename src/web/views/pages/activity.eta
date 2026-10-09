@@ -30,7 +30,7 @@
 </p>
 
 <div class="form-card" style="margin-bottom:18px">
-  <div class="ftitle">Episode timeline</div>
+  <h2 class="ftitle">Episode timeline</h2>
   <div class="fdesc">
     What happened to individual episodes — when each one arrived, went missing, or left the feed.
     Scans are logged separately, below.
@@ -81,7 +81,7 @@
 </div>
 
 <div class="form-card activity-card">
-  <div class="ftitle">Scan history</div>
+  <h2 class="ftitle">Scan history</h2>
   <div class="fdesc">Every scan SelfPod has run, what it found, and anything that went wrong.</div>
 
   <form class="filter-bar" method="get" action="/activity" style="margin:12px 0 14px">

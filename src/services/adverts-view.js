@@ -621,7 +621,11 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
       if (data.off) return summaries;
       for (const episode of episodes.listByShow(show.id)) {
         const state = api.episodeState(episode, api.stretchesOf(episode, data), data);
-        if (state) summaries.set(episode.id, { ...state, url: `/shows/${encodeURIComponent(show.slug)}/adverts#ep-${episode.id}` });
+        // The episode's own page, where the same bar is drawn under #episode-cuts. The
+        // Adverts page used to be the link, with `#ep-<id>` as the anchor — but that
+        // page shows thirty episodes at a time, so for anything older the anchor was
+        // not there and the link landed at the top.
+        if (state) summaries.set(episode.id, { ...state, url: `/shows/${encodeURIComponent(show.slug)}/episodes/${encodeURIComponent(episode.id)}#episode-cuts` });
       }
       return summaries;
     },

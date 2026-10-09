@@ -1,10 +1,12 @@
 <%
   /* Empty #modal-root plus an optional toast: the response to a successful modal
-     action. app.js sees the dialog disappear and restores focus. */
+     action. app.js sees the dialog disappear and puts focus back where it came from.
+
+     The toast is the shared partial, whose *wrapper* carries the out-of-band swap.
+     This file used to put hx-swap-oob on the .toast element itself, and htmx inserts
+     the children of an oob element rather than the element: the message arrived as
+     bare text with a × that had nothing to close. */
 %>
 <% if (it.toast) { %>
-  <div class="toast toast--<%= it.toast.level || 'ok' %>" role="status" hx-swap-oob="beforeend:#toast-root">
-    <div class="toast__body"><%= it.toast.message %></div>
-    <button class="toast__close" type="button" data-toast-close aria-label="Dismiss">×</button>
-  </div>
+  <%~ include('./toast.eta', { message: it.toast.message, level: it.toast.level || 'ok', helpers: it.helpers }) %>
 <% } %>

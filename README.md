@@ -263,7 +263,7 @@ of it can be changed later in **Settings** without touching the container.
 |---|---|---|
 | `PUBLIC_BASE_URL` | — | The address your proxy serves SelfPod on, e.g. `https://podcast.example.com`. Every feed and media URL is built from it. No trailing slash. Can also be set in the setup wizard. |
 | `PUID` / `PGID` | `1000` | The user and group SelfPod runs as. Match the owner of your audio files. |
-| `TZ` | `UTC` | Used for displayed dates and an episode's default publish date. |
+| `TZ` | `UTC` | Used for displayed dates and an episode's default publish date — see [How it finds new episodes](#how-it-finds-new-episodes). |
 | `PORT` | `8080` | Port inside the container. |
 | `RESCAN_INTERVAL_SECONDS` | `300` | How often the whole library is re-checked as a fallback. 60–21600. |
 | `MISSING_GRACE_SECONDS` | `86400` | How long an episode whose file vanished stays in the feed, so a brief share outage doesn't drop episodes. |
@@ -470,6 +470,15 @@ dashboard mentions it once, dismissibly, and **Settings → Live file detection*
 shows the current mode. It deliberately does not sit in a banner across every page —
 a banner that is always there is a banner nobody reads when something is actually
 wrong.
+
+**The publish date** of a new episode comes from its filename when the name starts
+with a date — `2026-09-01-episode-one.mp3`, `2026_09_01 …` or `20260901 …` — at
+midnight in your `TZ`. Otherwise it is the file's modification time, which is right
+for a file that was just recorded and wrong for three dated files copied onto the
+share together, which would all land on the minute they were copied. A modification
+time that already falls on the named day is kept, because it also carries the time
+of day. Either way it is only a starting point: the date you set on the episode page
+is never changed by a rescan.
 
 ## Security
 

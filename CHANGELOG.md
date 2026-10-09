@@ -72,6 +72,72 @@ changes what your listeners see, it says so.
   (libheif and librsvg), music-metadata 11.16.1 (crafted MP4, EBML and DSF files could crash
   the scanner — and the scanner reads whatever is dropped on the share). `npm audit` is clean.
 
+### Fixed — things you could do that gave no answer, or the wrong one
+
+- **Remove or delete from an episode's own page now works.** The response re-targeted the
+  episode table, which only the show page has; on the episode page htmx refused it and the
+  page went on showing an episode that was gone. Both actions now take you to the show, with
+  the confirmation, when they were started on the episode page.
+- **Check now, Pause, Resume and Stop following on the Subscription page do something you
+  can see.** They used to post into a redirect the browser swallowed; the page re-reads
+  itself now and says what happened. Stop following asks first, like every other action
+  that cannot be undone.
+- **A password change is confirmed with a real notice.** The toast arrived as bare text with
+  a × that threw.
+- **A button that is working says so.** Every decision, teach, check, rescan and settings
+  button is held while its request is out and shows a ring; a second press while one is in
+  flight is dropped rather than queued. A request that gets no answer at all — offline, a
+  tunnel that dropped, an extension in the way — now says so instead of failing in silence,
+  and a session that has run out no longer flashes "Something went wrong" on its way to the
+  sign-in page.
+- **Check now and Teach no longer hold the page for the whole pass.** The panel comes back at
+  once with a note, and the work strip follows the pass; the plain-form path still waits.
+- **A background refresh no longer wipes what you are typing.** The Adverts panel and the
+  episode's cuts card re-read themselves after every pass, scheduled ones included, and used
+  to throw away a half-typed boundary and close the settings fold under you. A refresh now
+  waits while a field inside it is in use, and is taken once it is not; a fold you opened
+  stays open; and the second render after every decision — the stream announcing what the
+  response already carried — is gone.
+- **The Show page topbar fits a phone**: the actions take a row of their own under the
+  breadcrumb instead of pushing it onto four lines and "Follow a feed" off the edge.
+- **The access log and the statistics tables are readable on a phone**: each row is a block
+  with its column names, like the episode table already was, rather than a six-column table
+  scrolling sideways. The column headers stay for screen readers.
+- **The scan-progress strip sent over the live stream could be left behind forever** when
+  the stream dropped mid-scan: the streamed copy omitted the poll the clicked one has. It is
+  the same strip now.
+- "New show" no longer opens with "New show" already typed into the name, and a refused form
+  keeps what you typed. The upload queue's success line is no longer painted red. The
+  dashboard is highlighted in the sidebar when you are on it — and `aria-current` on the
+  sidebar's current item is now a real attribute rather than escaped text. Settings toggles
+  and inline saves confirm themselves. The cut pill in the episode table links to the
+  episode page, where the bar always is, rather than to an anchor the Adverts page may have
+  paged away.
+
+### Changed
+
+- **A date at the start of a filename is the episode's publish date.** `2026-09-01-…`,
+  `2026_09_01…` or `20260901…` is taken as that day at midnight in `TZ`, unless the file's
+  modification time already falls on that day, in which case the time of day is kept. Three
+  dated files copied onto the share together used to land on the one minute they were
+  copied. Undated files keep the modification time, and a date set on the episode page is
+  never changed by a rescan. README, *How it finds new episodes*.
+- **Colour and size, for people and thumbs.** Primary buttons, accent-coloured text and
+  selected chips use the darker terracotta (`#B84A1E`, 7.4:1 on white) rather than the one
+  that fell short of AA for text; the signal colour stays on bars, dots and marks. Muted
+  grey text that carried information — the "· test" affordance, stat-card hints, timestamps,
+  label hints — is a shade darker. On a touch screen every control is at least 44px: the
+  stretch ▶, the toast ×, chips, sign-out, the menu button, the small decision buttons, and
+  the cut bar gets a taller area to tap without looking any different.
+- **Keyboard focus survives a swap.** After saving a setting, sorting the log, restoring an
+  episode or closing a modal, focus goes back to the control it was on — or to the control
+  that opened the modal — rather than to the top of the page. Errors are announced as alerts
+  and stay until dismissed; other notices stay six seconds plus fifty milliseconds a
+  character, and pausing with the pointer resumes when it leaves. The two Settings switches
+  have accessible names, card titles are real headings, a refused field says so to assistive
+  technology, the current breadcrumb is marked, and a refused sign-in puts the cursor on the
+  password.
+
 ## 1.9.1 — 2026-09-16
 
 ### Fixed

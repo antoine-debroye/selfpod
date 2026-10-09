@@ -11,7 +11,7 @@ import {
   imageMimeType,
   isSupportedAudioFile,
 } from '../constants.js';
-import { nowIso } from '../lib/dates.js';
+import { fromLocalInputValue, nowIso, toLocalInputValue } from '../lib/dates.js';
 import { EVENTS } from '../lib/events.js';
 import { initialPublishHold } from '../lib/publish-hold.js';
 import { computeIdentityKey } from '../lib/identity.js';
@@ -385,7 +385,9 @@ export function createScanner({
           mtimeIso = nowIso();
           warnings.push({
             file: filename,
-            message: `\`${filename}\` has a modification time SelfPod cannot read, so today's date is used as its publish date. You can set the publish date yourself on the episode page.`,
+            message: dateInFilename(filename)
+              ? `\`${filename}\` has a modification time SelfPod cannot read, so its publish date is the date its name starts with. You can set the publish date yourself on the episode page.`
+              : `\`${filename}\` has a modification time SelfPod cannot read, so today's date is used as its publish date. You can set the publish date yourself on the episode page.`,
           });
         } else {
           errors.push(activity.formatFileError(filename, err));
@@ -566,7 +568,9 @@ export function createScanner({
         description: meta.description ?? '',
         season: meta.season ?? null,
         episode_number: meta.episodeNumber ?? null,
-        pub_date: mtimeIso,
+        // First sight only. A rescan never touches pub_date, so a date set on the
+        // episode page stays, whatever the file or its name says afterwards.
+        pub_date: publishDateFor(filename, mtimeIso, config.timeZone),
         duration_seconds: meta.durationSeconds,
         bitrate_kbps: meta.bitrateKbps,
         file_size_bytes: stats.size,
@@ -929,6 +933,41 @@ async function fileExists(path) {
 /** Shared by both scan paths, since either can be the one to notice the return. */
 function returnedFromExpiry(filename) {
   return `\`${filename}\` is back after being gone longer than the grace period, so it has returned to the feed with its original episode identity — subscribers keep their played state.`;
+}
+
+/**
+ * The date a filename starts with, as `YYYY-MM-DD` — the same prefix titleFromFilename
+ * strips, and the one the remote fetcher writes. Null when there is none, or when the
+ * digits are not a day that exists.
+ */
+export function dateInFilename(filename) {
+  const match = String(filename ?? '').match(/^(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})/);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const probe = new Date(Date.UTC(+y, +m - 1, +d));
+  if (probe.getUTCFullYear() !== +y || probe.getUTCMonth() !== +m - 1 || probe.getUTCDate() !== +d) return null;
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * The publish date an episode gets when it is first seen.
+ *
+ * A file named `2026-09-01-…` says when it was published, and that beats the
+ * modification time: three dated files copied onto the share together all carry the
+ * moment they were copied, which put them in the feed as one episode on the same
+ * minute. The name wins unless the modification time already falls on that day — in
+ * the instance's zone or in UTC — in which case it is kept, because it also carries
+ * the time of day and the remote fetcher sets it to the exact moment of publication.
+ * Without a date in the name the modification time is the answer, as it always was.
+ */
+export function publishDateFor(filename, mtimeIso, timeZone) {
+  const dated = dateInFilename(filename);
+  if (!dated) return mtimeIso;
+  const sameDay =
+    toLocalInputValue(mtimeIso, { timeZone }).slice(0, 10) === dated ||
+    String(mtimeIso ?? '').slice(0, 10) === dated;
+  if (sameDay) return mtimeIso;
+  return fromLocalInputValue(`${dated}T00:00`, { timeZone }) ?? mtimeIso;
 }
 
 /** "2026-08-07-episode-one.m4a" → "Episode One" (a suggestion, never a lock). */

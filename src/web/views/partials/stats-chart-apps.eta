@@ -6,7 +6,7 @@
   const apps = it.helpers.shareBars(it.clients, { labelKey: 'client', valueKey: 'n', limit: 8 });
 %>
 <div class="form-card" style="margin-bottom:18px">
-  <div class="ftitle">Which apps are fetching</div>
+  <h2 class="ftitle">Which apps are fetching</h2>
   <div class="fdesc">
     The app family behind each request, <%= it.range.lede %>. SelfPod records the family —
     “Pocket Casts”, “Apple Podcasts” — and never the full user agent or an IP address.
