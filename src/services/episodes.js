@@ -22,6 +22,14 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt, 
   const selectByShow = db.prepare(
     'SELECT * FROM episodes WHERE show_id = ? ORDER BY pub_date DESC, created_at DESC',
   );
+  // Prepared once: the scanner asks this for every file of every show on every scan.
+  const selectByFilename = db.prepare(
+    `SELECT * FROM episodes
+      WHERE show_id = ? AND filename = ?
+      ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'missing' THEN 1 WHEN 'expired' THEN 2 ELSE 3 END,
+               updated_at DESC
+      LIMIT 1`,
+  );
   // `pub_date <= @now` is what makes a publish date in the future mean "later" rather
   // than "now". Without it the date picker on the episode form looked exactly like
   // scheduling and published immediately — the worst kind of wrong, because the app
@@ -96,17 +104,7 @@ export function createEpisodes({ db, config, events, shows, logger, episodeArt, 
      * row that is actually live, or it could attach the wrong GUID to the file.
      */
     findByFilename(showId, filename) {
-      return (
-        db
-          .prepare(
-            `SELECT * FROM episodes
-              WHERE show_id = ? AND filename = ?
-              ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'missing' THEN 1 WHEN 'expired' THEN 2 ELSE 3 END,
-                       updated_at DESC
-              LIMIT 1`,
-          )
-          .get(showId, filename) ?? null
-      );
+      return selectByFilename.get(showId, filename) ?? null;
     },
 
     listByShow(showId, { status } = {}) {

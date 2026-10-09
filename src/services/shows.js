@@ -24,6 +24,8 @@ import {
  * from it — that value is a credential.
  */
 export function createShows({ db, config, events, logger, settings, episodeArt, derivedAudio }) {
+  // Prepared once: discovery asks this for every folder on every scan.
+  const selectRemovedFolder = db.prepare('SELECT 1 FROM removed_folders WHERE slug = ?');
   const selectById = db.prepare('SELECT * FROM shows WHERE id = ?');
   const selectBySlug = db.prepare('SELECT * FROM shows WHERE slug = ?');
   const selectAll = db.prepare('SELECT * FROM shows ORDER BY title COLLATE NOCASE ASC');
@@ -355,7 +357,7 @@ export function createShows({ db, config, events, logger, settings, episodeArt, 
 
     /** Folders the user removed on purpose, which discovery must skip. */
     isFolderRemoved(slug) {
-      return db.prepare('SELECT 1 FROM removed_folders WHERE slug = ?').get(slug) !== undefined;
+      return selectRemovedFolder.get(slug) !== undefined;
     },
 
     listRemovedFolders() {

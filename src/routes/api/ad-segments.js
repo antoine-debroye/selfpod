@@ -1,11 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
 
 import { AD_TRIM_MODES, SEGMENT_STATUS } from '../../constants.js';
 import { resolveContained } from '../../lib/contained-path.js';
-import { badRequest, notFound } from '../../lib/errors.js';
-import { cutFrames } from '../../lib/mp3-cut.js';
-import { frameProfile } from '../../lib/mp3-frames.js';
+import { AppError, badRequest, notFound } from '../../lib/errors.js';
+import { createFrameTableCache, readFrameRange } from '../../lib/mp3-range.js';
 import { msToFrame } from '../../lib/fingerprint-file.js';
 import { presentSegment } from '../../lib/present-segment.js';
 import { describeWork } from '../../services/adverts-view.js';
@@ -44,6 +42,56 @@ export default async function adSegmentRoutes(fastify, services) {
   const { adDetect, adPipeline, shows, episodes, config } = services;
 
   fastify.addHook('onRequest', fastify.requireAdminApi);
+
+  /*
+   * Where an episode's frames are, per file, for the two routes that play a few
+   * seconds of one. Walked once from the file and kept; the whole episode is never
+   * read to serve a clip of it. Shared by the segment and the jingle samples, which
+   * play from the same handful of exemplar episodes.
+   */
+  const frameTables = createFrameTableCache({ maxEntries: 8 });
+
+  /**
+   * Resolves an episode's file inside its show folder and its frame table, or throws
+   * the 404 every reason here maps to. `/data/shows` is normally a writable SMB
+   * share: anyone who can drop a file there can drop a symlink there, and these
+   * routes return part of whatever they open. The cover, artwork and media routes all
+   * do this; skipping it here would have made one route the way to read the host
+   * through a share.
+   */
+  async function sampleSource(episode) {
+    if (!isSafeFilename(episode.filename)) throw notFound('No episode here.', 'not_found');
+    const resolved = await resolveContained(shows.dirFor(shows.getOrThrow(episode.show_id)), episode.filename);
+    if (!resolved.path) throw notFound('That episode is not readable right now.', 'file_missing');
+    let table;
+    try {
+      const info = await stat(resolved.path);
+      if (!info.isFile()) throw notFound('That episode is not readable right now.', 'file_missing');
+      table = await frameTables.get(resolved.path, { size: info.size, mtimeMs: Math.trunc(info.mtimeMs) });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw notFound('That episode is not readable right now.', 'file_missing');
+    }
+    if (!table?.frameCount) throw notFound('That episode could not be played.', 'not_playable');
+    return { path: resolved.path, table };
+  }
+
+  /** `?context=N` in frames: a few seconds either side, clamped so a query string cannot ask for minutes. */
+  function contextFramesFor(request, table) {
+    const contextSeconds = Math.max(0, Math.min(10, Number(request.query?.context) || 0));
+    return table.sampleRate ? Math.round((contextSeconds * 1000 * table.sampleRate) / (table.samplesPerFrame * 1000)) : 0;
+  }
+
+  async function sendClip(reply, source, fromFrame, toFrame) {
+    const clip = await readFrameRange(source.path, source.table, fromFrame, toFrame);
+    if (!clip.length) throw notFound('That segment could not be played.', 'not_playable');
+    return reply
+      .header('content-type', 'audio/mpeg')
+      .header('content-length', String(clip.length))
+      // Derived from files that can change, and only ever a few seconds long.
+      .header('cache-control', 'private, no-store')
+      .send(clip);
+  }
 
   fastify.get('/shows/:id/ad-segments', async (request) => {
     const show = shows.getOrThrow(request.params.id);
@@ -291,9 +339,10 @@ export default async function adSegmentRoutes(fastify, services) {
   /**
    * The segment on its own, as audio, so a decision can be made by listening.
    *
-   * Built by cutting everything *except* the segment out of the exemplar episode,
-   * which is the trimmer's own operation run the other way round — so what you hear
-   * is exactly the frames that would be removed, not an approximation of them.
+   * Exactly the frames the trimmer would remove — the stored frame range of the
+   * exemplar occurrence — read straight from the file by their offsets, so what you
+   * hear is what would go, and serving it costs the clip's own bytes rather than the
+   * whole episode.
    */
   fastify.get('/ad-segments/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, async (request, reply) => {
     const segment = adDetect.getSegment(request.params.id);
@@ -305,50 +354,11 @@ export default async function adSegmentRoutes(fastify, services) {
     const episode = occurrence ? episodes.get(occurrence.episode_id) : null;
     if (!episode) throw notFound('There is no episode to play this from.', 'no_exemplar');
 
-    // Resolved and proved to be inside the show's own folder before a byte is read.
-    // `/data/shows` is normally a writable SMB share: anyone who can drop a file there
-    // can drop a symlink there, and this route returns part of whatever it opens. The
-    // cover, artwork and media routes all do this; skipping it here would have made
-    // one route the way to read the host through a share.
-    if (!isSafeFilename(episode.filename)) throw notFound('No episode here.', 'not_found');
-    const resolved = await resolveContained(
-      shows.dirFor(shows.getOrThrow(episode.show_id)),
-      episode.filename,
-    );
-    if (!resolved.path) throw notFound('That episode is not readable right now.', 'file_missing');
-
-    let buffer;
-    try {
-      buffer = await readFile(resolved.path);
-    } catch {
-      throw notFound('That episode is not readable right now.', 'file_missing');
-    }
-
-    const profile = frameProfile(buffer);
-    const total = profile?.frameCount ?? 0;
-    /*
-     * `?context=N` plays a few seconds either side, so the edges can be judged by
-     * ear. Clamped on the server: a query string must not turn a forty-second read
-     * into forty minutes of somebody's episode.
-     */
-    const contextSeconds = Math.max(0, Math.min(10, Number(request.query?.context) || 0));
-    const contextFrames = profile?.frames?.length
-      ? Math.round((contextSeconds * 1000 * profile.frames[0].sampleRate) / (profile.frames[0].samplesPerFrame * 1000))
-      : 0;
+    const source = await sampleSource(episode);
+    const contextFrames = contextFramesFor(request, source.table);
     const from = Math.max(0, occurrence.start_frame - contextFrames);
-    const to = Math.min(total, occurrence.end_frame + contextFrames);
-    const sample = cutFrames(buffer, [
-      { startFrame: 0, endFrame: from },
-      { startFrame: to, endFrame: total },
-    ]);
-    if (!sample) throw notFound('That segment could not be played.', 'not_playable');
-
-    return reply
-      .header('content-type', 'audio/mpeg')
-      .header('content-length', String(sample.buffer.length))
-      // Derived from files that can change, and only ever a few seconds long.
-      .header('cache-control', 'private, no-store')
-      .send(sample.buffer);
+    const to = Math.min(source.table.frameCount, occurrence.end_frame + contextFrames);
+    return sendClip(reply, source, from, to);
   });
 
   /* ---- the cuts, episode by episode ---- */
@@ -507,9 +517,8 @@ export default async function adSegmentRoutes(fastify, services) {
 
   /**
    * The jingle's own exemplar clip, as audio, so a proposal can be heard before it is
-   * confirmed. Built the same way a segment's sample is: everything but the
-   * exemplar range cut away from a whole episode, never an arbitrary range chosen by
-   * the request.
+   * confirmed. The exemplar range, never an arbitrary range chosen by the request,
+   * read the same way a segment's sample is.
    */
   fastify.get('/ad-anchors/:id/sample.mp3', { preHandler: [fastify.rateLimit(SAMPLE_LIMIT)] }, async (request, reply) => {
     const anchor = adDetect.getAnchor(request.params.id);
@@ -518,37 +527,11 @@ export default async function adSegmentRoutes(fastify, services) {
     const episode = anchor.exemplar_episode_id ? episodes.get(anchor.exemplar_episode_id) : null;
     if (!episode) throw notFound('There is no episode to play this from.', 'no_exemplar');
 
-    if (!isSafeFilename(episode.filename)) throw notFound('No episode here.', 'not_found');
-    const resolved = await resolveContained(shows.dirFor(shows.getOrThrow(episode.show_id)), episode.filename);
-    if (!resolved.path) throw notFound('That episode is not readable right now.', 'file_missing');
-
-    let buffer;
-    try {
-      buffer = await readFile(resolved.path);
-    } catch {
-      throw notFound('That episode is not readable right now.', 'file_missing');
-    }
-
-    const profile = frameProfile(buffer);
-    if (!profile) throw notFound('That episode could not be played.', 'not_playable');
-    const timing = { sampleRate: profile.frames[0]?.sampleRate, samplesPerFrame: profile.frames[0]?.samplesPerFrame };
-    const total = profile.frameCount ?? 0;
-    const contextSeconds = Math.max(0, Math.min(10, Number(request.query?.context) || 0));
-    const contextFrames = timing.sampleRate
-      ? Math.round((contextSeconds * 1000 * timing.sampleRate) / (timing.samplesPerFrame * 1000))
-      : 0;
+    const source = await sampleSource(episode);
+    const timing = { sampleRate: source.table.sampleRate, samplesPerFrame: source.table.samplesPerFrame };
+    const contextFrames = contextFramesFor(request, source.table);
     const from = Math.max(0, msToFrame(anchor.exemplar_start_ms, timing) - contextFrames);
-    const to = Math.min(total, msToFrame(anchor.exemplar_end_ms, timing) + 1 + contextFrames);
-    const sample = cutFrames(buffer, [
-      { startFrame: 0, endFrame: from },
-      { startFrame: to, endFrame: total },
-    ]);
-    if (!sample) throw notFound('That jingle could not be played.', 'not_playable');
-
-    return reply
-      .header('content-type', 'audio/mpeg')
-      .header('content-length', String(sample.buffer.length))
-      .header('cache-control', 'private, no-store')
-      .send(sample.buffer);
+    const to = Math.min(source.table.frameCount, msToFrame(anchor.exemplar_end_ms, timing) + 1 + contextFrames);
+    return sendClip(reply, source, from, to);
   });
 }

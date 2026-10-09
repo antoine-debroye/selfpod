@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from '../../src/config.js';
 import { closeDatabase, openDatabase } from '../../src/db/index.js';
+import { createAudioWorker } from '../../src/lib/audio-search.js';
 import { createEventBus } from '../../src/lib/events.js';
 import { createActivity } from '../../src/services/activity.js';
 import { bootstrap } from '../../src/services/bootstrap.js';
@@ -120,11 +121,12 @@ export async function createTestInstance({ env = {}, skipBootstrap = false, whis
   const subscriptions = createSubscriptions({ db, config, events, logger: silentLogger });
   // A stand-in for whisper-cli, when a test wants words: `whisper` is a function of
   // the runner's options returning `{ json }` in whisper's own JSON shape.
+  const audio = createAudioWorker({ logger: silentLogger });
   const transcriber = createTranscriber({
-    db, config, events, logger: silentLogger, health, shows, episodes,
+    db, config, events, logger: silentLogger, health, shows, episodes, audio,
     runner: whisper ?? (() => { throw Object.assign(new Error('no recogniser in tests'), { code: 'missing' }); }),
   });
-  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes, transcriber });
+  const adDetect = createAdDetect({ db, config, events, logger: silentLogger, shows, episodes, transcriber, health, audioSearch: audio });
   const trimmer = createTrimmer({
     config, events, logger: silentLogger, health, shows, episodes, adDetect, metadata,
   });

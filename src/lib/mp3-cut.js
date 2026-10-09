@@ -45,6 +45,23 @@ import { id3v2Size, readFrames, readXing } from './mp3-frames.js';
  * @returns {{buffer: Buffer, framesKept: number, framesRemoved: number, durationMs: number} | null}
  */
 export function cutFrames(buffer, ranges) {
+  const cut = cutFrameParts(buffer, ranges);
+  if (!cut) return null;
+  const { parts, ...rest } = cut;
+  return { buffer: Buffer.concat(parts), ...rest };
+}
+
+/**
+ * The same cut, as the pieces of the original it is made of, in order.
+ *
+ * Every part but a rewritten Xing header is a view of `buffer`, so the result costs
+ * no second copy of the episode: the trimmer hashes the parts and writes them to the
+ * file one after another, which is what keeps an hour-long cut at one episode's
+ * worth of memory rather than two.
+ *
+ * @returns {{parts: Buffer[], framesKept: number, framesRemoved: number, durationMs: number} | null}
+ */
+export function cutFrameParts(buffer, ranges) {
   const { frames, truncated } = readFrames(buffer);
   if (!frames.length) return null;
   // A file too long to have been read whole cannot be cut. Building the result from a
@@ -118,7 +135,7 @@ export function cutFrames(buffer, ranges) {
   // estimating from the bitrate, which is approximate rather than wrong.
 
   return {
-    buffer: Buffer.concat(parts),
+    parts,
     framesKept: kept.length,
     framesRemoved: frames.length - firstAudio - kept.length,
     durationMs: Math.round(durationMs),

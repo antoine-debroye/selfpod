@@ -1,28 +1,43 @@
 import { parentPort } from 'node:worker_threads';
 
 import { findHeadAnchors } from '../lib/audio-anchor.js';
+import { decodeWindowToWav, fingerprintFile, profileFile } from '../lib/audio-tasks.js';
 import { findRepeatedAudio } from '../lib/repeated-audio.js';
 
 /**
- * The two searches that compare every episode with every other, off the main thread.
+ * The audio work that must not run on the thread serving listeners.
  *
- * They are pure arithmetic over fingerprints and quadratic in episode count, and the
- * main thread is the one serving listeners' downloads and answering the container's
- * health check. Run there, forty episodes held both for sixteen seconds, and a longer
- * show held them long enough for the host to restart the app mid-pass — for ever.
- * Nothing here touches the database or the disk: arrays in, plain objects out.
+ * Two kinds. The corpus searches compare every episode with every other — pure
+ * arithmetic over fingerprints, quadratic in episode count: forty episodes held the
+ * main thread for sixteen seconds. And the per-file work: reading, hashing and
+ * *decoding* an episode to fingerprint it or to hand its words to the recogniser,
+ * which is twelve seconds of blocked loop for an hour of MP3 on a desktop and
+ * several times that on a NAS — long enough for the container's health check to
+ * time out three times and have the app restarted mid-pass.
+ *
+ * The searches take arrays in and give plain objects back. The file tasks read
+ * their own file (through the same containment and size gate as the main thread)
+ * and hand back typed arrays, transferred rather than copied. Nothing here touches
+ * the database.
  */
 const TASKS = {
-  repeatedAudio: ({ episodes, options }) => findRepeatedAudio(episodes, options),
-  headAnchors: ({ episodes, options }) => findHeadAnchors(episodes, options),
+  repeatedAudio: ({ episodes, options }) => ({ result: findRepeatedAudio(episodes, options) }),
+  headAnchors: ({ episodes, options }) => ({ result: findHeadAnchors(episodes, options) }),
+  fingerprintFile,
+  profileFile,
+  decodeWindow: decodeWindowToWav,
 };
 
-parentPort.on('message', ({ id, task, payload }) => {
+parentPort.on('message', async ({ id, task, payload }) => {
   try {
     const run = TASKS[task];
     if (!run) throw new Error(`unknown task ${task}`);
-    parentPort.postMessage({ id, result: run(payload) });
+    const { result, transfer = [] } = await run(payload);
+    parentPort.postMessage({ id, result }, transfer);
   } catch (error) {
-    parentPort.postMessage({ id, error: { message: error.message, stack: error.stack } });
+    parentPort.postMessage({
+      id,
+      error: { message: error.message, stack: error.stack, code: error.code ?? null, refused: error.refused ?? null },
+    });
   }
 });

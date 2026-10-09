@@ -585,3 +585,14 @@ export const FINGERPRINTABLE_EXTENSIONS = Object.freeze(['.mp3']);
  * publishes bytes to your subscribers.
  */
 export const TRIMMABLE_EXTENSIONS = Object.freeze(['.mp3']);
+
+/**
+ * The largest episode file the advert pipeline will read whole, in bytes.
+ *
+ * Fingerprinting, listening and cutting all read a whole file into memory, and the
+ * show folder is a share others can write to — so a multi-gigabyte file dropped there,
+ * or a symlink to one, must be refused for the price of a `stat` rather than read
+ * into the heap on every pass. 768 MB is about five hours at 320 kbit/s, which is
+ * already past the longest MP3 the frame reader will take in one piece (MAX_FRAMES).
+ */
+export const MAX_PIPELINE_FILE_BYTES = 768 * 1024 * 1024;

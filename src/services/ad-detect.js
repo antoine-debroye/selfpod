@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -7,6 +7,7 @@ import {
   FINGERPRINTABLE_EXTENSIONS,
   FINGERPRINT_VERSION,
   HOLD_REASONS,
+  MAX_PIPELINE_FILE_BYTES,
   SEGMENT_KINDS,
   SEGMENT_SOURCES,
   SEGMENT_STATUS,
@@ -17,11 +18,15 @@ import { OWNER_KINDS, inferKind } from '../lib/segment-kind.js';
 import { nowIso } from '../lib/dates.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { EVENTS } from '../lib/events.js';
-import { decodeFingerprint, encodeFingerprint, msToFrame } from '../lib/fingerprint-file.js';
-import { createFingerprinter } from '../lib/acoustic-fingerprint.js';
-import { decodeToMono } from '../lib/decode-audio.js';
-import { frameProfile } from '../lib/mp3-frames.js';
-import { createAudioSearch } from '../lib/audio-search.js';
+import {
+  FINGERPRINT_HEADER_BYTES,
+  decodeFingerprint,
+  decodeFingerprintHeader,
+  encodeFingerprint,
+  msToFrame,
+} from '../lib/fingerprint-file.js';
+import { createAudioWorker } from '../lib/audio-search.js';
+import { gateEpisodeFile } from '../lib/pipeline-file.js';
 import {
   ANCHOR_MATCH_BER,
   DEFAULT_SEARCH_MS,
@@ -54,12 +59,13 @@ import { restoreCovers as sharedRestoreCovers } from '../lib/cut-bar.js';
  * separates them. So everything found is catalogued and offered, and the only thing
  * automatic mode changes is whether the owner is asked first.
  *
- * Nothing here decodes audio or runs a subprocess. Detection reads MP3 frame headers,
- * which is fast enough to be uninteresting: an hour-long episode fingerprints in well
- * under a second.
+ * Nothing here runs a subprocess, and nothing here decodes audio on *this* thread:
+ * reading and fingerprinting an episode is handed to the audio worker, because an
+ * hour of MP3 is seconds of pure CPU and this thread is the one serving listeners
+ * and answering the container's health check.
  */
-export function createAdDetect({ db, config, events, logger, shows, episodes, transcriber = null, audioSearch = null }) {
-  const search = audioSearch ?? createAudioSearch({ logger });
+export function createAdDetect({ db, config, events, logger, shows, episodes, transcriber = null, audioSearch = null, health = null }) {
+  const search = audioSearch ?? createAudioWorker({ logger });
   const selectFingerprint = db.prepare('SELECT * FROM episode_fingerprints WHERE episode_id = ?');
   const upsertFingerprint = db.prepare(
     `INSERT INTO episode_fingerprints
@@ -91,13 +97,16 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
   }
 
   /* ---- fingerprints -------------------------------------------------------- */
-
   /**
    * Reads an episode's frames and stores the fingerprint.
    *
    * Skipped when the stored one already describes this exact file: the audio's own
    * digest is the key, so a rename costs nothing and a genuinely replaced file is
    * noticed. `force` exists for the case where the algorithm changed under it.
+   *
+   * The read, the hash and the decode happen in the audio worker. This thread only
+   * asks the file system whether anything changed, hands over a path it has proved is
+   * inside the show's folder, and writes down what came back.
    */
   async function fingerprintEpisode(episode, { force = false } = {}) {
     const show = shows.get(episode.show_id);
@@ -111,7 +120,6 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return { skipped: 'unsupported_format', extension };
     }
 
-    const path = join(shows.dirFor(show), episode.filename);
     const existing = selectFingerprint.get(episode.id);
 
     /*
@@ -123,46 +131,24 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      * they disagree, and a file rewritten in place at the same size and within the
      * same millisecond is caught by the trimmer, which checks the digest again before
      * it cuts anything.
+     *
+     * The same stat is what proves the path is an ordinary file of a size SelfPod
+     * will hold, inside the folder it appears to be in. A refusal is said out loud
+     * — a banner naming the file, and a line in the pass's activity entry — because
+     * an episode that is never read is an episode nothing will ever be cut from.
      */
-    let info;
-    try {
-      info = await stat(path);
-    } catch (error) {
-      logger?.debug({ err: error, episodeId: episode.id }, 'could not read episode for fingerprinting');
-      return { skipped: 'unreadable' };
-    }
-    const mtimeMs = Math.trunc(info.mtimeMs);
+    const gate = await gateEpisodeFile(shows.dirFor(show), episode.filename, { maxBytes: MAX_PIPELINE_FILE_BYTES });
+    if (gate.refused) return refuseToRead(episode, gate);
+    const { path, size, mtimeMs } = gate;
     if (
       !force &&
       existing &&
       existing.algorithm_version === FINGERPRINT_VERSION &&
-      existing.bytes === info.size &&
+      existing.bytes === size &&
       existing.file_mtime_ms === mtimeMs
     ) {
       return { skipped: 'unchanged', frameCount: existing.frame_count, read: false };
     }
-
-    let bytes;
-    try {
-      bytes = await readFile(path);
-    } catch (error) {
-      logger?.debug({ err: error, episodeId: episode.id }, 'could not read episode for fingerprinting');
-      return { skipped: 'unreadable' };
-    }
-
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    if (!force && existing?.sha256 === sha256 && existing.algorithm_version === FINGERPRINT_VERSION) {
-      // Touched but not changed: remember the new time so the next pass does not read it.
-      touchFingerprint.run(mtimeMs, episode.id);
-      return { skipped: 'unchanged', frameCount: existing.frame_count, read: true };
-    }
-
-    const profile = frameProfile(bytes);
-    if (!profile) return { skipped: 'no_frames' };
-    // Only part of the file was read, so a fingerprint of it would describe an episode
-    // that stops hours before this one does — and would then be compared against other
-    // episodes as though it were whole.
-    if (profile.truncated) return { skipped: 'too_long' };
 
     /*
      * Decoded, and fingerprinted by what it sounds like.
@@ -174,21 +160,57 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      * Planet Money episodes: nine matching frames out of ninety thousand.
      *
      * Decoding runs at about a thousand times real time and the fingerprint at about
-     * two hundred, so an hour-long episode is a few seconds here on a desktop and
-     * perhaps a minute on a NAS — once per episode, behind a publish hold, on the one
-     * chain that already serialises this kind of work.
+     * two hundred, so an hour-long episode is a few seconds on a desktop and perhaps
+     * a minute on a NAS — once per episode, behind a publish hold, in the worker,
+     * where a listener's download and the health check cannot feel it.
      */
-    const fingerprinter = createFingerprinter();
-    const decoded = await decodeToMono(bytes, profile.frames, (samples) => fingerprinter.push(samples));
-    const subFingerprints = fingerprinter.finish();
-    if (!subFingerprints.length) return { skipped: 'too_short_to_fingerprint' };
+    let read;
+    try {
+      read = await search.fingerprintFile({
+        path,
+        maxBytes: MAX_PIPELINE_FILE_BYTES,
+        expectSha256: !force && existing?.algorithm_version === FINGERPRINT_VERSION ? existing.sha256 : null,
+      });
+    } catch (error) {
+      if (error?.code === 'refused') return refuseToRead(episode, { refused: error.refused, message: error.message, quiet: false });
+      if (error?.code === 'ENOENT') {
+        logger?.debug({ err: error, episodeId: episode.id }, 'could not read episode for fingerprinting');
+        return { skipped: 'unreadable' };
+      }
+      // A worker crash, a timeout, a decoder that threw: the episode is reported as
+      // failed, like a trim that failed, rather than left looking as if nobody had
+      // got to it yet.
+      logger?.warn({ err: error, episodeId: episode.id, filename: episode.filename }, 'could not fingerprint an episode');
+      const message = `“${episode.filename}” could not be read for advert detection: ${error?.message ?? error}.`;
+      const detail = `${message} Nothing will be cut from it until a later pass manages to read it.`;
+      const fresh = health?.get(`ad_read_${episode.id}`)?.detail !== detail;
+      health?.set(`ad_read_${episode.id}`, {
+        level: 'warn',
+        message: `SelfPod could not read “${episode.title}” to look for adverts.`,
+        detail,
+      });
+      return { skipped: 'failed', message, fresh };
+    }
+    health?.clear(`ad_read_${episode.id}`);
+    work.fingerprintsComputed += read.unchanged ? 0 : 1;
 
-    const samplesPerFrame = profile.frames[0]?.samplesPerFrame ?? 1152;
+    if (read.unchanged) {
+      // Touched but not changed: remember the new time so the next pass does not read it.
+      touchFingerprint.run(mtimeMs, episode.id);
+      return { skipped: 'unchanged', frameCount: existing.frame_count, read: true };
+    }
+    if (read.noFrames) return { skipped: 'no_frames' };
+    // Only part of the file was read, so a fingerprint of it would describe an episode
+    // that stops hours before this one does — and would then be compared against other
+    // episodes as though it were whole.
+    if (read.tooLong) return { skipped: 'too_long' };
+    if (!read.hashes.length) return { skipped: 'too_short_to_fingerprint' };
+
     const encoded = encodeFingerprint({
-      hashes: subFingerprints,
-      sampleRate: profile.sampleRate,
-      samplesPerFrame,
-      durationMs: profile.durationMs,
+      hashes: read.hashes,
+      sampleRate: read.sampleRate,
+      samplesPerFrame: read.samplesPerFrame,
+      durationMs: read.durationMs,
     });
 
     const target = fingerprintPath(show.id, episode.id);
@@ -198,23 +220,46 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     upsertFingerprint.run({
       episode_id: episode.id,
       algorithm_version: FINGERPRINT_VERSION,
-      frame_count: profile.frameCount,
-      sample_rate: profile.sampleRate,
-      duration_ms: profile.durationMs,
-      sha256,
-      bytes: bytes.length,
+      frame_count: read.frameCount,
+      sample_rate: read.sampleRate,
+      duration_ms: read.durationMs,
+      sha256: read.sha256,
+      bytes: read.bytes,
       file_mtime_ms: mtimeMs,
       created_at: nowIso(),
     });
 
     return {
-      frameCount: profile.frameCount,
-      durationMs: profile.durationMs,
-      subFingerprints: subFingerprints.length,
-      decodeErrors: decoded.errors,
-      discontinuities: profile.discontinuities.length,
+      frameCount: read.frameCount,
+      durationMs: read.durationMs,
+      subFingerprints: read.hashes.length,
+      decodeErrors: read.decodeErrors,
+      discontinuities: read.discontinuities,
     };
   }
+
+  /**
+   * What a refusal to read a file becomes: a quiet skip when the file is merely gone
+   * (ordinary on a share), and otherwise a banner naming the file and a result the
+   * pass writes into its activity entry.
+   */
+  function refuseToRead(episode, gate) {
+    if (gate.quiet) {
+      logger?.debug({ episodeId: episode.id, reason: gate.refused }, 'could not read episode for fingerprinting');
+      return { skipped: 'unreadable' };
+    }
+    const key = `ad_read_${episode.id}`;
+    const detail = `${gate.message} Nothing will be cut from it; it is published as it is.`;
+    // The banner stays for as long as the file does; the activity log gets one line,
+    // when the refusal is new or says something different, not one every pass.
+    const fresh = health?.get(key)?.detail !== detail;
+    if (fresh) logger?.warn({ episodeId: episode.id, filename: episode.filename, reason: gate.refused }, gate.message);
+    health?.set(key, { level: 'warn', message: `SelfPod will not read “${episode.title}” to look for adverts.`, detail });
+    return { skipped: 'refused', reason: gate.refused, message: gate.message, fresh };
+  }
+
+  /** How much real work this instance has done, for the pass's log line and for tests. */
+  const work = { fingerprintsComputed: 0, fingerprintsLoaded: 0, anchorsLocated: 0, phrasesLocated: 0, corpusSearches: 0 };
 
   /** The stored fingerprint for an episode, or null when there is none to read. */
   async function loadFingerprint(episode) {
@@ -222,6 +267,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     if (!row || row.algorithm_version !== FINGERPRINT_VERSION) return null;
     try {
       const decoded = decodeFingerprint(await readFile(fingerprintPath(episode.show_id, episode.id)));
+      work.fingerprintsLoaded += 1;
       return decoded ? { ...decoded, episodeId: episode.id } : null;
     } catch {
       // The row says there is a fingerprint and the file disagrees. That is a cache
@@ -229,6 +275,84 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return null;
     }
   }
+
+  /**
+   * Only a fingerprint's timing — sample rate, frame size, length — read from the
+   * first 28 bytes of its file. Enough to turn a millisecond into a frame, which is
+   * all an already-checked episode needs; the hashes stay on disk.
+   */
+  async function loadFingerprintTiming(episode) {
+    const row = selectFingerprint.get(episode.id);
+    if (!row || row.algorithm_version !== FINGERPRINT_VERSION) return null;
+    let handle = null;
+    try {
+      handle = await open(fingerprintPath(episode.show_id, episode.id), 'r');
+      const header = Buffer.alloc(FINGERPRINT_HEADER_BYTES);
+      const { bytesRead } = await handle.read(header, 0, FINGERPRINT_HEADER_BYTES, 0);
+      const decoded = decodeFingerprintHeader(header.subarray(0, bytesRead));
+      return decoded ? { ...decoded, episodeId: episode.id } : null;
+    } catch {
+      return null;
+    } finally {
+      await handle?.close().catch(() => {});
+    }
+  }
+
+  /*
+   * Everything detection reads that detection does not itself write, as one string.
+   *
+   * The pipeline compares it between passes to know whether a show has anything new
+   * to look at: a fingerprint or transcript that arrived, an episode that went, a
+   * setting that changed. Deliberately *not* the catalogue — detection rewrites that
+   * on every run, so including it would make every pass look like a change. What the
+   * owner does to the catalogue is counted separately (`catalogueVersion`), by every
+   * method of this service that acts on their behalf.
+   */
+  const selectDetectionInputs = db.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM episodes WHERE show_id = @id) AS episodes,
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(f.created_at), '')
+          FROM episode_fingerprints f JOIN episodes e ON e.id = f.episode_id WHERE e.show_id = @id) AS fingerprints,
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(t.attempted_at), '') || ':' || COALESCE(SUM(t.status = 'ok'), 0)
+          FROM episode_transcripts t JOIN episodes e ON e.id = t.episode_id WHERE e.show_id = @id) AS transcripts,
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(created_at), '') FROM ad_markers WHERE show_id = @id) AS markers,
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(o.created_at), '')
+          FROM ad_cut_overrides o JOIN episodes e ON e.id = o.episode_id WHERE e.show_id = @id) AS restores,
+       (SELECT ad_trim_mode || ':' || ad_auto_min_episodes || ':' || ad_transcribe || ':' || ad_transcribe_head_seconds
+               || ':' || ad_transcribe_tail_seconds || ':' || COALESCE(language, '')
+          FROM shows WHERE id = @id) AS settings`,
+  );
+  /** Bumped by every method that acts for the owner; see the wrapper at the end. */
+  let catalogueVersion = 0;
+
+  /*
+   * The catalogue as content — never as timestamps, which detection rewrites on every
+   * run whether or not anything moved. Running the detectors on an unchanged show
+   * re-finds exactly what is already stored, so this digest is the same after the
+   * run as before it; anything that edits a row under them — a decision, a restore,
+   * an episode going, a test — makes it differ, and the pipeline looks again.
+   */
+  const catalogueQueries = [
+    db.prepare(
+      `SELECT id, status, kind, text, duration_ms, episode_count, occurrence_count, hold_reason, auto_approved,
+              marker_id, anchor_id, exemplar_episode_id
+         FROM ad_segments WHERE show_id = ? ORDER BY id`,
+    ),
+    db.prepare(
+      `SELECT o.segment_id, o.episode_id, o.start_frame, o.end_frame
+         FROM ad_segment_occurrences o JOIN ad_segments s ON s.id = o.segment_id
+        WHERE s.show_id = ? ORDER BY o.segment_id, o.episode_id, o.start_frame`,
+    ),
+    db.prepare(
+      `SELECT id, origin, marker_id, confirmed_at, dismissed_at, algorithm_version, auto_confirmed
+         FROM ad_anchors WHERE show_id = ? ORDER BY id`,
+    ),
+    db.prepare(
+      `SELECT h.anchor_id, h.episode_id, h.heard, h.at_ms
+         FROM ad_anchor_hits h JOIN ad_anchors a ON a.id = h.anchor_id
+        WHERE a.show_id = ? ORDER BY h.anchor_id, h.episode_id`,
+    ),
+  ];
 
   /* ---- the catalogue ------------------------------------------------------- */
 
@@ -454,6 +578,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         AND kind IN ('${SEGMENT_KINDS.BOUNDARY_WORDS}', '${SEGMENT_KINDS.REMEMBERED_WORDS}', '${SEGMENT_KINDS.REPEATED_WORDS}')`,
   );
   const selectOccurrencesOf = db.prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ?');
+  const selectOccurrencesOrdered = db.prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ? ORDER BY start_ms');
   const selectCorpusOccurrencesIn = db.prepare(
     /*
      * An anchor's cut also carries `source = 'corpus'` — accurately, since it too is
@@ -789,6 +914,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        heard = excluded.heard, at_ms = excluded.at_ms, ber = excluded.ber, checked_at = excluded.checked_at`,
   );
   const selectAnchorHits = db.prepare('SELECT * FROM ad_anchor_hits WHERE anchor_id = ?');
+  const selectFingerprintRowsForShow = db.prepare(
+    `SELECT f.episode_id, f.created_at
+       FROM episode_fingerprints f JOIN episodes e ON e.id = f.episode_id
+      WHERE e.show_id = ? AND f.algorithm_version = ?`,
+  );
 
   /**
    * Whether two clips are close enough to call the same jingle.
@@ -947,12 +1077,18 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       const show = shows.getOrThrow(showId);
       let done = 0;
       let skipped = 0;
+      // Files SelfPod would not, or could not, read — for the pass's activity entry.
+      const refused = [];
       for (const episode of episodes.listByShow(show.id)) {
         const result = await fingerprintEpisode(episode, { force });
-        if (result?.skipped) skipped += 1;
-        else if (result) done += 1;
+        if (result?.skipped) {
+          skipped += 1;
+          if ((result.skipped === 'refused' || result.skipped === 'failed') && result.fresh) {
+            refused.push({ episodeId: episode.id, filename: episode.filename, message: result.message });
+          }
+        } else if (result) done += 1;
       }
-      return { fingerprinted: done, skipped };
+      return { fingerprinted: done, skipped, refused };
     },
 
     /**
@@ -1029,6 +1165,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       };
 
       const timingFor = Object.fromEntries(corpus.map((entry) => [entry.id, entry.timing]));
+      work.corpusSearches += 1;
       const found = await search.repeatedAudio(
         corpus.map((entry) => ({ id: entry.id, fingerprint: entry.hashes })),
         { minEpisodes: Math.min(threshold, 2) },
@@ -1222,7 +1359,11 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
      * eight rows of one advert sit there for an afternoon while the show was re-read.
      */
     foldDuplicateReads(showId) {
-      return mergeDuplicateReads(showId);
+      const folded = mergeDuplicateReads(showId);
+      // Rows folded together are a change to what the detectors read; the pipeline
+      // calls this on every pass, so it only counts when it did something.
+      if (folded) catalogueVersion += 1;
+      return folded;
     },
 
     /**
@@ -1352,6 +1493,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
           if (first < 0) continue;
           let last = entry.tokens.length - 1;
           while (last > first && !inHalf(entry.tokens[last])) last -= 1;
+          work.phrasesLocated += 1;
           const hit = locatePhrase(entry.tokens.slice(first, last + 1), phrase);
           if (!hit) continue;
           const hitStart = first + hit.start;
@@ -1415,6 +1557,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         const occurrences = [];
         let attached = 0;
         for (const entry of heard) {
+          work.phrasesLocated += 1;
           const hit = locatePhrase(entry.tokens, phrase);
           if (!hit || isClaimed(claimed, entry.episode.id, hit.start, hit.end)) continue;
           claimRange(claimed, entry.episode.id, hit.start, hit.end);
@@ -1488,6 +1631,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        * episode by stage 1 above, whatever its age.
        */
       const searchWindow = new Set(heard.slice(0, corpusWindow()).map((entry) => entry.episode.id));
+      work.corpusSearches += 1;
       const found = findRepeatedText(
         heard.filter((entry) => searchWindow.has(entry.episode.id)).map((entry) => ({ id: entry.episode.id, tokens: entry.tokens })),
         { claimed },
@@ -1585,7 +1729,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
     async detectAnchors(showId) {
       const show = shows.getOrThrow(showId);
       reconcileKinds(show.id);
-      if (show.ad_trim_mode === 'off') return { skipped: 'mode_off' };
+      if (show.ad_trim_mode === 'off') return { skipped: 'mode_off', changed: false };
 
       const rows = selectAnchors.all(showId);
       // Confirmed wins if one somehow exists alongside a pending row; otherwise the
@@ -1593,47 +1737,71 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       // on — never a fresh one minted under a new id every time this runs.
       let anchor = rows.find((row) => row.confirmed_at) ?? rows.find((row) => !row.confirmed_at && !row.dismissed_at) ?? null;
 
+      /*
+       * Which episodes have a fingerprint, newest first, known from the rows alone.
+       * The files are read lazily below, and only where there is something to look
+       * for: an episode this anchor has already been looked for in costs a 28-byte
+       * header read for its timing, not half a megabyte of hashes. A pass over an
+       * unchanged show used to load every fingerprint of every show into memory —
+       * a year of a daily show is a few hundred megabytes — to find nothing new.
+       */
       const episodeList = episodes.listByShow(show.id);
-      const withFingerprints = [];
+      const fingerprintRows = new Map(
+        selectFingerprintRowsForShow.all(show.id, FINGERPRINT_VERSION).map((row) => [row.episode_id, row]),
+      );
+      const fingerprinted = episodeList.filter((episode) => fingerprintRows.has(episode.id));
+      const byId = new Map(episodeList.map((episode) => [episode.id, episode]));
       const fingerprintsById = new Map();
-      for (const episode of episodeList) {
-        const fingerprint = await loadFingerprint(episode);
-        if (!fingerprint?.hashes?.length) continue;
-        withFingerprints.push({ id: episode.id, fingerprint: fingerprint.hashes });
-        fingerprintsById.set(episode.id, fingerprint);
-      }
+      const fingerprintFor = async (episode) => {
+        if (!fingerprintsById.has(episode.id)) {
+          const fingerprint = await loadFingerprint(episode);
+          fingerprintsById.set(episode.id, fingerprint?.hashes?.length ? fingerprint : null);
+        }
+        return fingerprintsById.get(episode.id);
+      };
+      const timingFor = async (episode) => fingerprintsById.get(episode.id) ?? (await loadFingerprintTiming(episode));
 
       let proposed = false;
       let autoConfirmed = false;
-      if (!anchor && withFingerprints.length >= 2) {
+      let linked = false;
+      let located = 0;
+      if (!anchor && fingerprinted.length >= 2) {
         const dismissedClips = rows
           .filter((row) => row.dismissed_at)
           .map((row) => decodeFingerprint(row.clip)?.hashes)
           .filter(Boolean);
         /*
          * The newest episodes only, not the show's whole history. `findHeadAnchors`
-         * insists the jingle be present in *every* episode it is given — deliberately
-         * strict, see that function's own reasoning — and a show that changed its
-         * ident once, or carries one genuinely bonus episode without it, would
-         * otherwise be unable to ever get a proposal at all: one episode with no
-         * jingle anywhere in a library's history is enough to veto every candidate,
-         * for ever. `episodeList` is already newest first (`episodes.listByShow`).
+         * insists the jingle be present in *every* episode it is given —
+         * deliberately strict, see that function's own reasoning — and a show that
+         * changed its ident once, or carries one genuinely bonus episode without it,
+         * would otherwise be unable to ever get a proposal at all: one episode with
+         * no jingle anywhere in a library's history is enough to veto every
+         * candidate, for ever. `episodeList` is already newest first.
          */
-        const recentWithFingerprints = withFingerprints.slice(0, MAX_PROPOSAL_EPISODES);
-        for (const candidate of await search.headAnchors(recentWithFingerprints)) {
-          const clip = anchorClipFrom(candidate, fingerprintsById);
-          if (!clip) continue;
-          // "No, that's not the jingle" must stay answered: a dismissed clip is never
-          // proposed again under a new id just because the corpus shifted.
-          if (dismissedClips.some((dismissed) => clipsMatch(clip.hashes, dismissed))) continue;
-          anchor = insertAnchor(show.id, { origin: 'proposed', confirmed: false, clip });
-          proposed = true;
-          break;
+        const recentWithFingerprints = [];
+        for (const episode of fingerprinted.slice(0, MAX_PROPOSAL_EPISODES)) {
+          const fingerprint = await fingerprintFor(episode);
+          if (fingerprint) recentWithFingerprints.push({ id: episode.id, fingerprint: fingerprint.hashes });
+        }
+        if (recentWithFingerprints.length >= 2) {
+          work.corpusSearches += 1;
+          for (const candidate of await search.headAnchors(recentWithFingerprints)) {
+            const clip = anchorClipFrom(candidate, fingerprintsById);
+            if (!clip) continue;
+            // "No, that's not the jingle" must stay answered: a dismissed clip is never
+            // proposed again under a new id just because the corpus shifted.
+            if (dismissedClips.some((dismissed) => clipsMatch(clip.hashes, dismissed))) continue;
+            anchor = insertAnchor(show.id, { origin: 'proposed', confirmed: false, clip });
+            proposed = true;
+            break;
+          }
         }
       }
-      if (!anchor) return { skipped: rows.length ? 'awaiting_decision' : 'nothing_found', proposed };
+      if (!anchor) return { skipped: rows.length ? 'awaiting_decision' : 'nothing_found', proposed, changed: proposed };
 
       let clipHashes;
+      let clipRebuilt = false;
       const stored = decodeFingerprint(anchor.clip);
       if (stored?.hashes?.length) {
         clipHashes = stored.hashes;
@@ -1659,15 +1827,23 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             now: nowIso(),
             id: anchor.id,
           });
+          // A new clip means every hit recorded against the old one is void.
+          clipRebuilt = true;
         }
       }
-      if (!clipHashes) return { skipped: 'anchor_stale', anchorId: anchor.id, proposed };
+      if (!clipHashes) return { skipped: 'anchor_stale', anchorId: anchor.id, proposed, changed: proposed };
 
       /*
        * Heard or missed, in every fingerprinted episode — run whether or not the
        * anchor is confirmed yet. A pending proposal gets no cut from this, but it
        * does get the chance below to link to a marker whose words now agree with it,
        * and it does let the owner hear the right exemplar on the review card.
+       *
+       * Looked for once per episode, not once per pass: a hit row dated after the
+       * episode's fingerprint still answers, and only an episode fingerprinted since
+       * it was last checked — new, or re-read because its file changed — is searched
+       * again. `checked_at` has carried this date since the table was made; this is
+       * the first thing to read it.
        */
       const previousHits = new Map(selectAnchorHits.all(anchor.id).map((row) => [row.episode_id, row]));
       const onsetByEpisode = new Map();
@@ -1675,11 +1851,24 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       let heard = 0;
       let missed = 0;
       let newlyMissed = 0;
-      for (const episode of episodeList) {
-        const fingerprint = fingerprintsById.get(episode.id);
-        // No fingerprint (not an MP3, unreadable, too long): not checked, not a miss —
-        // the word marker applies to this episode exactly as it does today.
+      for (const episode of fingerprinted) {
+        const previous = previousHits.get(episode.id);
+        const current = !clipRebuilt && previous && previous.checked_at >= fingerprintRows.get(episode.id).created_at;
+        if (current) {
+          if (previous.heard) {
+            heard += 1;
+            onsetByEpisode.set(episode.id, previous.at_ms - anchor.lead_ms);
+          } else {
+            missed += 1;
+          }
+          continue;
+        }
+        const fingerprint = await fingerprintFor(episode);
+        // The row says there is a fingerprint and the file disagrees (not checked, not
+        // a miss): the next fingerprinting pass recomputes it, and this looks again.
         if (!fingerprint) continue;
+        work.anchorsLocated += 1;
+        located += 1;
         const hit = locateAnchor(clipHashes, fingerprint.hashes);
         upsertAnchorHit.run({
           anchor_id: anchor.id,
@@ -1691,7 +1880,6 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         });
         if (!hit) {
           missed += 1;
-          const previous = previousHits.get(episode.id);
           if (!previous || previous.heard) newlyMissed += 1;
           continue;
         }
@@ -1701,10 +1889,9 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
 
       /*
        * A marker the owner already taught, whose *last-known* located words agree
-       * with where the jingle was just heard, links and confirms here — never on the
-       * same pass it was first proposed on, since the words for a brand new marker
-       * have not been read yet by the time this runs (see `linkableMarker`), but on
-       * whichever later pass finds them agreeing.
+       * with where the jingle was just heard, links and confirms here. The words for
+       * a brand new marker have not been read yet by the time this first runs in a
+       * pass (see `linkableMarker`); the pipeline asks again once they have.
        */
       if (!anchor.confirmed_at) {
         const marker = linkableMarker(show.id, onsetByEpisode);
@@ -1713,6 +1900,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
             `UPDATE ad_anchors SET origin = 'from_marker', marker_id = @marker_id, confirmed_at = @now, updated_at = @now WHERE id = @id`,
           ).run({ marker_id: marker.id, now: nowIso(), id: anchor.id });
           anchor = selectAnchor.get(anchor.id);
+          linked = true;
         }
       }
 
@@ -1727,8 +1915,8 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
        * In review mode it stays a question.
        */
       if (!anchor.confirmed_at && show.ad_trim_mode === 'auto' && anchor.origin === 'proposed') {
-        const recent = withFingerprints.slice(0, MAX_PROPOSAL_EPISODES);
-        if (recent.length >= 2 && recent.every((entry) => onsetByEpisode.has(entry.id))) {
+        const recent = fingerprinted.slice(0, MAX_PROPOSAL_EPISODES);
+        if (recent.length >= 2 && recent.every((episode) => onsetByEpisode.has(episode.id))) {
           db.prepare(
             'UPDATE ad_anchors SET confirmed_at = @now, auto_confirmed = 1, updated_at = @now WHERE id = @id',
           ).run({ now: nowIso(), id: anchor.id });
@@ -1737,15 +1925,22 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
         }
       }
 
+      // Whether this call wrote anything the other detectors read: a proposal, a
+      // confirmation, or a fresh hit row. The pipeline runs the detectors again
+      // within the same pass when it did, so a marker linked here is cut to today.
+      const changed = proposed || linked || autoConfirmed || located > 0;
+
       // A proposal is not a decision. Stopping here leaves the hits recorded — the
       // review card can already say how many episodes the jingle was heard in — but
       // cuts nothing until the owner, or a linked marker, actually decides.
-      if (!anchor.confirmed_at) return { skipped: 'awaiting_decision', anchorId: anchor.id, proposed };
+      if (!anchor.confirmed_at) return { skipped: 'awaiting_decision', anchorId: anchor.id, proposed, changed, located };
 
       const occurrences = [];
       for (const [episodeId, onsetMs] of onsetByEpisode) {
         if (onsetMs < MIN_ANCHOR_CUT_MS) continue; // heard right at the start — nothing to cut
-        occurrences.push(occurrenceFromAnchor({ id: episodeId }, fingerprintsById.get(episodeId), onsetMs));
+        const timing = await timingFor(byId.get(episodeId));
+        if (!timing) continue;
+        occurrences.push(occurrenceFromAnchor({ id: episodeId }, timing, onsetMs));
       }
 
       const signature = `anchor:${anchor.id}`;
@@ -1770,7 +1965,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       }
 
       events?.emit(EVENTS.SHOW_CHANGED, { showId: show.id });
-      return { anchorId: anchor.id, proposed, autoConfirmed, heard, missed, newlyMissed, cuts: occurrences.length };
+      return { anchorId: anchor.id, proposed, autoConfirmed, linked, heard, missed, newlyMissed, located, changed, cuts: occurrences.length };
     },
 
     /* ---- what the owner teaches ---------------------------------------------- */
@@ -2140,9 +2335,7 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return selectSegments.all(showId).map((row) => ({
         ...row,
         holdMessage: row.hold_reason ? (HOLD_REASONS[row.hold_reason] ?? null) : null,
-        occurrences: db
-          .prepare('SELECT * FROM ad_segment_occurrences WHERE segment_id = ? ORDER BY start_ms')
-          .all(row.id),
+        occurrences: selectOccurrencesOrdered.all(row.id),
       }));
     },
 
@@ -2259,7 +2452,55 @@ export function createAdDetect({ db, config, events, logger, shows, episodes, tr
       return merged;
     },
 
+
+    /**
+     * What a pass would be looking at, as one string that changes when any of it does.
+     * The pipeline keeps the last one it detected against per show and skips the
+     * detectors while it matches: a show nothing happened to is a show with nothing
+     * new to find.
+     */
+    detectionInputs(showId) {
+      const row = selectDetectionInputs.get({ id: showId });
+      return JSON.stringify({ ...row, version: catalogueVersion, fp: FINGERPRINT_VERSION });
+    },
+
+    /** The catalogue's content for a show, as a digest. See `catalogueQueries`. */
+    catalogueDigest(showId) {
+      const hash = createHash('sha1');
+      for (const query of catalogueQueries) {
+        for (const row of query.all(showId)) hash.update(JSON.stringify(row));
+        hash.update('|');
+      }
+      return hash.digest('hex');
+    },
+
+    /** Running totals of the expensive work this instance has done, for the log line and for tests. */
+    workDone() {
+      return { ...work };
+    },
   };
+
+  /*
+   * Every method that acts for the owner — a decision, a rule taught or forgotten, a
+   * restore, a jingle confirmed — moves `catalogueVersion`, which `detectionInputs`
+   * folds in. Done by wrapping rather than by a line in each method, so a method
+   * added later cannot forget: anything not named here as read-only counts. Counting
+   * too often costs one unneeded pass; not counting would leave a decision unapplied.
+   */
+  const READ_ONLY = new Set([
+    'fingerprintEpisode', 'loadFingerprint', 'fingerprintDigest', 'close', 'countFingerprinted',
+    'fingerprintShow', 'detectForShow', 'detectFromTranscripts', 'detectAnchors', 'reconcileKinds',
+    'foldDuplicateReads', 'sponsorSuggestions', 'exemplarTranscripts', 'spokenIn', 'anchorCutFor',
+    'listSegments', 'getSegment', 'listAnchors', 'getAnchor', 'anchorSummary', 'anchorStatusFor',
+    'listMarkers', 'getMarker', 'restoresIn', 'isRestored', 'cutListFor', 'detectionInputs', 'catalogueDigest', 'workDone',
+  ]);
+  for (const [name, method] of Object.entries(api)) {
+    if (typeof method !== 'function' || READ_ONLY.has(name)) continue;
+    api[name] = function actingForTheOwner(...args) {
+      catalogueVersion += 1;
+      return method.apply(this, args);
+    };
+  }
 
   return api;
 }

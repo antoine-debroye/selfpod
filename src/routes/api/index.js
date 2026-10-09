@@ -1,3 +1,6 @@
+import fastifyCompress from '@fastify/compress';
+
+import { compressOptions } from '../../web/index.js';
 import activityRoutes from './activity.js';
 import adSegmentRoutes from './ad-segments.js';
 import authRoutes from './auth.js';
@@ -21,6 +24,11 @@ export default async function apiRoutes(fastify, options) {
   // route at /api/api/…, so it is stripped here.
   const { prefix, ...services } = options;
   void prefix;
+
+  // This plugin is encapsulated, so the compression registered here reaches the
+  // JSON under /api and nothing outside it (see `compressOptions` for what it skips).
+  // The two audio routes under /api are left alone by their content type.
+  await fastify.register(fastifyCompress, compressOptions());
 
   await fastify.register(authRoutes, services);
   await fastify.register(statusRoutes, services);
