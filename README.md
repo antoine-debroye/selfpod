@@ -34,7 +34,8 @@ regenerate button.
   and partial streams are counted separately, alongside a request-by-request log
   naming the app that asked (“Pocket Casts”, “Apple Podcasts”). Failed requests
   are shown first, so an episode that will not download in someone's podcast app
-  is visible here instead of only on their phone. No IP addresses are stored, and
+  is visible here instead of only on their phone, and a download the app gave up
+  on is listed as partial rather than counted. No IP addresses are stored, and
   your own visits to the admin interface are never counted.
 - **Tells you when something is wrong.** Every scan is logged in plain language —
   a permission problem names the exact path and the UID SelfPod runs as. You

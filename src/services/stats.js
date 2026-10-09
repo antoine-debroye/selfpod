@@ -53,7 +53,12 @@ const CLIENT_PATTERNS = [
   [/downcast/i, 'Downcast'],
   [/breaker/i, 'Breaker'],
   [/spotify/i, 'Spotify'],
-  [/itunes|apple ?podcasts|itms|applecoremedia|podcasts\//i, 'Apple Podcasts'],
+  // AppleCoreMedia is the system player on an iPhone, iPad or Mac, and it speaks for
+  // whichever app is streaming through it — Apple Podcasts, but also Overcast,
+  // Castro and Safari. Crediting it to Apple Podcasts quietly over-stated that one
+  // app on every "which apps" chart.
+  [/applecoremedia/i, 'Apple media player'],
+  [/itunes|apple ?podcasts|itms|podcasts\//i, 'Apple Podcasts'],
   [/watchos|ios|iphone|ipad/i, 'iOS'],
   [/android/i, 'Android'],
   [/vlc/i, 'VLC'],
@@ -91,6 +96,20 @@ const SORT_DIRECTIONS = Object.freeze({ asc: 'ASC', desc: 'DESC' });
 export const SORT_KEYS = Object.freeze(Object.keys(SORT_COLUMNS));
 
 const KINDS = new Set(Object.values(ACCESS_KIND));
+
+/**
+ * The two predicates every figure on the statistics page is built from.
+ *
+ * `SERVED` is a response that carried audio: a 200 or a 206. A 304 is a success in
+ * HTTP's eyes but nothing was sent, and counting it used to add a download every
+ * time a browser or AVPlayer revalidated its cache. `COMPLETED` is `SERVED` plus the
+ * proof that the body actually arrived — `bytes_sent` is recorded as NULL when the
+ * app hung up first, so a download the subscriber never finished no longer counts
+ * as one they did. A stream is counted on `SERVED` alone: a player that stops
+ * buffering mid-way is behaving normally, not failing.
+ */
+const SERVED = 'a.status_code < 300';
+const COMPLETED = `${SERVED} AND a.bytes_sent IS NOT NULL`;
 
 /** Ceiling on one `list` call. Sized for the CSV export, not for a page of rows. */
 const MAX_LIST_ROWS = 50_000;
@@ -244,8 +263,8 @@ export function createStats({ db, logger }) {
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
              SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
              MAX(a.requested_at) AS lastAt
@@ -269,8 +288,8 @@ export function createStats({ db, logger }) {
       const rows = db
         .prepare(
           `SELECT a.episode_id AS episodeId,
-                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
                   SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
                   MAX(a.requested_at) AS lastAt
@@ -299,8 +318,8 @@ export function createStats({ db, logger }) {
       const media = db
         .prepare(
           `SELECT a.show_id AS showId,
-                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
                   SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
                   COUNT(DISTINCT a.episode_id) AS episodesTouched,
@@ -345,8 +364,8 @@ export function createStats({ db, logger }) {
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
              SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
              COUNT(DISTINCT a.episode_id) AS episodesTouched,
@@ -379,7 +398,7 @@ export function createStats({ db, logger }) {
           `SELECT a.client AS client, COUNT(*) AS n
              FROM media_access a
             WHERE a.show_id = @showId AND a.kind IN ('download','stream')
-                  AND a.status_code < 400 ${extra}
+                  AND ${SERVED} ${extra}
             GROUP BY a.client ORDER BY n DESC LIMIT 5`,
         )
         .all(scoped);
@@ -415,8 +434,8 @@ export function createStats({ db, logger }) {
         const row = db
           .prepare(
             `SELECT
-               SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-               SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+               SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+               SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
                SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
                MAX(a.requested_at) AS lastAt
@@ -438,13 +457,13 @@ export function createStats({ db, logger }) {
       const row = db
         .prepare(
           `SELECT
-             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+             SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.requested_at >= @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
              SUM(CASE WHEN a.requested_at >= @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
              MAX(CASE WHEN a.requested_at >= @from THEN a.requested_at END) AS lastAt,
-             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS prevDownloads,
-             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS prevStreams,
+             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS prevDownloads,
+             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS prevStreams,
              SUM(CASE WHEN a.requested_at < @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS prevFailures,
              SUM(CASE WHEN a.requested_at < @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS prevBytes
            FROM media_access a
@@ -505,8 +524,8 @@ export function createStats({ db, logger }) {
         .prepare(
           `WITH bucket(idx, start_at, end_at) AS (VALUES ${buckets.map(() => '(?,?,?)').join(', ')})
            SELECT b.idx AS idx,
-                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
                   SUM(COALESCE(a.bytes_sent, 0)) AS bytes
              FROM bucket b
@@ -544,12 +563,12 @@ export function createStats({ db, logger }) {
       return db
         .prepare(
           `SELECT COALESCE(a.client, 'Unknown') AS client,
-                  SUM(CASE WHEN a.kind = 'download' THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   THEN 1 ELSE 0 END) AS streams,
                   COUNT(*) AS n,
                   SUM(COALESCE(a.bytes_sent, 0)) AS bytes
              FROM media_access a
-            WHERE a.kind IN ('download','stream') AND a.status_code < 400 ${extra}
+            WHERE a.kind IN ('download','stream') AND ${SERVED} ${extra}
             GROUP BY COALESCE(a.client, 'Unknown')
             ORDER BY n DESC, client ASC`,
         )
@@ -580,15 +599,16 @@ export function createStats({ db, logger }) {
                   e.title AS title,
                   s.title AS showTitle,
                   s.slug AS showSlug,
-                  SUM(CASE WHEN a.kind = 'download' AND a.status_code < 400 THEN 1 ELSE 0 END) AS downloads,
-                  SUM(CASE WHEN a.kind = 'stream'   AND a.status_code < 400 THEN 1 ELSE 0 END) AS streams,
+                  SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
+                  SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
                   MAX(a.requested_at) AS lastAt
              FROM media_access a
              JOIN episodes e ON e.id = a.episode_id
              JOIN shows s ON s.id = a.show_id
-            WHERE a.kind IN ('download','stream') AND a.status_code < 400 ${extra}
+            WHERE a.kind IN ('download','stream') AND ${SERVED} ${extra}
             GROUP BY a.episode_id
+           HAVING downloads > 0 OR streams > 0
             ORDER BY downloads DESC, streams DESC, bytes DESC
             LIMIT @limit`,
         )
@@ -631,15 +651,16 @@ export function createStats({ db, logger }) {
           showTitle: row.show_title,
           showSlug: row.show_slug,
           ok: row.status_code < 400,
-          // A download that stopped well short of the file is worth flagging even
-          // though the response itself succeeded — that is what a failed download
-          // in a podcast app looks like from the server's side.
+          // A download that stopped short of the file is worth flagging even though
+          // the response itself succeeded — that is what a failed download in a
+          // podcast app looks like from the server's side. `bytes_sent` is NULL when
+          // the app disconnected before the end, which is the commonest way this
+          // happens and was, for a while, the one way it was not flagged.
           incomplete:
             row.kind === 'download' &&
-            row.status_code < 400 &&
-            row.total_bytes > 0 &&
-            row.bytes_sent !== null &&
-            row.bytes_sent < row.total_bytes * 0.98,
+            row.status_code < 300 &&
+            (row.bytes_sent === null ||
+              (row.total_bytes > 0 && row.bytes_sent < row.total_bytes * 0.98)),
         }));
     },
 

@@ -277,6 +277,156 @@ describe('play and download statistics', () => {
     assert.equal(row.incomplete, true, 'a truncated download is what a failure looks like server-side');
   });
 
+  /**
+   * The abort path as the route really records it: `bytes_sent` NULL, because the
+   * Content-Length header says what was promised rather than what arrived, plus the
+   * sentence saying the app hung up. It used to be shown as a green 200, counted as
+   * a download, and exported as "ok" — the one outcome the log exists to expose.
+   */
+  it('neither counts nor greenlights a download the app abandoned', async () => {
+    clearLog();
+    server.stats.record({
+      episodeId: episode.id,
+      showId: show.id,
+      kind: 'download',
+      statusCode: 200,
+      bytesSent: null,
+      totalBytes: episode.file_size_bytes,
+      userAgent: 'Pocket Casts/7.5 (iPhone)',
+      error: 'The app disconnected before the transfer finished, so this download is incomplete.',
+    });
+    const [row] = server.stats.list({ episodeId: episode.id });
+    assert.equal(row.ok, true, 'the response itself did not fail');
+    assert.equal(row.incomplete, true, 'but the file never arrived, and the log must say so');
+    assert.equal(server.stats.forEpisode(episode.id).downloads, 0, 'not a download anyone received');
+    assert.equal(server.stats.forShow(show.id).downloads, 0);
+    assert.equal(server.stats.overview().downloads, 0);
+    assert.equal(server.stats.busiest(5).length, 0, 'an abandoned fetch is not evidence of interest');
+
+    const csv = await server.get('/stats/access-log.csv');
+    assert.match(csv.body, /,download,200,partial,/, 'the export says partial, not ok');
+  });
+
+  it('still counts a stream the player stopped part-way through', async () => {
+    clearLog();
+    server.stats.record({
+      episodeId: episode.id,
+      showId: show.id,
+      kind: 'stream',
+      statusCode: 206,
+      bytesSent: null,
+      totalBytes: episode.file_size_bytes,
+      rangeHeader: 'bytes=40000-',
+      error: 'The app disconnected before the transfer finished, so this download is incomplete.',
+    });
+    // A player that has buffered enough and closes the connection is behaving
+    // normally; refusing to count it would hide most real listening.
+    assert.equal(server.stats.forEpisode(episode.id).streams, 1);
+    assert.equal(server.stats.list({ episodeId: episode.id })[0].incomplete, false);
+  });
+
+  it('does not record a HEAD request at all', async () => {
+    clearLog();
+    const response = await server.app.inject({
+      method: 'HEAD',
+      url: audioUrl(),
+      headers: { 'user-agent': 'Overcast/2024 (+http://overcast.fm/)' },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(Number(response.headers['content-length']), episode.file_size_bytes);
+    await settle();
+    // Fastify runs the GET handler for a HEAD, so this used to be a "download" of
+    // the file's whole size with nothing sent. Apps and validators HEAD enclosures
+    // routinely; some episodes' figures doubled.
+    assert.equal(rowsFor().length, 0);
+    assert.equal(server.stats.forEpisode(episode.id).downloads, 0);
+  });
+
+  it('records a 304 as nothing sent, and does not count it as a download', async () => {
+    clearLog();
+    const first = await server.app.inject({
+      url: audioUrl(),
+      headers: { 'user-agent': 'Mozilla/5.0 Safari/605' },
+    });
+    assert.equal(first.statusCode, 200);
+    const revalidated = await server.app.inject({
+      url: audioUrl(),
+      headers: { 'user-agent': 'Mozilla/5.0 Safari/605', 'if-none-match': first.headers.etag },
+    });
+    assert.equal(revalidated.statusCode, 304);
+    await settle();
+
+    const rows = rowsFor();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1].status_code, 304);
+    assert.equal(rows[1].bytes_sent, 0, 'a 304 is a fact of zero bytes, not an unknown');
+    const totals = server.stats.forEpisode(episode.id);
+    assert.equal(totals.downloads, 1, 'the revalidation is not a second download');
+    assert.equal(totals.failures, 0, 'nor is it a failure');
+    assert.equal(totals.bytes, episode.file_size_bytes);
+  });
+
+  /**
+   * Apple Podcasts fetches every episode with `Range: bytes=0-` and is answered with
+   * a 206 carrying the whole file. Counting that as a stream meant the most common
+   * app on iPhones never registered a download, so the figure under-counted one
+   * app's listeners and nobody else's.
+   */
+  it('counts a range from byte zero that delivered the whole file as a download', async () => {
+    clearLog();
+    const probe = await server.app.inject({
+      url: audioUrl(),
+      headers: { range: 'bytes=0-1', 'user-agent': 'AppleCoreMedia/1.0.0 (iPhone)' },
+    });
+    assert.equal(probe.statusCode, 206);
+    const whole = await server.app.inject({
+      url: audioUrl(),
+      headers: { range: 'bytes=0-', 'user-agent': 'AppleCoreMedia/1.0.0 (iPhone)' },
+    });
+    assert.equal(whole.statusCode, 206);
+    const explicit = await server.app.inject({
+      url: audioUrl(),
+      headers: {
+        range: `bytes=0-${episode.file_size_bytes - 1}`,
+        'user-agent': 'AppleCoreMedia/1.0.0 (iPhone)',
+      },
+    });
+    assert.equal(explicit.statusCode, 206);
+    await settle();
+
+    const rows = rowsFor();
+    assert.deepEqual(
+      rows.map((row) => [row.range_header, row.kind]),
+      [
+        ['bytes=0-1', 'stream'],
+        ['bytes=0-', 'download'],
+        [`bytes=0-${episode.file_size_bytes - 1}`, 'download'],
+      ],
+    );
+    const totals = server.stats.forEpisode(episode.id);
+    assert.equal(totals.downloads, 2);
+    assert.equal(totals.streams, 1, 'the two-byte probe is a probe');
+    assert.equal(rows[0].client, 'Apple media player');
+  });
+
+  it('keeps the range a resuming client asked for, even when answered with the whole file', async () => {
+    clearLog();
+    // A version the episode never had: the address is from an earlier cut, and the
+    // client is resuming from the middle, so it is handed the whole file with a 200.
+    const response = await server.app.inject({
+      url: `${audioUrl()}?v=stale`,
+      headers: { range: 'bytes=5000-', 'user-agent': 'Pocket Casts/7.5 (iPhone)' },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['accept-ranges'], 'none');
+    await settle();
+
+    const [row] = rowsFor();
+    assert.equal(row.kind, 'download', 'the whole file went out');
+    assert.equal(row.range_header, 'bytes=5000-', 'and the log still shows why it was asked for');
+    assert.equal(row.bytes_sent, episode.file_size_bytes);
+  });
+
   it('filters the log to failures only', async () => {
     clearLog();
     await server.app.inject({ url: audioUrl(), headers: { 'user-agent': 'curl/8.4.0' } });
@@ -431,7 +581,9 @@ describe('client classification', () => {
     assert.equal(classifyClient('Overcast/2024 (+http://overcast.fm/)'), 'Overcast');
     assert.equal(classifyClient('AntennaPod/3.4.0'), 'AntennaPod');
     assert.equal(classifyClient('Podcasts/1580.3 (iPhone; iOS 18.2)'), 'Apple Podcasts');
-    assert.equal(classifyClient('AppleCoreMedia/1.0.0 (iPhone)'), 'Apple Podcasts');
+    // The system player speaks for whichever app is streaming through it, so it is
+    // named for what it is rather than credited to Apple Podcasts.
+    assert.equal(classifyClient('AppleCoreMedia/1.0.0 (iPhone)'), 'Apple media player');
     assert.equal(classifyClient('Spotify/8.9 iOS'), 'Spotify');
   });
 

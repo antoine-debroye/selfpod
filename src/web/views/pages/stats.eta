@@ -7,8 +7,8 @@
   /* One place decides whether a movement is good news. More downloads and more failures
      are not the same news, so the card says which way it reads and the helper works out
      the tone; the stylesheet never has to know which card it is on. */
-  function change(key, higherIsBetter) {
-    return it.helpers.changeLine(o.change?.[key], { higherIsBetter, periodLabel });
+  function change(key, higherIsBetter, format = null) {
+    return it.helpers.changeLine(o.change?.[key], { higherIsBetter, periodLabel, format });
   }
 %>
 <div class="page-title">
@@ -30,7 +30,7 @@
         h: 'whole-file fetches — an app saving an episode for offline listening' },
       { n: o.streams.toLocaleString('en'), l: 'Streams', d: change('streams', true),
         h: 'partial fetches — a player starting playback or seeking' },
-      { n: it.helpers.formatBytes(o.bytes), l: 'Audio served', d: change('bytes', true),
+      { n: it.helpers.formatBytes(o.bytes), l: 'Audio served', d: change('bytes', true, it.helpers.formatBytes),
         h: 'total sent to subscribers' },
       { n: o.failures.toLocaleString('en'), l: 'Failed requests', d: change('failures', false),
         bad: Boolean(o.failures),
@@ -56,8 +56,11 @@
 <p class="help-note" style="margin:16px 0 18px">
   These are <strong>requests, not listens</strong> — no podcast server can know whether someone actually
   played an episode, and SelfPod does not pretend otherwise. Requests you make yourself from this admin
-  interface are not counted. SelfPod records the app family (“Pocket Casts”, “Apple Podcasts”) but
-  deliberately stores neither IP addresses nor feed tokens.
+  interface are not counted, and neither is a download the app gave up on before the file had
+  arrived — it appears in the log as <em>partial</em> instead. SelfPod records the app family
+  (“Pocket Casts”, “Apple Podcasts”) but deliberately stores neither IP addresses nor feed tokens.
+  “Apple media player” is the system player on an iPhone, iPad or Mac: Apple Podcasts streams
+  through it, but so do Overcast, Castro and Safari, so it cannot be pinned to one app.
 </p>
 
 <% if (it.failures.length) { %>
