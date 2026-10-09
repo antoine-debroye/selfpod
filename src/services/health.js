@@ -14,6 +14,16 @@ import { describeFsError } from '../lib/errors.js';
  * every failure in the hand-rolled version was invisible until a podcast app
  * broke.
  */
+/** Issue keys whose message carries nothing about the owner's shows. */
+const PUBLIC_ISSUE_KEYS = new Set([
+  'data_writable',
+  'shows_readable',
+  'temp_writable',
+  'episode_art_writable',
+  'entrypoint_selftest',
+  'sqlite_journal',
+]);
+
 export function createHealth({ config, events, logger }) {
   /** key → { level, message, detail?, since } */
   const issues = new Map();
@@ -57,6 +67,24 @@ export function createHealth({ config, events, logger }) {
      */
     banners() {
       return [...issues.values()].filter((issue) => issue.level === 'error' || issue.level === 'warn');
+    },
+
+    /**
+     * The banners that may be shown before anyone has signed in.
+     *
+     * The permission problems have to be visible on the sign-in page — a container
+     * that cannot write its own data directory is undiagnosable otherwise (spec
+     * §13.1). But every other issue names something private: a show's title, the
+     * host of a feed being followed, which episode's cut copy went missing. Feeds
+     * are private by their token; their names should not be readable by whoever
+     * finds the tunnel hostname.
+     */
+    publicBanners() {
+      return api.banners().filter((issue) => PUBLIC_ISSUE_KEYS.has(issue.key));
+    },
+
+    isPublicIssue(key) {
+      return PUBLIC_ISSUE_KEYS.has(key);
     },
 
     hasErrors() {

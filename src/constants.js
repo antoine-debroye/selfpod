@@ -356,6 +356,17 @@ export const REMOTE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const REMOTE_IMAGE_MAX_PIXELS = 40 * 1000 * 1000;
 
 /**
+ * The same ceiling for every image sharp decodes, wherever it came from.
+ *
+ * The shows folder is a network share that other people can write to, so a cover
+ * or an episode sidecar dropped there is as much a stranger's choice as a remote
+ * image is — and an image embedded in an MP3's tag arrives the same way. A 300 KB
+ * WebP declaring 16000×16000 decodes to a gigabyte; passing this to `sharp()` makes
+ * it refuse at the header, before a byte is decoded.
+ */
+export const IMAGE_MAX_INPUT_PIXELS = REMOTE_IMAGE_MAX_PIXELS;
+
+/**
  * Four timers, not one, because they catch four different failures.
  *
  * A single total budget would kill a legitimate two-hour episode on a slow line. A

@@ -86,7 +86,7 @@ export default async function pageRoutes(fastify, services) {
         next: sanitiseNext(request.query?.next),
         firstRun: settings.mustChangePassword(),
         error: request.query?.error === 'invalid' ? 'That username and password combination is not correct.' : null,
-        issues: health.banners(),
+        issues: health.publicBanners(),
       },
       BARE_LAYOUT,
     );
@@ -97,7 +97,10 @@ export default async function pageRoutes(fastify, services) {
     const result = await fastify.verifyCredentials(username, password, request);
 
     if (!result.ok) {
-      reply.status(401);
+      // 429 with Retry-After when it is the throttle answering, so a script or a
+      // proxy can tell "wrong password" from "not now" without parsing the page.
+      if (result.retryAfter) reply.header('retry-after', String(result.retryAfter));
+      reply.status(result.retryAfter ? 429 : 401);
       return reply.view(
         'pages/login.eta',
         {
@@ -106,12 +109,15 @@ export default async function pageRoutes(fastify, services) {
           username,
           firstRun: settings.mustChangePassword(),
           error: result.message,
-          issues: health.banners(),
+          issues: health.publicBanners(),
         },
         BARE_LAYOUT,
       );
     }
 
+    // A fresh session id on every sign-in, so nothing issued before the password
+    // was proved can be carried across it.
+    await request.session.regenerate();
     request.session.set('admin', { username: result.username, since: new Date().toISOString() });
     await request.session.save();
 
@@ -177,7 +183,7 @@ export default async function pageRoutes(fastify, services) {
       reply.status(422);
       return reply.view('pages/setup.eta', setupContext(1, { errors }), BARE_LAYOUT);
     }
-    await fastify.setAdminPassword(password);
+    await fastify.setAdminPassword(password, { keepSessionId: request.session.sessionId });
     return reply.redirect('/setup/2', 303);
   });
 

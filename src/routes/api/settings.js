@@ -216,7 +216,7 @@ export default async function settingsRoutes(fastify, { config, settings, watche
       throw unprocessable('Some of those values need fixing.', 'validation_failed', fields);
     }
 
-    await fastify.setAdminPassword(password);
+    await fastify.setAdminPassword(password, { keepSessionId: request.session.sessionId });
     return { ok: true };
   });
 }

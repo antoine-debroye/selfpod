@@ -5,7 +5,23 @@ import { join } from 'node:path';
 
 import sharp from 'sharp';
 
-import { DIRECTORY_IMAGE_FORMATS } from '../constants.js';
+import { DIRECTORY_IMAGE_FORMATS, IMAGE_MAX_INPUT_PIXELS } from '../constants.js';
+
+/** Every decode refuses at the header past the pixel ceiling — see the constant. */
+const SHARP_LIMITS = Object.freeze({ limitInputPixels: IMAGE_MAX_INPUT_PIXELS });
+
+/**
+ * Whether sharp refused an image for its size rather than failing to parse it.
+ *
+ * Turned into a sentence the scan log can carry: "could not be read" would send the
+ * owner looking for corruption in a file that is perfectly valid, merely enormous.
+ */
+export function describeImageError(err) {
+  if (/pixel limit/i.test(err?.message ?? '')) {
+    return `The image is larger than ${Math.round(IMAGE_MAX_INPUT_PIXELS / 1_000_000)} million pixels, which SelfPod will not decode — a cover that size would take the server down with it. Shrink it to 3000×3000 or less.`;
+  }
+  return null;
+}
 
 /**
  * Per-episode artwork storage (the cache behind the `art_*` columns on `episodes`).
@@ -55,7 +71,20 @@ export function createEpisodeArt({ config, covers, logger }) {
      */
     async store({ showId, episodeId, buffer, sourceFormat = null }) {
       const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-      const probe = await sharp(data).metadata();
+      let probe;
+      try {
+        probe = await sharp(data, SHARP_LIMITS).metadata();
+        // `metadata()` reads the header without decoding, so the ceiling is enforced
+        // here by hand: the decode that would otherwise hit it comes later, after a
+        // JPEG or PNG has already been accepted as-is on the strength of this probe.
+        if ((probe.width ?? 0) * (probe.height ?? 0) > IMAGE_MAX_INPUT_PIXELS) {
+          throw new Error('Input image exceeds pixel limit');
+        }
+      } catch (err) {
+        const why = describeImageError(err);
+        if (why) throw new Error(why, { cause: err });
+        throw err;
+      }
 
       // What the bytes are, never what the tag claimed they were: an APIC frame
       // announcing `image/png` around JPEG data is a common tagger bug, and trusting
@@ -74,12 +103,12 @@ export function createEpisodeArt({ config, covers, logger }) {
       let height = probe.height ?? null;
 
       if (!passthrough) {
-        bytes = await sharp(data)
+        bytes = await sharp(data, SHARP_LIMITS)
           .rotate() // honour EXIF orientation before the metadata is dropped
           .jpeg({ quality: 90, mozjpeg: true })
           .toBuffer();
         extension = '.jpg';
-        const after = await sharp(bytes).metadata();
+        const after = await sharp(bytes, SHARP_LIMITS).metadata();
         width = after.width ?? width;
         height = after.height ?? height;
       }

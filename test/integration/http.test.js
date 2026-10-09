@@ -105,7 +105,9 @@ describe('authentication (spec §12.1)', () => {
       payload: { username: 'admin', password: ADMIN_PASSWORD },
       headers: { 'sec-fetch-site': 'same-origin', 'x-forwarded-for': '203.0.113.99' },
     });
-    assert.equal(spoofed.statusCode, 401);
+    // 429, not 401: the throttle answering is not "wrong password", and a script or
+    // proxy should be able to tell the two apart without parsing the message.
+    assert.equal(spoofed.statusCode, 429);
     assert.equal(spoofed.json().error.code, 'rate_limited');
     assert.ok(spoofed.headers['retry-after']);
   });

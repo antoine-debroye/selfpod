@@ -18,8 +18,10 @@ export default async function statusRoutes(fastify, { settings, health, watcher,
       hasPublicBaseUrl: settings.hasPublicBaseUrl(),
       authenticated,
       // The banner has to be visible to whoever can reach the app, otherwise a
-      // permission problem is undiagnosable without SSH (spec §13.1).
-      issues: issues.map((issue) => ({
+      // permission problem is undiagnosable without SSH (spec §13.1). Only the
+      // permission problems, though: the rest name shows and followed feeds, which
+      // an anonymous caller has no business reading.
+      issues: (authenticated ? issues : issues.filter((issue) => health.isPublicIssue(issue.key))).map((issue) => ({
         key: issue.key,
         level: issue.level,
         message: issue.message,

@@ -1607,7 +1607,7 @@ export default async function fragmentRoutes(fastify, services) {
         return reply.view('partials/modal-change-password.eta', { errors, helpers: fastify.viewHelpers });
       }
 
-      await fastify.setAdminPassword(password);
+      await fastify.setAdminPassword(password, { keepSessionId: request.session.sessionId });
       if (!isHtmx(request)) return redirectBack(request, reply, '/settings', 'Password changed.');
       return reply.view('partials/modal-closed.eta', {
         toast: { message: 'Password changed.', level: 'ok' },
