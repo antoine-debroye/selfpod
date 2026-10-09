@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import sharp from 'sharp';
 
 import {
+  IMAGE_MAX_INPUT_PIXELS,
   ARTWORK_MAX_PX,
   ARTWORK_MIN_PX,
   CANONICAL_COVER_FILENAME,
@@ -14,6 +15,11 @@ import {
   imageMimeType,
 } from '../constants.js';
 import { badRequest } from '../lib/errors.js';
+import { describeImageError } from './episode-art.js';
+
+/** Every decode refuses at the header past the pixel ceiling — see the constant. */
+const SHARP_LIMITS = Object.freeze({ limitInputPixels: IMAGE_MAX_INPUT_PIXELS });
+const isPixelLimitError = (err) => Boolean(describeImageError(err));
 
 /**
  * Cover art detection, validation and normalisation (spec §10).
@@ -53,7 +59,7 @@ export function createCovers({ config, logger }) {
      */
     async inspect(filePath) {
       try {
-        const [meta, stats] = await Promise.all([sharp(filePath).metadata(), stat(filePath)]);
+        const [meta, stats] = await Promise.all([sharp(filePath, SHARP_LIMITS).metadata(), stat(filePath)]);
         const width = meta.width ?? null;
         const height = meta.height ?? null;
         return {
@@ -110,12 +116,18 @@ export function createCovers({ config, logger }) {
       const target = join(showDir, CANONICAL_COVER_FILENAME);
       const tmp = join(showDir, `.cover-upload-${randomUUID()}.tmp`);
       try {
-        await sharp(sourcePath)
+        await sharp(sourcePath, SHARP_LIMITS)
           .rotate() // honour EXIF orientation before discarding metadata
           .jpeg({ quality: 90, mozjpeg: true })
           .toFile(tmp);
       } catch (err) {
         await unlink(tmp).catch(() => {});
+        if (isPixelLimitError(err)) {
+          throw badRequest(
+            `That image is too large to be used as cover art: it has more than ${Math.round(IMAGE_MAX_INPUT_PIXELS / 1_000_000)} million pixels. Podcast directories want a square between 1400 and 3000 pixels, so shrink it and try again.`,
+            'image_too_large',
+          );
+        }
         throw badRequest(
           "That file could not be read as an image. Cover art needs to be a JPEG, PNG or WebP.",
           'invalid_image',
@@ -144,7 +156,7 @@ export function createCovers({ config, logger }) {
 
       try {
         const background = await dominantEdgeColour(source);
-        await sharp(source)
+        await sharp(source, SHARP_LIMITS)
           .rotate()
           .resize(size, size, { fit: 'contain', background, withoutEnlargement: false })
           .flatten({ background })
@@ -244,7 +256,7 @@ export function createCovers({ config, logger }) {
  */
 async function dominantEdgeColour(filePath) {
   try {
-    const { dominant } = await sharp(filePath).stats();
+    const { dominant } = await sharp(filePath, SHARP_LIMITS).stats();
     if (dominant) return { r: dominant.r, g: dominant.g, b: dominant.b, alpha: 1 };
   } catch {
     /* fall through to a neutral paper tone */

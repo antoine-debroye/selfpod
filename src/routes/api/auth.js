@@ -1,4 +1,4 @@
-import { unauthorized } from '../../lib/errors.js';
+import { tooManyRequests, unauthorized } from '../../lib/errors.js';
 
 /**
  * Sign-in and sign-out. Rate limiting is handled inside `verifyCredentials`,
@@ -11,10 +11,16 @@ export default async function authRoutes(fastify, { settings }) {
     const result = await fastify.verifyCredentials(username, password, request);
 
     if (!result.ok) {
-      if (result.retryAfter) reply.header('retry-after', String(result.retryAfter));
-      throw unauthorized(result.message, result.retryAfter ? 'rate_limited' : 'invalid_credentials');
+      if (result.retryAfter) {
+        reply.header('retry-after', String(result.retryAfter));
+        throw tooManyRequests(result.message, 'rate_limited');
+      }
+      throw unauthorized(result.message, 'invalid_credentials');
     }
 
+    // A fresh session id on every sign-in, so nothing issued before the password
+    // was proved can be carried across it.
+    await request.session.regenerate();
     request.session.set('admin', { username: result.username, since: new Date().toISOString() });
     await request.session.save();
 

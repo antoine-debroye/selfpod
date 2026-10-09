@@ -19,6 +19,9 @@ export const badRequest = (message, code = 'bad_request') =>
 export const unauthorized = (message = 'Please sign in to continue.', code = 'unauthorized') =>
   new AppError(message, { code, status: 401 });
 
+export const tooManyRequests = (message = 'Too many attempts. Try again shortly.', code = 'rate_limited') =>
+  new AppError(message, { code, status: 429 });
+
 export const forbidden = (message, code = 'forbidden') =>
   new AppError(message, { code, status: 403 });
 

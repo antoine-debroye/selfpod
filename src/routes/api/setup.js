@@ -34,7 +34,7 @@ export default async function setupRoutes(fastify, { settings, events, shows }) 
         fields.passwordConfirm = "Those two passwords don't match.";
       }
       if (!fields.password && !fields.passwordConfirm) {
-        await fastify.setAdminPassword(password);
+        await fastify.setAdminPassword(password, { keepSessionId: request.session.sessionId });
       }
     }
 

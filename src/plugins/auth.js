@@ -28,10 +28,25 @@ import { SETTING_KEYS } from '../services/settings.js';
  */
 
 const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS_PER_WINDOW = 5;
 
-/** Backoff after consecutive failures, in seconds, regardless of source address. */
-const BACKOFF_STEPS = [0, 0, 1, 3, 10, 30, 60, 120, 300];
+/**
+ * Two backoffs, because they protect against different people.
+ *
+ * The account-level one holds *everyone* back after failures from anywhere, so it
+ * is what stops a slow guess spread across many addresses — and also what lets a
+ * stranger who holds the public URL keep the owner out: one wrong password every
+ * few minutes used to reset a five-minute lock for ever. It is therefore capped at
+ * a minute, which is still one guess a minute for a patient attacker.
+ *
+ * The per-source one is allowed to grow to five minutes, because it only ever
+ * holds back the address that earned it. Behind Cloudflare the source is the
+ * edge-set client address; on a LAN it is the socket; behind another proxy that
+ * sets neither header every visitor shares one source, which is no worse than the
+ * old account-level lock.
+ */
+const ACCOUNT_BACKOFF_STEPS = [0, 0, 1, 3, 10, 30, 60];
+const SOURCE_BACKOFF_STEPS = [0, 0, 1, 3, 10, 30, 60, 120, 300];
+const MAX_ACCOUNT_LOCK_SECONDS = ACCOUNT_BACKOFF_STEPS[ACCOUNT_BACKOFF_STEPS.length - 1];
 
 async function authPlugin(fastify, { db, settings, config, logger }) {
   const recordAttempt = db.prepare(
@@ -40,6 +55,10 @@ async function authPlugin(fastify, { db, settings, config, logger }) {
   const recentFailures = db.prepare(
     `SELECT COUNT(*) AS n, MAX(attempted_at) AS last FROM login_attempts
       WHERE username = ? AND succeeded = 0 AND attempted_at > ?`,
+  );
+  const recentFailuresFromSource = db.prepare(
+    `SELECT COUNT(*) AS n, MAX(attempted_at) AS last FROM login_attempts
+      WHERE username = ? AND source = ? AND succeeded = 0 AND attempted_at > ?`,
   );
   const clearAttempts = db.prepare('DELETE FROM login_attempts WHERE username = ?');
   const trimAttempts = db.prepare('DELETE FROM login_attempts WHERE attempted_at < ?');
@@ -57,16 +76,27 @@ async function authPlugin(fastify, { db, settings, config, logger }) {
 
   fastify.decorate('loginSourceKey', sourceKey);
 
-  /** Seconds the account must wait before another attempt, 0 when clear. */
-  fastify.decorate('loginBackoffSeconds', (username) => {
-    const since = new Date(Date.now() - WINDOW_MS).toISOString();
-    const row = recentFailures.get(username, since);
+  /** Seconds still to wait after the failures in `row`, on the given ladder. */
+  function waitFor(steps, row) {
     const failures = row?.n ?? 0;
     if (!failures || !row.last) return 0;
-    const step = BACKOFF_STEPS[Math.min(failures, BACKOFF_STEPS.length - 1)];
+    const step = steps[Math.min(failures, steps.length - 1)];
     if (!step) return 0;
     const elapsed = (Date.now() - new Date(row.last).getTime()) / 1000;
     return Math.max(0, Math.ceil(step - elapsed));
+  }
+
+  /**
+   * Seconds this caller must wait before another attempt, 0 when clear: the longer
+   * of the account's own wait and the wait this source has earned for itself.
+   */
+  fastify.decorate('loginBackoffSeconds', (username, source = null) => {
+    const since = new Date(Date.now() - WINDOW_MS).toISOString();
+    const account = waitFor(ACCOUNT_BACKOFF_STEPS, recentFailures.get(username, since));
+    const bySource = source
+      ? waitFor(SOURCE_BACKOFF_STEPS, recentFailuresFromSource.get(username, source, since))
+      : 0;
+    return Math.max(account, bySource);
   });
 
   fastify.decorate('recentFailureCount', (username) => {
@@ -83,7 +113,7 @@ async function authPlugin(fastify, { db, settings, config, logger }) {
     const hash = settings.adminPasswordHash();
     const source = request ? sourceKey(request) : null;
 
-    const backoff = fastify.loginBackoffSeconds(expectedUser);
+    const backoff = fastify.loginBackoffSeconds(expectedUser, source);
     if (backoff > 0) {
       return {
         ok: false,
@@ -110,12 +140,23 @@ async function authPlugin(fastify, { db, settings, config, logger }) {
     return { ok: true, username: expectedUser };
   });
 
-  fastify.decorate('setAdminPassword', async (password) => {
+  /**
+   * Sets the password and signs every *other* session out.
+   *
+   * Someone changing their password because they suspect a session was stolen
+   * expects the thief to be gone; until now the thief stayed signed in for up to
+   * thirty days. `keepSessionId` is the session doing the changing — the setup
+   * wizard and the Settings modal pass their own — and `null` means sign out
+   * everyone, which is what the reset script wants.
+   */
+  fastify.decorate('setAdminPassword', async (password, { keepSessionId = null } = {}) => {
     const hash = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
     settings.update(
       { [SETTING_KEYS.ADMIN_PASSWORD_HASH]: hash, [SETTING_KEYS.MUST_CHANGE_PASSWORD]: '0' },
       { skipExport: true },
     );
+    const endedSessions = fastify.sessionStore?.deleteOthers(keepSessionId) ?? 0;
+    if (endedSessions) logger?.info({ endedSessions }, 'password changed; other sessions signed out');
     return true;
   });
 
@@ -209,5 +250,5 @@ function formatSeconds(seconds) {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
-export { MAX_ATTEMPTS_PER_WINDOW, WINDOW_MS };
+export { MAX_ACCOUNT_LOCK_SECONDS, WINDOW_MS };
 export default fp(authPlugin, { name: 'selfpod-auth', dependencies: ['selfpod-session'] });

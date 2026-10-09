@@ -38,6 +38,33 @@ changes what your listeners see, it says so.
   range it had asked for before the row was written, so the log could not show why. The range
   is kept.
 
+### Security — hardening from the October audit
+
+- **An oversized image on the share could take the container down.** The shows folder is a
+  network share other people can write to, and SelfPod decoded whatever image it found there
+  — a cover, an episode's sidecar, the artwork embedded in an MP3 — at sharp's own ceiling of
+  roughly 268 megapixels. A 60 KB PNG of one colour declaring 16000×16000 decodes to a
+  gigabyte, and the scanner decodes sidecars on its own, on every scan: one such file was a
+  crash loop with no banner to explain it. Every decode now stops at 40 megapixels, at the
+  header, and the scan log says the image was too large rather than "could not be read".
+- **Before sign-in, only the permission banners are shown.** The sign-in page and the
+  anonymous half of `/api/status` carried every health banner, and those name things: a
+  show's title when its cut copy goes missing, the host of a feed being followed. Feeds are
+  private by their token, so their names should not be readable by whoever finds the tunnel
+  hostname. The banners about `/data` and the shows folder — the ones that have to be visible
+  before anyone can sign in — still are.
+- **Changing the password signs every other session out.** It used to leave them valid for
+  up to thirty days, which is the opposite of what someone changing their password because
+  they suspect a stolen session wants. The session that made the change stays signed in.
+- **A sign-in always gets a fresh session id**, rather than promoting whatever cookie it was
+  handed. Nothing was exploitable before — no session exists until the password is proved —
+  so this is belt and braces.
+- **A stranger can no longer keep you locked out.** The account-level backoff reached five
+  minutes and reset on every wrong guess, so one wrong password every few minutes from
+  anywhere held the door shut indefinitely. The account now waits at most a minute; the
+  address doing the guessing waits up to five. A throttled attempt answers 429 with
+  `Retry-After` instead of 401, so it can be told apart from a wrong password.
+
 ### Changed
 
 - Dependencies brought up to patched releases: Fastify 5.12.5 (seven advisories, including an

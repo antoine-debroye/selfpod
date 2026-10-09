@@ -19,6 +19,8 @@ class SqliteSessionStore {
        ON CONFLICT(sid) DO UPDATE SET data = excluded.data, expires_at = excluded.expires_at`,
     );
     this.deleteStmt = db.prepare('DELETE FROM sessions WHERE sid = ?');
+    this.deleteOthersStmt = db.prepare('DELETE FROM sessions WHERE sid <> ?');
+    this.deleteAllStmt = db.prepare('DELETE FROM sessions');
     this.cleanupStmt = db.prepare('DELETE FROM sessions WHERE expires_at < ?');
   }
 
@@ -48,6 +50,18 @@ class SqliteSessionStore {
       this.logger?.error({ err }, 'could not read session');
       return callback(err);
     }
+  }
+
+  /**
+   * Ends every session but one. The one to keep is the session of whoever just
+   * changed the password: they proved they hold it, and signing them out of the
+   * page they did it from would be a strange reward.
+   */
+  deleteOthers(keepSid) {
+    const info = keepSid
+      ? this.deleteOthersStmt.run(keepSid)
+      : this.deleteAllStmt.run();
+    return info.changes;
   }
 
   destroy(sid, callback) {
