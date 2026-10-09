@@ -301,6 +301,74 @@ sys.exit(0 if d["downloads"] >= 1 and d["streams"] >= 1 else 1)
 ' && pass "a whole-file fetch counted as a download, a range fetch as a stream" \
   || fail "downloads and streams were not counted separately: ${STATS}"
 
+# Over a real socket, not fastify.inject: these are the three answers that used to
+# be counted as downloads although no audio had been sent. A HEAD is how Overcast
+# and the validators look before fetching; a 304 is a cached copy being revalidated.
+downloads_now() { api "${BASE}/api/stats" | json 'print(json.load(sys.stdin)["overview"]["downloads"])'; }
+served_now() { api "${BASE}/api/stats" | json 'print(json.load(sys.stdin)["overview"]["bytes"])'; }
+DL_BEFORE="$(downloads_now)"
+BYTES_BEFORE="$(served_now)"
+curl -s -I -o /dev/null -A 'Overcast/2024' "$LONG_URL"
+LONG_ETAG="$(curl -s -I -A 'Pocket Casts/7.5 (iPhone)' "$LONG_URL" | tr -d '\r' | awk 'tolower($1)=="etag:"{print $2}')"
+NOT_MODIFIED="$(curl -s -o /dev/null -w '%{http_code}' -A 'Pocket Casts/7.5 (iPhone)' -H "If-None-Match: ${LONG_ETAG}" "$LONG_URL")"
+sleep 2
+[ "$NOT_MODIFIED" = "304" ] \
+  && pass "a cached episode is revalidated with a 304" \
+  || fail "expected a 304 for a matching If-None-Match, got ${NOT_MODIFIED}"
+[ "$(downloads_now)" = "$DL_BEFORE" ] \
+  && pass "two HEADs and a 304 added no downloads" \
+  || fail "HEAD or 304 was counted as a download (${DL_BEFORE} -> $(downloads_now))"
+[ "$(served_now)" = "$BYTES_BEFORE" ] \
+  && pass "and no bytes were claimed as served for them" \
+  || fail "bytes were claimed for a HEAD or 304 (${BYTES_BEFORE} -> $(served_now))"
+# An app that fetches with `Range: bytes=0-` and takes the whole file has downloaded
+# it, however the request was phrased. That is every Apple Podcasts download.
+curl -s -o /dev/null -H 'Range: bytes=0-' -A 'AppleCoreMedia/1.0.0 (iPhone)' "$LONG_URL"
+sleep 2
+[ "$(downloads_now)" = "$((DL_BEFORE + 1))" ] \
+  && pass "a bytes=0- fetch of the whole file is a download" \
+  || fail "the open-ended range from byte zero was not counted as a download"
+
+# A download the app gave up on. Only a real socket can show this: the server must
+# notice the client hang up part-way through a file big enough not to fit in the
+# kernel's send buffer, which no in-process test can arrange.
+mkdir -p "${WORK}/data/shows/abort-check"
+python3 - "${FIXTURES}/prog-a.mp3" "${WORK}/data/shows/abort-check/long-episode.mp3" <<'PY'
+import sys
+src = open(sys.argv[1], 'rb').read()
+if src[:3] == b'ID3':
+    size = ((src[6] & 0x7f) << 21) | ((src[7] & 0x7f) << 14) | ((src[8] & 0x7f) << 7) | (src[9] & 0x7f)
+    src = src[10 + size:]
+with open(sys.argv[2], 'wb') as out:
+    for _ in range(1200):
+        out.write(src)
+PY
+abort_show_id() {
+  api "${BASE}/api/shows" | json 'd=json.load(sys.stdin); print(next((s["id"] for s in d["shows"] if s["slug"]=="abort-check"), ""))' 2>/dev/null
+}
+abort_episode_url() {
+  local sid; sid="$(abort_show_id)"; [ -n "$sid" ] || return 1
+  api "${BASE}/api/shows/${sid}/episodes" | json 'd=json.load(sys.stdin); print(d["episodes"][0]["mediaUrl"] if d["episodes"] else "")' 2>/dev/null
+}
+abort_ready() { [ -n "$(abort_episode_url 2>/dev/null)" ]; }
+if wait_until 60 abort_ready; then
+  ABORT_URL="$(abort_episode_url)"
+  DL_BEFORE="$(downloads_now)"
+  curl -s -o /dev/null --limit-rate 200k --max-time 1 -A 'Pocket Casts/7.5 (iPhone)' "$ABORT_URL" || true
+  sleep 2
+  [ "$(downloads_now)" = "$DL_BEFORE" ] \
+    && pass "a download the app abandoned is not counted" \
+    || fail "an abandoned download was counted (${DL_BEFORE} -> $(downloads_now))"
+  api "${BASE}/api/stats/log?limit=5" | json '
+d = json.load(sys.stdin)["entries"]
+row = next((r for r in d if r["kind"] == "download" and (r.get("error") or "")), None)
+sys.exit(0 if row and row["incomplete"] and row["bytes_sent"] is None else 1)
+' && pass "and the log shows it as partial, with a reason" \
+    || fail "the abandoned download is not flagged as partial in the log"
+else
+  fail "the 29 MB episode for the abort check was never scanned"
+fi
+
 # The file is removed underneath a request, which is what a subscriber's failed
 # download looks like from the server's side.
 rm -f "${WORK}/data/shows/long-names/${LONG}"

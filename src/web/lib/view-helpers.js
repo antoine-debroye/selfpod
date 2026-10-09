@@ -222,7 +222,10 @@ export function createViewHelpers({ config }) {
      * are not the same news, so the tone is decided here from `higherIsBetter` and the
      * stylesheet never has to know which card it is on.
      */
-    changeLine(change, { higherIsBetter = true, periodLabel = 'the previous period' } = {}) {
+    changeLine(
+      change,
+      { higherIsBetter = true, periodLabel = 'the previous period', format = null } = {},
+    ) {
       if (!change) return null;
       const { absolute, percent, direction } = change;
       if (direction === 'flat') {
@@ -230,10 +233,13 @@ export function createViewHelpers({ config }) {
       }
       const tone = (direction === 'up') === higherIsBetter ? 'good' : 'bad';
       const glyph = direction === 'up' ? '▲' : '▼';
-      // A rise from zero has no percentage — see changeFrom in services/stats.js.
+      // A rise from zero has no percentage — see changeFrom in services/stats.js — so
+      // the absolute movement is shown instead, in the card's own unit: a byte count
+      // goes through `format` so the audio card says "+56.2 MB", not "+58,963,151".
+      const absoluteText = format ? format(Math.abs(absolute)) : Math.abs(absolute).toLocaleString('en');
       const size =
         percent === null
-          ? `${absolute > 0 ? '+' : ''}${absolute.toLocaleString('en')}`
+          ? `${absolute > 0 ? '+' : '−'}${absoluteText}`
           : `${percent > 0 ? '+' : '−'}${Math.abs(Math.round(percent)).toLocaleString('en')}%`;
       return { tone, glyph, label: `${size} vs ${periodLabel}` };
     },

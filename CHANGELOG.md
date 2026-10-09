@@ -7,6 +7,44 @@ Updating is changing the image tag and redeploying. The database migrates itself
 forward on start, and no release so far has needed anything else — where a release
 changes what your listeners see, it says so.
 
+## Unreleased
+
+### Fixed — the statistics said more than had happened
+
+- **A HEAD request was counted as a download of the whole file.** Overcast, Apple's crawler
+  and every feed validator ask for an episode's headers before fetching it, and SelfPod
+  recorded each of those as a completed download carrying the file's full size as "sent" —
+  while nothing had left the server. Two header checks on a 29 MB episode put 56 MB on the
+  Audio served card. A HEAD is no longer recorded at all.
+- **A 304 was counted as a download.** A browser or an iPhone revalidating a cached episode
+  is answered "not modified" with no body; that reply was a download in every figure. It is
+  now in the log as a 304 that sent nothing, and in no total.
+- **A download the app gave up on was counted as one it received.** The log already knew the
+  app had disconnected — it said so in the row — but the row kept its green 200, the
+  Downloads card counted it, and the CSV called it "ok". It is now shown as *partial*,
+  exported as `partial`, and counted nowhere. A stream the player stopped part-way through
+  is still a stream: that is how players behave.
+- **Apple Podcasts never registered a download.** It fetches every episode with
+  `Range: bytes=0-` and is answered with the whole file; the presence of the range made it a
+  stream. A range from byte zero that delivers the entire file is now a download, whichever
+  app asked. The two-byte probe an iPhone sends first stays a stream.
+- **"AppleCoreMedia" is no longer credited to Apple Podcasts.** It is the system player on an
+  iPhone, iPad or Mac, and it speaks for whichever app is streaming through it — Overcast,
+  Castro and Safari included. The chart now calls it "Apple media player", and the page says
+  what that means.
+- **The Audio served card compared bytes as a bare number** ("+58,963,151 vs the previous 30
+  days"). It now says "+56.2 MB".
+- A resumed download answered with the whole file (an address from an earlier cut) lost the
+  range it had asked for before the row was written, so the log could not show why. The range
+  is kept.
+
+### Changed
+
+- Dependencies brought up to patched releases: Fastify 5.12.5 (seven advisories, including an
+  authentication bypass through malformed URLs and X-Forwarded header spoofing), sharp 0.35.5
+  (libheif and librsvg), music-metadata 11.16.1 (crafted MP4, EBML and DSF files could crash
+  the scanner — and the scanner reads whatever is dropped on the share). `npm audit` is clean.
+
 ## 1.9.1 — 2026-09-16
 
 ### Fixed

@@ -51,35 +51,81 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
    * however many times those events arrive.
    */
   function trackAccess(request, reply, extra) {
-    if (isOwnRequest(request)) return;
+    if (!worthRecording(request)) return;
     let done = false;
     const settle = (aborted) => {
       if (done) return;
       done = true;
+      const statusCode = reply.statusCode;
+      // On an abort the Content-Length header describes what was promised, not
+      // what arrived, so claiming it as "sent" would be a lie. A 304 is the opposite
+      // case — a response that completed and deliberately carried no body — so it
+      // is a zero whoever sent it. `??` and not `||`, because `0 || null` is null,
+      // and recording a zero that is a fact as the null that means "unknowable" is
+      // the very confusion this line exists to avoid.
+      const bytesSent = aborted
+        ? null
+        : statusCode === 304
+          ? 0
+          : (extra.bytesSent ?? (Number(reply.getHeader('content-length')) || null));
+      const totalBytes = extra.totalBytes ?? null;
+      // The range as the client sent it, even when the handler then chose to ignore
+      // it: a resumed download that was answered with the whole file is only
+      // explicable in the log if the range it asked for is still there.
+      const rangeHeader = extra.rangeHeader ?? request.headers.range ?? null;
       stats?.record({
-        kind: extra.kind,
+        kind: mediaKind(extra.kind, { rangeHeader, statusCode, bytesSent, totalBytes }),
         episodeId: extra.episodeId ?? null,
         showId: extra.showId ?? null,
-        statusCode: reply.statusCode,
-        // On an abort the Content-Length header describes what was promised, not
-        // what arrived, so claiming it as "sent" would be a lie. A 304 is the opposite
-        // case — a response that completed and deliberately carried no body — so its
-        // caller states the zero. `??` and not `||`, because `0 || null` is null, and
-        // recording a zero that is a fact as the null that means "unknowable" is the
-        // very confusion this line exists to avoid.
-        bytesSent: aborted
-          ? null
-          : (extra.bytesSent ?? (Number(reply.getHeader('content-length')) || null)),
-        totalBytes: extra.totalBytes ?? null,
-        rangeHeader: request.headers.range ?? null,
+        statusCode,
+        bytesSent,
+        totalBytes,
+        rangeHeader,
         userAgent: request.headers['user-agent'] ?? null,
         error: aborted
           ? 'The app disconnected before the transfer finished, so this download is incomplete.'
-          : (extra.error ?? explainFailure(reply.statusCode, extra)),
+          : (extra.error ?? explainFailure(statusCode, extra)),
       });
     };
     reply.raw.once('finish', () => settle(false));
     reply.raw.once('close', () => settle(!reply.raw.writableFinished));
+  }
+
+  /**
+   * Whether a request belongs in the access log at all.
+   *
+   * Not the owner's own session, and not a HEAD. Fastify answers HEAD with the
+   * same handler as GET, so a HEAD used to be recorded as a download carrying the
+   * file's whole size as "bytes sent" — while nothing left the server. Overcast,
+   * Apple's crawler and every feed validator HEAD an enclosure before fetching it,
+   * which was enough to double some episodes' figures.
+   */
+  function worthRecording(request) {
+    return request.method !== 'HEAD' && !isOwnRequest(request);
+  }
+
+  /**
+   * Download or stream, decided from what was actually served rather than from the
+   * mere presence of a Range header.
+   *
+   * Apple Podcasts asks for every file with `Range: bytes=0-` and is answered with
+   * a 206 carrying the whole thing; counting that as a stream meant the most common
+   * podcast app on iPhones never registered a download. So: no range, an open-ended
+   * range from byte zero, or a 206 whose body was the entire file is a download. A
+   * range that starts mid-file, or a bounded one short of the end, is a player
+   * buffering or seeking — a stream. Feed and cover kinds pass through untouched.
+   */
+  function mediaKind(kind, { rangeHeader, statusCode, bytesSent, totalBytes }) {
+    if (kind !== ACCESS_KIND.DOWNLOAD && kind !== ACCESS_KIND.STREAM) return kind;
+    // A 200 is the whole representation by definition, whatever range was asked for —
+    // the answer a resuming client gets when its address is from an earlier cut.
+    if (statusCode === 200) return ACCESS_KIND.DOWNLOAD;
+    const range = String(rangeHeader ?? '').trim();
+    if (range === '' || /^bytes=0-$/.test(range)) return ACCESS_KIND.DOWNLOAD;
+    if (statusCode === 206 && totalBytes > 0 && bytesSent !== null && bytesSent >= totalBytes) {
+      return ACCESS_KIND.DOWNLOAD;
+    }
+    return ACCESS_KIND.STREAM;
   }
 
   /**
@@ -519,7 +565,7 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
      */
     const refuse = (error, code) => {
       request.log.warn({ file: serving.filename, show: show.slug, code }, error);
-      if (!isOwnRequest(request)) {
+      if (worthRecording(request)) {
         stats?.record({
           kind: ACCESS_KIND.DOWNLOAD,
           episodeId: episode.id,
@@ -616,9 +662,13 @@ export default async function publicRoutes(fastify, { config, settings, shows, e
     // A range request is a player streaming or seeking; a plain GET is an app
     // fetching the episode for offline listening. They are counted separately
     // because conflating them makes the download figure meaningless.
-    const kind = request.headers.range ? ACCESS_KIND.STREAM : ACCESS_KIND.DOWNLOAD;
+    // Whether this ends up a download or a stream is settled once the response has
+    // finished (see mediaKind): a range from byte zero that delivered the whole file
+    // is a download, whatever the header said. The range is passed explicitly
+    // because a whole-file answer to a stale address deletes it from the request.
     trackAccess(request, reply, {
-      kind,
+      kind: request.headers.range ? ACCESS_KIND.STREAM : ACCESS_KIND.DOWNLOAD,
+      rangeHeader: range || null,
       episodeId: episode.id,
       showId: show.id,
       totalBytes: fileStats.size,
