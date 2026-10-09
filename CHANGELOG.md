@@ -204,6 +204,33 @@ changes what your listeners see, it says so.
   without bound; the advert tables' rule and restore columns are indexed; a few statements
   the scanner runs for every file are prepared once.
 
+### Changed — a lighter boot, a smaller image, and nothing taken on trust
+
+- **A network share is no longer checked twice over.** When live file detection does not
+  work on a volume — normal for SMB and NFS — SelfPod polls the share instead, and it was
+  polling every minute while the scheduled rescan also went through every file at the
+  rescan interval: two full sweeps of the one mount where every look at a file is a round
+  trip. The poll now runs at the rescan interval, which is what the notice on the
+  dashboard had been saying all along, and the container log says so when polling starts.
+- **The container starts quicker.** The image library is loaded the first time a cover or
+  an episode's artwork is handled, and the QR encoder the first time a show page is drawn,
+  rather than before the first page can be served — whole seconds on a small NAS. The
+  permissions on SelfPod's own code used to be rewritten file by file on every start,
+  4,500 files; they are now checked and left alone when already right, and the image
+  ships them right for the default `PUID`/`PGID`.
+- **The image is 20 MB smaller**, by leaving out the SQLite source and the seven other
+  platforms' binaries that the database library ships with and never reads. An image built
+  for one box can also leave out the speech model it will not use (`WHISPER_MODELS` in the
+  README's *Building your own image*); the published image still carries both.
+- **`TRUST_PROXY`** says whose `X-Forwarded-*` headers to believe. The default is every
+  connection, as before; set it to your tunnel's or reverse proxy's address when anything
+  else can reach port 8080 directly, and a LAN client can no longer claim to have arrived
+  over HTTPS from somewhere else. A value with a typo in it trusts nobody and says so in
+  the log, rather than quietly going back to trusting everyone.
+- **Everything the build fetches is pinned to exactly what was reviewed:** the base images
+  by digest, whisper.cpp by commit rather than a tag that could be moved, and every GitHub
+  Action by commit. The build workflow's token is read-only except where it publishes.
+
 ## 1.9.1 — 2026-09-16
 
 ### Fixed

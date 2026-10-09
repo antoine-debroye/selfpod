@@ -77,8 +77,20 @@ else
   log "running as $APP_USER ($RUN_AS)"
 fi
 
-# Only ever touches the app's own directory, never anything under /data.
-chown -R "$RUN_AS" /app/node_modules 2>/dev/null || true
+# Only ever touches the app's own directory, never anything under /data — and only
+# when the owner is actually wrong. `chown -R` walks the 4,500 files in node_modules,
+# which took seconds on a Celeron on every boot, for a tree that was already right
+# after the first one. The image ships it owned by the default ids, and the directory
+# and a file deep inside it are both checked, so a chown that was interrupted part-way
+# is finished rather than skipped.
+node_modules_owner() {
+  stat -c '%u:%g' /app/node_modules /app/node_modules/.package-lock.json 2>/dev/null | sort -u
+}
+if [ "$(node_modules_owner)" != "$RUN_AS" ]; then
+  log "changing the owner of /app/node_modules to $RUN_AS"
+  chown -R "$RUN_AS" /app/node_modules 2>/dev/null \
+    || log "could not change the owner of /app/node_modules; continuing, but the app may be unable to read its own code."
+fi
 
 # ---------------------------------------------------------------------------
 # Read + write self-test as the target user. A failure is reported in detail and

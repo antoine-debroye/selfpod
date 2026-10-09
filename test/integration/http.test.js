@@ -870,3 +870,41 @@ describe('compression of the admin UI and the API', () => {
     assert.ok(response.statusCode >= 400 && response.statusCode < 500, `expected a client error, got ${response.statusCode}`);
   });
 });
+
+describe('TRUST_PROXY reaches the real app', () => {
+  // The session cookie is marked Secure only when the request arrived over HTTPS, and
+  // behind a proxy that is X-Forwarded-Proto's word — which is worth exactly as much
+  // as the address it came from. The cookie is the observable: no route echoes the
+  // protocol, and the cookie is what a forged header would actually change.
+  async function cookieFromLogin(app, { remoteAddress, headers }) {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      remoteAddress,
+      payload: { username: 'admin', password: ADMIN_PASSWORD },
+      headers: { 'sec-fetch-site': 'same-origin', ...headers },
+    });
+    assert.equal(login.statusCode, 200, login.body);
+    const raw = login.headers['set-cookie'];
+    return Array.isArray(raw) ? raw[0] : raw;
+  }
+  const claimsHttps = { 'x-forwarded-proto': 'https' };
+
+  it('believes X-Forwarded-Proto from every address by default', async () => {
+    const cookie = await cookieFromLogin(server.app, { remoteAddress: '192.168.1.20', headers: claimsHttps });
+    assert.match(cookie, /;\s*Secure/i, 'a LAN client claiming HTTPS gets a Secure cookie: that is the default, and the point of the setting');
+  });
+
+  it('believes it only from the listed proxy once narrowed', async () => {
+    const narrowed = await createTestServer({ env: { TRUST_PROXY: '172.18.0.0/16' } });
+    try {
+      const viaProxy = await cookieFromLogin(narrowed.app, { remoteAddress: '172.18.0.5', headers: claimsHttps });
+      assert.match(viaProxy, /;\s*Secure/i, 'the proxy says HTTPS and is believed');
+
+      const viaLan = await cookieFromLogin(narrowed.app, { remoteAddress: '192.168.1.20', headers: claimsHttps });
+      assert.doesNotMatch(viaLan, /;\s*Secure/i, 'a LAN client saying the same thing is not');
+    } finally {
+      await narrowed.cleanup();
+    }
+  });
+});

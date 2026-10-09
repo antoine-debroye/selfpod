@@ -3,9 +3,8 @@ import { rmSync, unlinkSync } from 'node:fs';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import sharp from 'sharp';
-
 import { DIRECTORY_IMAGE_FORMATS, IMAGE_MAX_INPUT_PIXELS } from '../constants.js';
+import { loadSharp } from '../lib/lazy-sharp.js';
 
 /** Every decode refuses at the header past the pixel ceiling — see the constant. */
 const SHARP_LIMITS = Object.freeze({ limitInputPixels: IMAGE_MAX_INPUT_PIXELS });
@@ -71,6 +70,7 @@ export function createEpisodeArt({ config, covers, logger }) {
      */
     async store({ showId, episodeId, buffer, sourceFormat = null }) {
       const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+      const sharp = await loadSharp();
       let probe;
       try {
         probe = await sharp(data, SHARP_LIMITS).metadata();

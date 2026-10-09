@@ -4,8 +4,6 @@ import { readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import sharp from 'sharp';
-
 import {
   IMAGE_MAX_INPUT_PIXELS,
   ARTWORK_MAX_PX,
@@ -15,6 +13,7 @@ import {
   imageMimeType,
 } from '../constants.js';
 import { badRequest } from '../lib/errors.js';
+import { loadSharp } from '../lib/lazy-sharp.js';
 import { describeImageError } from './episode-art.js';
 
 /** Every decode refuses at the header past the pixel ceiling — see the constant. */
@@ -59,6 +58,7 @@ export function createCovers({ config, logger }) {
      */
     async inspect(filePath) {
       try {
+        const sharp = await loadSharp();
         const [meta, stats] = await Promise.all([sharp(filePath, SHARP_LIMITS).metadata(), stat(filePath)]);
         const width = meta.width ?? null;
         const height = meta.height ?? null;
@@ -115,6 +115,8 @@ export function createCovers({ config, logger }) {
     async saveUpload(showDir, sourcePath) {
       const target = join(showDir, CANONICAL_COVER_FILENAME);
       const tmp = join(showDir, `.cover-upload-${randomUUID()}.tmp`);
+      // Outside the try: a broken image library must not be reported as a bad image.
+      const sharp = await loadSharp();
       try {
         await sharp(sourcePath, SHARP_LIMITS)
           .rotate() // honour EXIF orientation before discarding metadata
@@ -154,8 +156,9 @@ export function createCovers({ config, logger }) {
         throw badRequest('That cover image could not be read, so it cannot be resized.', 'invalid_image');
       }
 
+      const sharp = await loadSharp();
       try {
-        const background = await dominantEdgeColour(source);
+        const background = await dominantEdgeColour(sharp, source);
         await sharp(source, SHARP_LIMITS)
           .rotate()
           .resize(size, size, { fit: 'contain', background, withoutEnlargement: false })
@@ -254,7 +257,7 @@ export function createCovers({ config, logger }) {
  * Samples the image's own edges for a padding colour, so a 16:9 cover padded to
  * square blends instead of gaining black bars.
  */
-async function dominantEdgeColour(filePath) {
+async function dominantEdgeColour(sharp, filePath) {
   try {
     const { dominant } = await sharp(filePath, SHARP_LIMITS).stats();
     if (dominant) return { r: dominant.r, g: dominant.g, b: dominant.b, alpha: 1 };

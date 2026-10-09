@@ -1,4 +1,13 @@
-import QRCode from 'qrcode';
+/**
+ * The QR encoder, loaded the first time a show page needs it rather than at boot: it
+ * is only ever used to draw the subscribe codes, and nothing else on the boot path
+ * should pay for it. Loaded once, however many pages ask.
+ */
+let qrcodeLoading = null;
+function loadQRCode() {
+  qrcodeLoading ??= import('qrcode').then((module) => module.default);
+  return qrcodeLoading;
+}
 
 /**
  * Feed URL → inline SVG.
@@ -32,6 +41,7 @@ export async function feedQrSvg(url, { size = 200 } = {}) {
   const cached = cache.get(key);
   if (cached) return cached;
 
+  const QRCode = await loadQRCode();
   const svg = await QRCode.toString(url, {
     type: 'svg',
     errorCorrectionLevel: 'M',
