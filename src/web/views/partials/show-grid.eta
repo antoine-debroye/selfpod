@@ -1,4 +1,10 @@
-<div class="show-grid" id="show-grid">
+<%
+  /* One swap when a library-wide scan finishes, rather than every card re-reading
+     itself as its show's turn in the sweep ends: Rescan all on forty shows was forty
+     fetches, now one. A card still re-reads itself on its own show's scan. */
+%>
+<div class="show-grid" id="show-grid"
+     hx-get="/ui/dashboard/grid" hx-trigger="sse:scan-finished-all from:body" hx-swap="outerHTML">
   <% for (const show of it.shows) { %>
     <%~ include('../partials/show-card', { show, helpers: it.helpers }) %>
   <% } %>

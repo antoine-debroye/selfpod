@@ -48,8 +48,9 @@ export function createViewHelpers({ config }) {
         value /= 1024;
         unit += 1;
       }
-      const decimals = unit === 0 ? 0 : value < 10 ? 1 : 1;
-      return `${value.toFixed(decimals)} ${units[unit]}`;
+      // One decimal above bytes, however large: "48.2 MB", "1.5 GB". app.js carries
+      // the same rule for the upload queue, by hand.
+      return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
     },
 
     formatDuration(seconds) {

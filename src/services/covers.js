@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readdir, rename, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 import {
@@ -248,10 +248,64 @@ export function createCovers({ config, logger }) {
     invalidate(filePath) {
       etagCache.delete(filePath);
     },
+
+    /**
+     * A small copy of a cover for the dashboard card, made once and kept on disk.
+     *
+     * The full cover is 1400 px or more — several hundred kilobytes, a few megabytes
+     * for a PNG — and the card shows it at 250 px, so a dashboard of twelve shows
+     * over a tunnel was downloading tens of megabytes of artwork to paint twelve
+     * thumbnails. The copy is named by the cover's content hash, so a changed cover
+     * gets a new one and the old one is removed; `scope` (the show id) is what makes
+     * the old one findable. Returns the path, or null when it cannot be made — the
+     * route then serves the full cover, so a cover that sharp cannot read is still
+     * a cover rather than a broken image.
+     */
+    async thumbnail(filePath, { width = THUMBNAIL_WIDTH, etag = null, scope = 'cover' } = {}) {
+      const tag = etag ?? (await api.etag(filePath));
+      if (!tag) return null;
+      const key = tag.replace(/[^0-9a-f]/gi, '').slice(0, 32);
+      const safeScope = String(scope).replace(/[^\w-]/g, '_');
+      const dir = config.coverThumbDir;
+      const target = join(dir, `${safeScope}-${width}-${key}.jpg`);
+      try {
+        await stat(target);
+        return target;
+      } catch {
+        /* not made yet */
+      }
+      const tmp = join(dir, `.${safeScope}-${width}-${randomUUID()}.tmp`);
+      try {
+        await mkdir(dir, { recursive: true });
+        await sharp(filePath, SHARP_LIMITS)
+          .rotate()
+          .resize(width, width, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 82, mozjpeg: true })
+          .toFile(tmp);
+        await rename(tmp, target);
+      } catch (err) {
+        await unlink(tmp).catch(() => {});
+        logger?.debug({ err, filePath }, 'could not make a cover thumbnail; the full cover is served instead');
+        return null;
+      }
+      // The copies of this show's earlier covers, which nothing will ask for again.
+      try {
+        const stale = (await readdir(dir)).filter(
+          (name) => name.startsWith(`${safeScope}-${width}-`) && name.endsWith('.jpg') && name !== basename(target),
+        );
+        await Promise.all(stale.map((name) => unlink(join(dir, name)).catch(() => {})));
+      } catch {
+        /* a listing that fails leaves a stale file behind, which costs disk and nothing else */
+      }
+      return target;
+    },
   };
 
   return api;
 }
+
+/** The dashboard card is 250 px wide; 400 px covers a 1.5× screen without being the full file. */
+export const THUMBNAIL_WIDTH = 400;
 
 /**
  * Samples the image's own edges for a padding colour, so a 16:9 cover padded to

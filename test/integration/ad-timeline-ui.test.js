@@ -77,7 +77,7 @@ function submitLabels(html) {
 
 async function approveAll(show) {
   const [found] = server.adDetect.listSegments(show.id);
-  const response = await htmxPost(`/ui/shows/${show.slug}/ad-segments/${found.id}`, { status: SEGMENT_STATUS.APPROVED });
+  const response = await htmxPost(`/ui/shows/${show.slug}/segments/${found.id}/decide`, { status: SEGMENT_STATUS.APPROVED });
   assert.equal(response.statusCode, 200);
   for (const episode of server.episodes.listByShow(show.id)) assert.ok(episode.trimmed_filename, `setup: ${episode.filename} was not cut`);
   return { found, response };
@@ -87,7 +87,7 @@ describe('episode by episode', () => {
   it('draws one bar per episode, each mark where the arithmetic puts it', async () => {
     const show = await makeShow();
     const [found] = server.adDetect.listSegments(show.id);
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
 
     const episodes = server.episodes.listByShow(show.id);
     assert.equal((html.match(/<article class="cutbar"/g) ?? []).length, episodes.length);
@@ -110,7 +110,7 @@ describe('episode by episode', () => {
 
   it('counts what was cut once it is removed', async () => {
     const show = await makeShow();
-    const before = await page(`/shows/${show.slug}/adverts`);
+    const before = await page(`/shows/${show.slug}/cuts`);
     assert.match(before, /<dt>Episodes cut<\/dt><dd>0<\/dd>/);
     assert.match(before, /<dt>Waiting<\/dt><dd>3<\/dd>/);
 
@@ -129,24 +129,24 @@ describe('episode by episode', () => {
     const show = await makeShow();
     const [found] = server.adDetect.listSegments(show.id);
 
-    const response = await post(`/ui/shows/${show.slug}/ad-segments/${found.id}`, { status: SEGMENT_STATUS.REJECTED });
+    const response = await post(`/ui/shows/${show.slug}/segments/${found.id}/decide`, { status: SEGMENT_STATUS.REJECTED });
 
     assert.equal(response.statusCode, 303);
-    assert.equal(response.headers.location, `/shows/${show.slug}/adverts`);
+    assert.equal(response.headers.location, `/shows/${show.slug}/cuts`);
     assert.equal(server.adDetect.getSegment(found.id).status, SEGMENT_STATUS.REJECTED);
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
     assert.match(html, /Kept \(1\)/);
     assert.equal((html.match(/<article class="cutbar"/g) ?? []).length, 3, 'the episodes went with the stretch');
     assert.doesNotMatch(html, /cutbar__mark/, 'a kept stretch is still drawn');
     // And from the Kept list it can be removed after all.
-    assert.ok(html.includes(`action="/ui/shows/${show.slug}/ad-segments/${found.id}"`));
+    assert.ok(html.includes(`action="/ui/shows/${show.slug}/segments/${found.id}/decide"`));
     assert.ok(html.includes(`action="/ui/shows/${show.slug}/segments/${found.id}/forget"`));
   });
 
   it('removes without JavaScript too', async () => {
     const show = await makeShow();
     const [found] = server.adDetect.listSegments(show.id);
-    const response = await post(`/ui/shows/${show.slug}/ad-segments/${found.id}`, { status: SEGMENT_STATUS.APPROVED });
+    const response = await post(`/ui/shows/${show.slug}/segments/${found.id}/decide`, { status: SEGMENT_STATUS.APPROVED });
     assert.equal(response.statusCode, 303);
     for (const episode of server.episodes.listByShow(show.id)) assert.ok(episode.trimmed_filename);
   });
@@ -158,7 +158,7 @@ describe('putting a cut back', () => {
     const { found } = await approveAll(show);
     const before = byName(show.id);
     const target = before['episode-1.mp3'];
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
     const url = `/ui/episodes/${target.id}/segments/${found.id}/restore`;
     assert.ok(barOf(html, target.id).includes(`action="${url}"`), 'the bar does not offer Restore here');
 
@@ -186,7 +186,7 @@ describe('putting a cut back', () => {
     assert.equal(server.episodes.get(target.id).trimmed_filename, null);
     const [restore] = server.adDetect.restoresIn(target.id);
     const undo = `/ui/episodes/${target.id}/restores/${restore.id}/undo`;
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
     assert.ok(barOf(html, target.id).includes(`action="${undo}"`), 'no way to take the restore back');
 
     // From the episode's own page, with script off.
@@ -209,7 +209,7 @@ describe('putting a cut back', () => {
       assert.equal(episode.trimmed_filename, null, `${episode.filename} is still cut`);
     }
     assert.equal(server.adDetect.getSegment(found.id).status, SEGMENT_STATUS.REJECTED, 'it will be offered again');
-    assert.doesNotMatch(await page(`/shows/${show.slug}/adverts`), /Restore everywhere and stop/);
+    assert.doesNotMatch(await page(`/shows/${show.slug}/cuts`), /Restore everywhere and stop/);
   });
 });
 
@@ -217,16 +217,16 @@ describe('teaching', () => {
   it('turns typed words into a boundary, and refuses nothing or one word', async () => {
     const show = await makeShow();
 
-    const empty = await htmxPost(`/ui/shows/${show.slug}/ad-markers`, { position: 'starts', text: '   ' });
+    const empty = await htmxPost(`/ui/shows/${show.slug}/boundaries`, { position: 'starts', text: '   ' });
     assert.equal(empty.statusCode, 422);
     assert.match(empty.body, /Type at least two words the programme says/);
-    const oneWord = await htmxPost(`/ui/shows/${show.slug}/ad-markers`, { position: 'starts', text: 'RMC' });
+    const oneWord = await htmxPost(`/ui/shows/${show.slug}/boundaries`, { position: 'starts', text: 'RMC' });
     assert.equal(oneWord.statusCode, 422);
-    const noPosition = await post(`/ui/shows/${show.slug}/ad-markers`, { position: 'somewhere', text: 'Vous écoutez RMC' });
+    const noPosition = await post(`/ui/shows/${show.slug}/boundaries`, { position: 'somewhere', text: 'Vous écoutez RMC' });
     assert.equal(noPosition.statusCode, 303);
     assert.equal(server.adDetect.listMarkers(show.id).length, 0, 'a refused boundary was stored');
 
-    const response = await htmxPost(`/ui/shows/${show.slug}/ad-markers`, { position: 'ends_inclusive', text: 'Vous écoutez RMC' });
+    const response = await htmxPost(`/ui/shows/${show.slug}/boundaries`, { position: 'ends_inclusive', text: 'Vous écoutez RMC' });
 
     assert.equal(response.statusCode, 200);
     const [marker] = server.adDetect.listMarkers(show.id);
@@ -270,19 +270,19 @@ describe('the work strip', () => {
   it('is always on the page, says what is owed, and empties once it is done', async () => {
     const show = await makeShow({ process: false });
 
-    const waiting = await page(`/shows/${show.slug}/adverts`);
+    const waiting = await page(`/shows/${show.slug}/cuts`);
     assert.match(waiting, /<div id="cuts-work"[^>]*sse-swap="cuts-work-[^"]+"[^>]*>/);
     assert.match(waiting, /3 episodes to read/);
-    assert.ok(waiting.includes(`hx-get="/ui/shows/${show.slug}/ad-work" hx-trigger="load delay:10s"`), 'no poll while work is owed');
-    const strip = await server.get(`/ui/shows/${show.slug}/ad-work`);
+    assert.ok(waiting.includes(`hx-get="/ui/shows/${show.slug}/cuts-work" hx-trigger="load delay:10s"`), 'no poll while work is owed');
+    const strip = await server.get(`/ui/shows/${show.slug}/cuts-work`);
     assert.equal(strip.statusCode, 200);
     assert.match(strip.body, /3 episodes to read/);
 
     await server.adPipeline.processShow(show.id);
 
-    const done = await page(`/shows/${show.slug}/adverts`);
+    const done = await page(`/shows/${show.slug}/cuts`);
     assert.match(done, /<div id="cuts-work"[^>]*hx-swap="innerHTML"><\/div>/, 'the strip is gone, or not empty');
-    assert.equal((await server.get(`/ui/shows/${show.slug}/ad-work`)).body, '');
+    assert.equal((await server.get(`/ui/shows/${show.slug}/cuts-work`)).body, '');
     assert.equal((await server.get(`/api/shows/${show.id}/ad-work`)).json().sentence, '');
   });
 });
@@ -304,15 +304,15 @@ describe('a jingle SelfPod offers', () => {
     const [anchor] = server.adDetect.listAnchors(show.id);
     assert.ok(anchor && !anchor.confirmed_at, 'setup: no proposal');
 
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
 
     const start = html.indexOf('rule--offered');
     assert.ok(start >= 0, 'the offered jingle is not a rule on the page');
     const rule = html.slice(start, html.indexOf('</li>', start));
     assert.match(rule, /Is this the station jingle\?/);
-    assert.ok(rule.includes(`/api/ad-anchors/${anchor.id}/sample.mp3`), 'no way to hear it');
-    assert.ok(rule.includes(`action="/ui/shows/${show.slug}/ad-anchors/${anchor.id}/confirm"`));
-    assert.ok(rule.includes(`action="/ui/shows/${show.slug}/ad-anchors/${anchor.id}/dismiss"`));
+    assert.ok(rule.includes(`/api/cuts/anchors/${anchor.id}/sample.mp3`), 'no way to hear it');
+    assert.ok(rule.includes(`action="/ui/shows/${show.slug}/jingles/${anchor.id}/confirm"`));
+    assert.ok(rule.includes(`action="/ui/shows/${show.slug}/jingles/${anchor.id}/dismiss"`));
     assert.deepEqual(submitLabels(rule), ['Remove', 'Keep']);
   });
 });
@@ -372,9 +372,9 @@ describe('the rest of the app', () => {
     }
     await server.scanner.scanAllNow('manual');
 
-    const html = await page(`/shows/${show.slug}/adverts`);
+    const html = await page(`/shows/${show.slug}/cuts`);
     assert.equal((html.match(/<article class="cutbar"/g) ?? []).length, 30);
-    const next = html.match(/hx-get="(\/ui\/shows\/tape-club\/ad-timeline\?before=[^"]+)"/);
+    const next = html.match(/hx-get="(\/ui\/shows\/tape-club\/cuts-timeline\?before=[^"]+)"/);
     assert.ok(next, 'no "Show older"');
     const older = await server.get(next[1].replace(/&amp;/g, '&'));
     assert.equal(older.statusCode, 200);
@@ -461,9 +461,9 @@ describe('the words on these pages', () => {
     const { found } = await approveAll(show);
     const episodes = byName(show.id);
     await htmxPost(`/ui/episodes/${episodes['episode-0.mp3'].id}/segments/${found.id}/restore`);
-    await htmxPost(`/ui/shows/${show.slug}/ad-markers`, { position: 'starts', text: 'Vous écoutez RMC' });
+    await htmxPost(`/ui/shows/${show.slug}/boundaries`, { position: 'starts', text: 'Vous écoutez RMC' });
 
-    const adverts = await page(`/shows/${show.slug}/adverts`);
+    const adverts = await page(`/shows/${show.slug}/cuts`);
     const episodePage = await page(`/shows/${show.slug}/episodes/${episodes['episode-0.mp3'].id}`);
     const panel = adverts.slice(adverts.indexOf('<div id="cuts-panel"'));
     const cardStart = episodePage.indexOf('<section class="form-card" id="episode-cuts"');

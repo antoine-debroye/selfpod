@@ -1,6 +1,7 @@
 import { HOLD_REASONS, SEGMENT_KINDS } from '../constants.js';
 import { inferKind } from './segment-kind.js';
 import { describeCues } from './advert-cues.js';
+import { formatClock } from './dates.js';
 import { normaliseWord } from './text-normalise.js';
 
 /**
@@ -18,20 +19,20 @@ const CONTEXT_MS = 4000;
 /** Below this mean confidence the recogniser was guessing, and so would SelfPod be. */
 export const LOW_CONFIDENCE = 0.45;
 
-export function formatClock(ms) {
-  const total = Math.max(0, Math.round((ms ?? 0) / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
-}
+/** One clock for every page: lib/dates.js owns it. Re-exported for the callers here. */
+export { formatClock };
 
-function formatDay(iso) {
+/**
+ * "9 August", in the instance's zone like every other date the pages show — not the
+ * server's, which inside the container is UTC whatever `TZ` says the owner lives in.
+ */
+function formatDay(iso, timeZone) {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+  const options = { day: 'numeric', month: 'long' };
+  if (timeZone) options.timeZone = timeZone;
+  return new Intl.DateTimeFormat('en-GB', options).format(date);
 }
 
 /** Every word of a stored transcript in order, each knowing which window it came from. */
@@ -323,7 +324,7 @@ export function parseCues(cues) {
  * @param {{episode: object, show: object, row: object|null, spoken: Array<object>, markers: Array<object>, pending: boolean, engineMissing: boolean, anchorStatus?: object|null, anchorCut?: object|null}} input
  * @returns {{stage: string, sentence: string, at?: string, segmentId?: string, reversible?: boolean}|null}
  */
-export function describeAdvertStage({ episode, show, row, spoken, markers, pending, engineMissing, listenLabel, anchorStatus = null, anchorCut = null }) {
+export function describeAdvertStage({ episode, show, row, spoken, markers, pending, engineMissing, listenLabel, anchorStatus = null, anchorCut = null, timeZone = null }) {
   if (!show || !show.ad_trim_mode || show.ad_trim_mode === 'off') return null;
   const isMp3 = /\.mp3$/i.test(episode.filename ?? '');
   if (!isMp3) {
@@ -408,7 +409,7 @@ export function describeAdvertStage({ episode, show, row, spoken, markers, pendi
         reversible: true,
       };
     }
-    const decided = formatDay(first.decided_at);
+    const decided = formatDay(first.decided_at, timeZone);
     return {
       stage: 'cut_remembered',
       sentence: `Cut ${at} automatically, because you removed the same read${decided ? ` on ${decided}` : ' before'}.`,

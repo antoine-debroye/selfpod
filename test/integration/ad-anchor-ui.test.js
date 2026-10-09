@@ -60,24 +60,24 @@ describe('the jingle proposal card', () => {
     const [anchor] = server.adDetect.listAnchors(show.id);
     assert.ok(anchor, 'setup: no proposal was made');
 
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.equal(page.statusCode, 200);
     assert.ok(page.body.includes('Is this the station jingle?'), 'the proposal did not render');
-    assert.ok(page.body.includes(`/ad-anchors/${anchor.id}/confirm`), 'no confirm form on the page');
-    assert.ok(page.body.includes(`/ad-anchors/${anchor.id}/dismiss`), 'no dismiss form on the page');
+    assert.ok(page.body.includes(`/jingles/${anchor.id}/confirm`), 'no confirm form on the page');
+    assert.ok(page.body.includes(`/jingles/${anchor.id}/dismiss`), 'no dismiss form on the page');
 
     // A plain form POST, with no htmx header — the no-JS path.
-    const response = await post(`/ui/shows/${show.slug}/ad-anchors/${anchor.id}/confirm`, {});
+    const response = await post(`/ui/shows/${show.slug}/jingles/${anchor.id}/confirm`, {});
     assert.equal(response.statusCode, 303, 'a plain form post did not redirect back');
 
     const episodes = Object.fromEntries(server.episodes.listByShow(show.id).map((row) => [row.filename, row]));
     assert.ok(episodes['episode-2.mp3'].trimmed_filename, 'confirming through the form did not cut the pre-roll');
     assert.ok(episodes['episode-3.mp3'].trimmed_filename, 'confirming through the form did not cut the pre-roll');
 
-    const after = await server.get(`/shows/${show.slug}/adverts`);
+    const after = await server.get(`/shows/${show.slug}/cuts`);
     assert.ok(!after.body.includes('Is this the station jingle?'), 'the confirmed anchor is still shown as a question');
     assert.ok(after.body.includes('The station jingle'), 'the confirmed jingle is not listed as a rule');
-    assert.ok(after.body.includes(`/ad-anchors/${anchor.id}/remove`), 'a confirmed anchor has no way to remove it');
+    assert.ok(after.body.includes(`/jingles/${anchor.id}/remove`), 'a confirmed anchor has no way to remove it');
     assert.match(after.body, /<button[^>]*>Forget<\/button>/);
   });
 
@@ -89,11 +89,11 @@ describe('the jingle proposal card', () => {
     await server.adPipeline.processShow(show.id);
     const [anchor] = server.adDetect.listAnchors(show.id);
     // The positive control: the question was on the page, so its absence below means something.
-    assert.ok((await server.get(`/shows/${show.slug}/adverts`)).body.includes('Is this the station jingle?'), 'setup: no proposal shown');
+    assert.ok((await server.get(`/shows/${show.slug}/cuts`)).body.includes('Is this the station jingle?'), 'setup: no proposal shown');
 
     const response = await server.request({
       method: 'POST',
-      url: `/ui/shows/${show.slug}/ad-anchors/${anchor.id}/dismiss`,
+      url: `/ui/shows/${show.slug}/jingles/${anchor.id}/dismiss`,
       payload: new URLSearchParams({}).toString(),
       headers: { 'content-type': 'application/x-www-form-urlencoded', 'hx-request': 'true' },
     });
@@ -114,10 +114,10 @@ describe('the jingle proposal card', () => {
     await addEpisode('episode-3.mp3', PREROLL_B, JINGLE, PROGRAMME_A);
     await server.adPipeline.processShow(show.id);
     const [anchor] = server.adDetect.listAnchors(show.id);
-    await post(`/ui/shows/${show.slug}/ad-anchors/${anchor.id}/confirm`, {});
+    await post(`/ui/shows/${show.slug}/jingles/${anchor.id}/confirm`, {});
     assert.ok(server.episodes.listByShow(show.id).find((row) => row.filename === 'episode-2.mp3').trimmed_filename);
 
-    const response = await post(`/ui/shows/${show.slug}/ad-anchors/${anchor.id}/remove`, {});
+    const response = await post(`/ui/shows/${show.slug}/jingles/${anchor.id}/remove`, {});
     assert.equal(response.statusCode, 303);
 
     for (const episode of server.episodes.listByShow(show.id)) {

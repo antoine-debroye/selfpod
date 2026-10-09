@@ -16,7 +16,7 @@
          hx-swap="outerHTML"><% } %>
   <% if (embedded) { %><div class="ds-caption">What SelfPod heard</div><% } else { %><h2 class="ftitle">What SelfPod heard</h2><% } %>
   <% if (tx.state === 'off') { %>
-    <p class="muted">SelfPod is not listening to this show. Turn it on from the show's <a href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Adverts</a> page.</p>
+    <p class="muted">SelfPod is not listening to this show. Turn it on from the show's <a href="/shows/<%= encodeURIComponent(show.slug) %>/cuts">Adverts</a> page.</p>
   <% } else if (tx.state === 'unsupported') { %>
     <p class="muted">SelfPod can only read MP3 episodes, and this one is not one.</p>
   <% } else if (tx.state === 'engine_missing') { %>

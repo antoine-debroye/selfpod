@@ -68,10 +68,10 @@ export function describeWork(owed) {
 export function workStripHtml(show, owed) {
   const sentence = describeWork(owed);
   if (!sentence) return '';
-  return `<span class="cuts-work__text" hx-get="/ui/shows/${escapeHtml(encodeURIComponent(show.slug))}/ad-work" hx-trigger="load delay:10s" hx-target="#cuts-work" hx-swap="innerHTML">${escapeHtml(sentence)}</span>`;
+  return `<span class="cuts-work__text" hx-get="/ui/shows/${escapeHtml(encodeURIComponent(show.slug))}/cuts-work" hx-trigger="load delay:10s" hx-target="#cuts-work" hx-swap="innerHTML">${escapeHtml(sentence)}</span>`;
 }
 
-export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }) {
+export function createAdvertsView({ db, config = null, adDetect, transcriber, episodes, shows }) {
   /** 'ready' | 'unknown' (not yet proved) | 'missing' | 'failing' */
   function engineState() {
     return transcriber?.status?.()?.state ?? 'missing';
@@ -343,7 +343,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           why: describeVerdict({ ...row, marker_role: marker?.role, marker_inclusive: marker?.inclusive }, { mode: show.ad_trim_mode }),
           // The stretch itself, with a few seconds either side so the edges can be
           // judged by ear rather than by reading a timestamp.
-          sampleUrl: `/api/ad-segments/${row.id}/sample.mp3?context=3`,
+          sampleUrl: `/api/cuts/segments/${row.id}/sample.mp3?context=3`,
           autoApproved: Boolean(row.auto_approved),
         };
       };
@@ -397,7 +397,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           beforeBytes: episode.file_size_bytes ?? null,
           afterBytes: episode.trimmed_bytes ?? null,
         },
-        advertsUrl: `/shows/${encodeURIComponent(show.slug)}/adverts`,
+        advertsUrl: `/shows/${encodeURIComponent(show.slug)}/cuts`,
       };
     },
 
@@ -439,6 +439,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
         listenLabel: describeListenScope(show),
         anchorStatus: adDetect.anchorStatusFor(episode.id),
         anchorCut: adDetect.anchorCutFor(episode.id),
+        timeZone: config?.timeZone ?? null,
       });
     },
 
@@ -556,7 +557,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           actions.push({ label: DECISIONS.restoreHere, url: `${episodeBase}/segments/${encodeURIComponent(stretch.segmentId)}/restore`, primary: false });
           actions.push({ label: DECISIONS.stop, url: `/ui/shows/${slug}/segments/${encodeURIComponent(stretch.segmentId)}/stop`, primary: false });
         } else if (stretch.state === 'waiting') {
-          const decide = `/ui/shows/${slug}/ad-segments/${encodeURIComponent(stretch.segmentId)}`;
+          const decide = `/ui/shows/${slug}/segments/${encodeURIComponent(stretch.segmentId)}/decide`;
           actions.push({ label: DECISIONS.remove, url: decide, name: 'status', value: SEGMENT_STATUS.APPROVED, primary: true });
           actions.push({ label: DECISIONS.keep, url: decide, name: 'status', value: SEGMENT_STATUS.REJECTED, primary: false });
           if (stretch.offerMarker) actions.push({ label: DECISIONS.teach, url: decide, name: 'status', value: stretch.offerMarker, primary: false });
@@ -571,7 +572,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           // The stretch itself; the player adds a few seconds either side (app.js).
           playFrom: stretch.startMs,
           playTo: stretch.endMs,
-          sampleUrl: stretch.segmentId ? `/api/ad-segments/${encodeURIComponent(stretch.segmentId)}/sample.mp3?context=3` : null,
+          sampleUrl: stretch.segmentId ? `/api/cuts/segments/${encodeURIComponent(stretch.segmentId)}/sample.mp3?context=3` : null,
           actions,
         };
       });
@@ -697,14 +698,14 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           kind: SEGMENT_KINDS.BOUNDARY_WORDS,
           title: `“${marker.raw_text}”`,
           detail: `${ends ? (marker.inclusive ? 'The programme ends, and these words go too' : 'The programme ends after it says this') : 'The programme starts when it says this'} · heard in ${segment?.episode_count ?? 0} of ${heardOf}`,
-          actions: [{ label: DECISIONS.forget, url: `/ui/shows/${slug}/ad-markers/${encodeURIComponent(marker.id)}/remove` }],
+          actions: [{ label: DECISIONS.forget, url: `/ui/shows/${slug}/boundaries/${encodeURIComponent(marker.id)}/remove` }],
         });
       }
 
       const anchor = currentAnchorFor(show.id);
       if (anchor) {
         const summary = adDetect.anchorSummary(anchor.id);
-        const base = `/ui/shows/${slug}/ad-anchors/${encodeURIComponent(anchor.id)}`;
+        const base = `/ui/shows/${slug}/jingles/${encodeURIComponent(anchor.id)}`;
         rows.push({
           key: `anchor:${anchor.id}`,
           kind: SEGMENT_KINDS.JINGLE,
@@ -713,7 +714,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
           detail: anchor.confirmed_at
             ? `Everything before it is cut · heard in ${summary.heard} of ${summary.total}${anchor.auto_confirmed ? ' · cut automatically' : ''}`
             : 'The same few seconds near the start of every episode. Remove cuts whatever comes before it, every day; Keep leaves it alone.',
-          sampleUrl: anchor.exemplar_episode_id ? `/api/ad-anchors/${encodeURIComponent(anchor.id)}/sample.mp3?context=2` : null,
+          sampleUrl: anchor.exemplar_episode_id ? `/api/cuts/anchors/${encodeURIComponent(anchor.id)}/sample.mp3?context=2` : null,
           actions: anchor.confirmed_at
             ? [{ label: DECISIONS.forget, url: `${base}/remove` }]
             : [
@@ -737,7 +738,7 @@ export function createAdvertsView({ db, adDetect, transcriber, episodes, shows }
             title: words ?? `${formatClock(segment.duration_ms)} of sound`,
             detail: `in ${plural(count, 'episode')}`,
             actions: [
-              { label: DECISIONS.remove, url: `/ui/shows/${slug}/ad-segments/${encodeURIComponent(segment.id)}`, name: 'status', value: SEGMENT_STATUS.APPROVED },
+              { label: DECISIONS.remove, url: `/ui/shows/${slug}/segments/${encodeURIComponent(segment.id)}/decide`, name: 'status', value: SEGMENT_STATUS.APPROVED },
               forget,
             ],
           });

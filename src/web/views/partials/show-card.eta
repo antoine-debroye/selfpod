@@ -3,15 +3,21 @@
   const badge = it.helpers.badgeFor(show.health, show.counts);
   const paused = show.status === 'folder_missing';
 %>
+<%
+  /* The card re-reads itself when its show alone was scanned, or its cuts changed. A
+     library-wide scan is one swap of the whole grid instead (show-grid.eta), so
+     Rescan all is one fetch rather than one per card. The artwork is the 400 px
+     copy: the full cover is 1400 px or more into a 250 px card. */
+%>
 <article class="show-card<%= paused ? ' show-card--paused' : '' %>"
          id="show-card-<%= show.id %>"
          hx-get="/ui/shows/<%= encodeURIComponent(show.slug) %>/card"
-         hx-trigger="sse:scan-finished-<%= show.id %> from:body, sse:ad-changed-<%= show.id %> from:body"
+         hx-trigger="sse:show-scanned-<%= show.id %> from:body, sse:ad-changed-<%= show.id %> from:body"
          hx-swap="outerHTML">
   <a class="show-card__link" href="/shows/<%= encodeURIComponent(show.slug) %>">
     <div class="cover-art">
       <% if (show.cover) { %>
-        <img class="art" src="<%= show.cover.localUrl %>" alt="Cover art for <%= show.title %>" loading="lazy" width="300" height="300">
+        <img class="art" src="<%= show.cover.thumbUrl || show.cover.localUrl %>" alt="Cover art for <%= show.title %>" loading="lazy" width="300" height="300">
       <% } else { %>
         <div class="art art--placeholder" style="background: <%= it.helpers.placeholderGradient(show.slug) %>" aria-hidden="true">
           <span class="art__initials"><%= it.helpers.initials(show.title) %></span>

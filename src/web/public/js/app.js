@@ -532,7 +532,9 @@
     if (scope.range) {
       var text = chosen.join(' ');
       if (text.length > 120) text = text.slice(0, 58) + ' … ' + text.slice(-58);
-      scope.range.textContent = chosen.length ? 'Removing ' + chosen.length + ' words: “' + text + '”' : '';
+      scope.range.textContent = chosen.length
+        ? 'Removing ' + chosen.length + (chosen.length === 1 ? ' word: “' : ' words: “') + text + '”'
+        : '';
     }
   }
 
@@ -544,12 +546,18 @@
       var index = Number(word.getAttribute('data-tx-word'));
       var from = Number(scope.start.value);
       var to = Number(scope.end.value);
-      // First tap below the current start moves the start; anything else moves the
-      // end — two taps, first word then last, is the whole gesture.
-      if (scope.words.getAttribute('data-tx-armed') !== '1' || index < from) {
+      // The first tap is the first word, and until the second tap it is the last word
+      // too: one word is tinted, not everything from there to the end of the transcript
+      // ("Removing 4,000 words" was the old first tap). A tap below the start while
+      // armed moves the start and keeps the end; anything else is the second tap and
+      // moves the end — two taps, first word then last, is the whole gesture.
+      if (scope.words.getAttribute('data-tx-armed') !== '1') {
+        scope.start.value = String(index);
+        scope.end.value = String(index);
+        scope.words.setAttribute('data-tx-armed', '1');
+      } else if (index < from) {
         scope.start.value = String(index);
         scope.end.value = String(Math.max(index, to));
-        scope.words.setAttribute('data-tx-armed', '1');
       } else {
         scope.end.value = String(index);
         scope.words.removeAttribute('data-tx-armed');
@@ -597,8 +605,12 @@
   var PLAY_CONTEXT_MS = 3000;
   var playing = null;
 
+  // The same clock as lib/dates.js formatClock, kept in step by hand: a position
+  // formatted here must read exactly as the server formats it next to it.
   function clock(ms) {
-    var total = Math.max(0, Math.round(ms / 1000));
+    var total = Math.round((ms || 0) / 1000);
+    if (!isFinite(total)) return '0:00';
+    total = Math.max(0, total);
     var hours = Math.floor(total / 3600);
     var minutes = Math.floor((total % 3600) / 60);
     var seconds = total % 60;
@@ -1280,15 +1292,18 @@
       message.textContent = text;
     }
 
+    // The same figure as view-helpers.js formatBytes, kept in step by hand, so the
+    // size the queue shows is the size the episode page shows once it has landed.
     function formatBytes(bytes) {
-      var units = ['B', 'KB', 'MB', 'GB'];
-      var value = bytes;
+      var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      var value = Number(bytes);
+      if (!isFinite(value)) return '—';
       var unit = 0;
       while (value >= 1024 && unit < units.length - 1) {
         value /= 1024;
         unit += 1;
       }
-      return (unit === 0 ? value : value.toFixed(1)) + ' ' + units[unit];
+      return value.toFixed(unit === 0 ? 0 : 1) + ' ' + units[unit];
     }
   }
 

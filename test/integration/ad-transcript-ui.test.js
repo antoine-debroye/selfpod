@@ -64,7 +64,7 @@ const episodeNamed = (showId, name) => server.episodes.listByShow(showId).find((
 describe('the review card for words', () => {
   it('shows the cues that fired and one sentence saying what happens next, and the words on the episode', async () => {
     const show = await setUp({ canned: { 'episode-1.mp3': opening(READ, 1), 'episode-2.mp3': opening(READ_AGAIN, 2) } });
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.equal(page.statusCode, 200);
     const html = page.body;
     // One waiting stretch per episode, each saying why in one sentence that names the cue.
@@ -98,7 +98,7 @@ describe('the review card for words', () => {
     assert.ok(read.cues.some((cue) => cue.id === 'brought_to_you_by'));
     assert.ok(read.excerpt.words.length > 10);
     assert.equal(typeof read.heardClearly, 'boolean');
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.match(page.body, /class="stretch__why">Cut automatically: it says “brought to you by”/);
     assert.match(page.body, /Cut automatically · in 2 episodes/);
     // Two ways back, and the button says which: this episode only, or everywhere for good.
@@ -114,7 +114,7 @@ describe('the review card for words', () => {
     const { cutStartWord, cutEndWord, episodeId } = presented.excerpt;
 
     // Trim two words off the start and one off the end.
-    const response = await post(`/ui/shows/${show.slug}/ad-segments/${read.id}`, {
+    const response = await post(`/ui/shows/${show.slug}/segments/${read.id}/decide`, {
       status: 'approved',
       episodeId,
       startWord: String(cutStartWord + 2),
@@ -136,7 +136,7 @@ describe('the review card for words', () => {
     const api = await server.get(`/api/shows/${show.id}/ad-segments`);
     const { cutStartWord, cutEndWord, episodeId } = api.json().segments.find((row) => row.id === read.id).excerpt;
     const response = await post(
-      `/ui/shows/${show.slug}/ad-segments/${read.id}`,
+      `/ui/shows/${show.slug}/segments/${read.id}/decide`,
       { status: 'approved', episodeId, startWord: String(cutEndWord), endWord: String(cutStartWord) },
       htmx,
     );
@@ -208,11 +208,11 @@ describe('what SelfPod heard, on the episode page', () => {
     assert.ok(boundary);
     assert.equal(boundary.episode_count, 2);
 
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.match(page.body, /rule__title">“Vous écoutez RMC”/);
     assert.match(page.body, /The programme starts when it says this · heard in 2 of 2/);
     assert.match(page.body, /Before “Vous écoutez RMC” — the boundary you set/);
-    assert.ok(page.body.includes(`/ad-markers/${markers[0].id}/remove`), 'no way to forget the boundary');
+    assert.ok(page.body.includes(`/boundaries/${markers[0].id}/remove`), 'no way to forget the boundary');
     assert.match(page.body, /<button[^>]*>Forget<\/button>/);
     const episodePage = await server.get(`/shows/${show.slug}/episodes/${first.id}`);
     assert.match(episodePage.body, /tx__w--approved/);
@@ -221,7 +221,7 @@ describe('what SelfPod heard, on the episode page', () => {
     assert.equal(adverts.stage, 'cut_before_marker');
     assert.match(adverts.sentence, /Cut the 0:09 before “Vous écoutez RMC”, as you asked/);
 
-    const forgotten = await post(`/ui/shows/${show.slug}/ad-markers/${markers[0].id}/remove`, {});
+    const forgotten = await post(`/ui/shows/${show.slug}/boundaries/${markers[0].id}/remove`, {});
     assert.equal(forgotten.statusCode, 303);
     assert.equal((await server.get(`/api/shows/${show.id}/ad-markers`)).json().markers.length, 0);
   });
@@ -232,7 +232,7 @@ describe('the settings', () => {
     const show = await setUp({ canned: { 'episode-1.mp3': opening(READ, 1), 'episode-2.mp3': opening(READ_AGAIN, 2) } });
     assert.equal(server.db.prepare('SELECT COUNT(*) AS n FROM episode_transcripts').get().n, 2);
 
-    const saved = await post(`/ui/shows/${show.slug}/ad-trim`, { mode: 'review', minEpisodes: '2', listenHeadMinutes: '3', listenTailMinutes: '2' });
+    const saved = await post(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'review', minEpisodes: '2', listenHeadMinutes: '3', listenTailMinutes: '2' });
     assert.equal(saved.statusCode, 303);
     const updated = server.shows.get(show.id);
     assert.equal(updated.ad_transcribe, 'edges');
@@ -244,11 +244,11 @@ describe('the settings', () => {
     assert.equal(whole.statusCode, 200);
     assert.equal(whole.json().listen.whole, true);
 
-    const nowhere = await post(`/ui/shows/${show.slug}/ad-trim`, { mode: 'review', listenHeadMinutes: '0', listenTailMinutes: '0' }, htmx);
+    const nowhere = await post(`/ui/shows/${show.slug}/cuts-settings`, { mode: 'review', listenHeadMinutes: '0', listenTailMinutes: '0' }, htmx);
     assert.equal(nowhere.statusCode, 422);
     assert.match(nowhere.body, /Choose somewhere to listen, or turn the feature off/);
 
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.match(page.body, /Where to listen/);
     assert.match(page.body, /name="listenHeadMinutes"/);
   });
@@ -264,7 +264,7 @@ describe('empty states', () => {
     const show = server.shows.getBySlug('quiet');
     server.db.prepare("UPDATE shows SET ad_trim_mode = 'review', ad_auto_min_episodes = 2 WHERE id = ?").run(show.id);
     await server.adPipeline.processShow(show.id);
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.match(page.body, /SelfPod cannot read the words in this show(?:'|&#39;)s episodes/);
     assert.doesNotMatch(page.body, /still listening/);
     const episode = server.episodes.listByShow(show.id)[0];
@@ -305,11 +305,11 @@ describe('adverts at the end', () => {
     const tag = spoken(show.id).find((row) => /^c etait votre emission/.test(row.text));
     assert.ok(tag, JSON.stringify(spoken(show.id).map((row) => row.text)));
     assert.equal(tag.status, SEGMENT_STATUS.CANDIDATE);
-    const page = await server.get(`/shows/${show.slug}/adverts`);
+    const page = await server.get(`/shows/${show.slug}/cuts`);
     assert.match(page.body, /cut from these words to the end, whatever follows them/);
     assert.match(page.body, /value="tail_starts"/);
 
-    const response = await post(`/ui/shows/${show.slug}/ad-segments/${tag.id}`, { status: 'tail_starts' });
+    const response = await post(`/ui/shows/${show.slug}/segments/${tag.id}/decide`, { status: 'tail_starts' });
     assert.equal(response.statusCode, 303);
     const markers = (await server.get(`/api/shows/${show.id}/ad-markers`)).json().markers;
     assert.equal(markers.length, 1);
@@ -328,7 +328,7 @@ describe('adverts at the end', () => {
     const adverts = (await server.get(`/api/episodes/${first.id}/transcript`)).json().adverts;
     assert.equal(adverts.stage, 'cut_after_marker');
     assert.match(adverts.sentence, /Cut everything from 0:(19|20) — “C'était votre émission/);
-    assert.match((await server.get(`/shows/${show.slug}/adverts`)).body, /From “C(?:'|&#39;)était votre émission[^”]*” to the end — the boundary you set/);
+    assert.match((await server.get(`/shows/${show.slug}/cuts`)).body, /From “C(?:'|&#39;)était votre émission[^”]*” to the end — the boundary you set/);
   });
 
   it('keeps the sign-off and cuts what follows when told the programme ends there', async () => {
@@ -537,7 +537,7 @@ describe('the Adverts card on an episode page', () => {
     // a player that silently did nothing.
     const show = await setUp({ canned: READS });
     const [read] = spoken(show.id);
-    await post(`/ui/shows/${show.slug}/ad-segments/${read.id}`, { status: 'approved' });
+    await post(`/ui/shows/${show.slug}/segments/${read.id}/decide`, { status: 'approved' });
     const episode = episodeNamed(show.id, 'episode-1.mp3');
     assert.ok(server.episodes.get(episode.id).trimmed_filename, 'nothing was trimmed to test with');
 
@@ -586,7 +586,7 @@ describe('the Adverts card on an episode page', () => {
   it('says what was taken out of this episode, how much shorter it is, and why', async () => {
     const show = await setUp({ canned: READS });
     const [read] = spoken(show.id);
-    await post(`/ui/shows/${show.slug}/ad-segments/${read.id}`, { status: 'approved' });
+    await post(`/ui/shows/${show.slug}/segments/${read.id}/decide`, { status: 'approved' });
     const episode = episodeNamed(show.id, 'episode-1.mp3');
 
     const page = await server.get(`/shows/${show.slug}/episodes/${episode.id}`);
@@ -623,7 +623,7 @@ describe('the Adverts card on an episode page', () => {
     const [read] = spoken(show.id);
     const episode = episodeNamed(show.id, 'episode-1.mp3');
     const response = await post(
-      `/ui/shows/${show.slug}/ad-segments/${read.id}`,
+      `/ui/shows/${show.slug}/segments/${read.id}/decide`,
       { status: 'approved', returnTo: `episode:${episode.id}` },
       htmx,
     );

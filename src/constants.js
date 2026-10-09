@@ -198,6 +198,15 @@ export const DIRECTORY_NAMES = Object.freeze({
    */
   FINGERPRINTS: '.fp',
   /**
+   * Small copies of show covers for the dashboard, as `/data/.covers/{show_id}-{width}-{hash}.jpg`.
+   *
+   * A cover is 1400 px or more and several hundred kilobytes; the card it sits in is
+   * 250 px. One copy per cover, named by the cover's content hash so a changed cover
+   * makes a new one, and a cache like `.art`: lose the folder and it is rebuilt on
+   * the next request.
+   */
+  COVER_THUMBS: '.covers',
+  /**
    * Trimmed copies, as `/data/.trimmed/{show_id}/{episode_id}.{ext}`.
    *
    * Outside the show folder because the original is the user's file and the trimmed
