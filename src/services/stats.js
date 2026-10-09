@@ -110,6 +110,14 @@ const KINDS = new Set(Object.values(ACCESS_KIND));
  */
 const SERVED = 'a.status_code < 300';
 const COMPLETED = `${SERVED} AND a.bytes_sent IS NOT NULL`;
+/** The audio rows: what the download, stream and byte figures are made of. */
+const AUDIO = "a.kind IN ('download','stream')";
+/**
+ * The rows a rollup looks at: the audio rows, plus a failure of any kind. "Failed
+ * requests" used to count only audio that failed, while the log's "failures only"
+ * showed every failure — a cover that would not serve was in one and not the other.
+ */
+const RELEVANT = `(${AUDIO} OR a.status_code >= 400)`;
 
 /** Ceiling on one `list` call. Sized for the CSV export, not for a page of rows. */
 const MAX_LIST_ROWS = 50_000;
@@ -266,10 +274,10 @@ export function createStats({ db, logger }) {
              SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
              SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+             SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
              MAX(a.requested_at) AS lastAt
            FROM media_access a
-           WHERE a.episode_id = @episodeId AND a.kind IN ('download','stream')
+           WHERE a.episode_id = @episodeId AND ${RELEVANT}
                  ${clauses.map((clause) => `AND ${clause}`).join(' ')}`,
         )
         .get({ ...params, episodeId });
@@ -291,10 +299,10 @@ export function createStats({ db, logger }) {
                   SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+                  SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
                   MAX(a.requested_at) AS lastAt
              FROM media_access a
-            WHERE a.show_id = @showId AND a.kind IN ('download','stream')
+            WHERE a.show_id = @showId AND ${RELEVANT}
                   ${clauses.map((clause) => `AND ${clause}`).join(' ')}
             GROUP BY a.episode_id`,
         )
@@ -321,11 +329,11 @@ export function createStats({ db, logger }) {
                   SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
-                  COUNT(DISTINCT a.episode_id) AS episodesTouched,
+                  SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
+                  COUNT(DISTINCT CASE WHEN ${AUDIO} AND ${SERVED} THEN a.episode_id END) AS episodesTouched,
                   MAX(a.requested_at) AS lastAt
              FROM media_access a
-            WHERE a.kind IN ('download','stream') ${extra}
+            WHERE ${RELEVANT} ${extra}
             GROUP BY a.show_id`,
         )
         .all(params);
@@ -367,11 +375,11 @@ export function createStats({ db, logger }) {
              SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
              SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
-             COUNT(DISTINCT a.episode_id) AS episodesTouched,
+             SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
+             COUNT(DISTINCT CASE WHEN ${AUDIO} AND ${SERVED} THEN a.episode_id END) AS episodesTouched,
              MAX(a.requested_at) AS lastAt
            FROM media_access a
-           WHERE a.show_id = @showId AND a.kind IN ('download','stream') ${extra}`,
+           WHERE a.show_id = @showId AND ${RELEVANT} ${extra}`,
         )
         .get(scoped);
       const feedFetches = db
@@ -424,9 +432,13 @@ export function createStats({ db, logger }) {
      * a CASE rather than two scans of adjacent ranges — the index is seeked once and
      * most of the same pages are read either way.
      */
-    overview({ from = null, to = null, prevFrom = null } = {}) {
+    overview({ from = null, to = null, prevFrom = null, prevTo = null, showId = null } = {}) {
+      const showClause = showId ? 'AND a.show_id = @showId' : '';
+      const scoped = showId ? { showId } : {};
       const lastEverAt =
-        db.prepare(`SELECT MAX(a.requested_at) AS at FROM media_access a`).get()?.at ?? null;
+        db
+          .prepare(`SELECT MAX(a.requested_at) AS at FROM media_access a WHERE 1 ${showClause}`)
+          .get(scoped)?.at ?? null;
 
       // All time. Comparing it with anything would mean inventing an earlier period,
       // and a CASE against a null boundary silently reports zeros rather than saying so.
@@ -437,11 +449,11 @@ export function createStats({ db, logger }) {
                SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-               SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+               SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
                MAX(a.requested_at) AS lastAt
-             FROM media_access a WHERE a.kind IN ('download','stream')`,
+             FROM media_access a WHERE ${RELEVANT} ${showClause}`,
           )
-          .get();
+          .get(scoped);
         return {
           downloads: row?.downloads ?? 0,
           streams: row?.streams ?? 0,
@@ -454,23 +466,31 @@ export function createStats({ db, logger }) {
         };
       }
 
+      /*
+       * The previous period is measured to the same point: `[prevFrom, prevTo)`
+       * against `[from, now)`, both the same length of elapsed time. Without `prevTo`
+       * the previous period was `days` whole days and this one `days - 1` and a
+       * morning, so every card read "down" until the evening.
+       */
+      const previousUntil = prevTo ?? from;
       const row = db
         .prepare(
           `SELECT
              SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
              SUM(CASE WHEN a.requested_at >= @from AND a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
              SUM(CASE WHEN a.requested_at >= @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-             SUM(CASE WHEN a.requested_at >= @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
+             SUM(CASE WHEN a.requested_at >= @from AND ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
              MAX(CASE WHEN a.requested_at >= @from THEN a.requested_at END) AS lastAt,
-             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS prevDownloads,
-             SUM(CASE WHEN a.requested_at < @from AND a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS prevStreams,
-             SUM(CASE WHEN a.requested_at < @from AND a.status_code >= 400 THEN 1 ELSE 0 END) AS prevFailures,
-             SUM(CASE WHEN a.requested_at < @from THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS prevBytes
+             SUM(CASE WHEN a.requested_at < @prevTo AND a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS prevDownloads,
+             SUM(CASE WHEN a.requested_at < @prevTo AND a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS prevStreams,
+             SUM(CASE WHEN a.requested_at < @prevTo AND a.status_code >= 400 THEN 1 ELSE 0 END) AS prevFailures,
+             SUM(CASE WHEN a.requested_at < @prevTo AND ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS prevBytes
            FROM media_access a
            WHERE a.requested_at >= @prevFrom AND a.requested_at < @to
-             AND a.kind IN ('download','stream')`,
+             AND (a.requested_at < @prevTo OR a.requested_at >= @from)
+             AND ${RELEVANT} ${showClause}`,
         )
-        .get({ from, to, prevFrom });
+        .get({ from, to, prevFrom, prevTo: previousUntil, ...scoped });
 
       const current = {
         downloads: row?.downloads ?? 0,
@@ -527,12 +547,12 @@ export function createStats({ db, logger }) {
                   SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
                   SUM(CASE WHEN a.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
-                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes
+                  SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes
              FROM bucket b
              LEFT JOIN media_access a
                ON a.requested_at >= b.start_at
               AND a.requested_at <  b.end_at
-              AND a.kind IN ('download','stream')
+              AND ${RELEVANT}
               ${showClause}
             GROUP BY b.idx
             ORDER BY b.idx`,
@@ -566,7 +586,7 @@ export function createStats({ db, logger }) {
                   SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   THEN 1 ELSE 0 END) AS streams,
                   COUNT(*) AS n,
-                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes
+                  SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes
              FROM media_access a
             WHERE a.kind IN ('download','stream') AND ${SERVED} ${extra}
             GROUP BY COALESCE(a.client, 'Unknown')
@@ -601,7 +621,7 @@ export function createStats({ db, logger }) {
                   s.slug AS showSlug,
                   SUM(CASE WHEN a.kind = 'download' AND ${COMPLETED} THEN 1 ELSE 0 END) AS downloads,
                   SUM(CASE WHEN a.kind = 'stream'   AND ${SERVED} THEN 1 ELSE 0 END) AS streams,
-                  SUM(COALESCE(a.bytes_sent, 0)) AS bytes,
+                  SUM(CASE WHEN ${AUDIO} THEN COALESCE(a.bytes_sent, 0) ELSE 0 END) AS bytes,
                   MAX(a.requested_at) AS lastAt
              FROM media_access a
              JOIN episodes e ON e.id = a.episode_id
@@ -651,6 +671,9 @@ export function createStats({ db, logger }) {
           showTitle: row.show_title,
           showSlug: row.show_slug,
           ok: row.status_code < 400,
+          // The episode is gone but its history is not (migration 013): the page says
+          // so rather than showing a request for nothing.
+          episodeDeleted: Boolean(row.episode_id && !row.episode_title),
           // A download that stopped short of the file is worth flagging even though
           // the response itself succeeded — that is what a failed download in a
           // podcast app looks like from the server's side. `bytes_sent` is NULL when
@@ -662,6 +685,24 @@ export function createStats({ db, logger }) {
             (row.bytes_sent === null ||
               (row.total_bytes > 0 && row.bytes_sent < row.total_bytes * 0.98)),
         }));
+    },
+
+    /**
+     * Every row the filter matches, oldest batch by batch, for an export.
+     *
+     * `list` has a ceiling because a page has to render what it asks for; a file does
+     * not, and the CSV used to stop at fifty thousand rows while the page promised
+     * every one. A row logged during the export can shift the window by one and
+     * repeat a line; that is a row, not a figure, and the file says when it was made.
+     */
+    *each(filter = {}, { batch = 5000 } = {}) {
+      let offset = Math.max(0, filter.offset ?? 0);
+      for (;;) {
+        const rows = api.list({ ...filter, limit: batch, offset });
+        yield* rows;
+        if (rows.length < batch) return;
+        offset += rows.length;
+      }
     },
 
     /** How many rows `list` would return for the same filter, ignoring paging. */

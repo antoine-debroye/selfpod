@@ -113,9 +113,15 @@ export function toLocalInputValue(value, { timeZone } = {}) {
 
 /**
  * Reads a `datetime-local` value back, interpreting it in the given zone.
- * Works by probing the offset that zone had at roughly that instant, which
- * handles DST correctly for every case except the one ambiguous hour when
- * clocks go back — where either interpretation is defensible.
+ *
+ * The zone's offset is probed at the wall-clock instant read as UTC, and then once
+ * more at the instant that first guess produced. One probe was enough for London
+ * and New York, where the clocks change in the small hours and the first guess
+ * lands on the right side of the change; it was an hour out at midnight on the
+ * transition days in Sydney, Auckland and Santiago, where the guess — ten or eleven
+ * hours later than the real instant — fell on the far side of a 02:00 change. The
+ * second probe catches that. The one ambiguous hour when clocks go back has two
+ * defensible answers; the earlier offset wins.
  */
 export function fromLocalInputValue(input, { timeZone } = {}) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -127,8 +133,23 @@ export function fromLocalInputValue(input, { timeZone } = {}) {
   const [, y, mo, d, h, mi, s = '00'] = match;
   const asUtc = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s);
   if (!timeZone) return new Date(asUtc).toISOString();
-  const offsetMs = zoneOffsetMs(new Date(asUtc), timeZone);
-  return new Date(asUtc - offsetMs).toISOString();
+  const firstOffset = zoneOffsetMs(new Date(asUtc), timeZone);
+  const firstGuess = asUtc - firstOffset;
+  const secondOffset = zoneOffsetMs(new Date(firstGuess), timeZone);
+  if (secondOffset === firstOffset) return new Date(firstGuess).toISOString();
+  const secondGuess = asUtc - secondOffset;
+  // Two different answers: the wall-clock time asked for sits beside a clock change.
+  // Each guess is judged by what it reads back as in the zone. One that reads back
+  // exactly wins (the earlier instant on the one night a time occurs twice). In the
+  // hour the clocks skip no instant reads back exactly, so the first instant on the
+  // far side of the gap wins — it is the start of the day that was asked for, which
+  // is what a midnight is used for; the other guess belongs to the day before.
+  const readback = (instant) => instant + zoneOffsetMs(new Date(instant), timeZone);
+  const candidates = [firstGuess, secondGuess].sort((a, b) => a - b);
+  const exact = candidates.filter((instant) => readback(instant) === asUtc);
+  if (exact.length) return new Date(exact[0]).toISOString();
+  const onOrAfter = candidates.filter((instant) => readback(instant) >= asUtc);
+  return new Date(onOrAfter.length ? onOrAfter[0] : candidates[candidates.length - 1]).toISOString();
 }
 
 function zoneOffsetMs(date, timeZone) {

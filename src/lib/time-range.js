@@ -40,28 +40,40 @@ export const DEFAULT_RANGE = '30d';
  * edge at `from`, so no event falls in both and none falls in the gap between them.
  * Deriving it by subtracting a duration from `from` instead would drift by an hour
  * across a transition and quietly move events between the two periods being compared.
+ *
+ * `prevTo` is where the comparison stops: the same distance into the previous period
+ * as `now` is into this one. The current period ends tomorrow, so at nine in the
+ * morning it holds `days - 1` whole days and nine hours; measured against `days`
+ * whole days it read "down" every morning and caught up every evening. The same
+ * elapsed time in both windows is the comparison the card claims to make.
  */
 export function resolveRange(key, { timeZone, now = new Date() } = {}) {
   const resolvedKey = Object.prototype.hasOwnProperty.call(RANGES, key) ? key : DEFAULT_RANGE;
   const { days, label, lede } = RANGES[resolvedKey];
 
   if (days === null) {
-    return { key: resolvedKey, label, lede, days: null, from: null, to: null, prevFrom: null };
+    return { key: resolvedKey, label, lede, days: null, from: null, to: null, prevFrom: null, prevTo: null };
   }
 
   const instant = now instanceof Date ? now : new Date(now);
-  const today = localDay(Number.isNaN(instant.getTime()) ? new Date() : instant, timeZone);
+  const moment = Number.isNaN(instant.getTime()) ? new Date() : instant;
+  const today = localDay(moment, timeZone);
+
+  // `days - 1` back, not `days`: "the last 7 days" is seven calendar days counting
+  // today, which is what the label promises the reader.
+  const from = localMidnight(shiftDay(today, -(days - 1)), timeZone);
+  const prevFrom = localMidnight(shiftDay(today, -(2 * days - 1)), timeZone);
+  const elapsedMs = moment.getTime() - new Date(from).getTime();
 
   return {
     key: resolvedKey,
     label,
     lede,
     days,
-    // `days - 1` back, not `days`: "the last 7 days" is seven calendar days counting
-    // today, which is what the label promises the reader.
-    from: localMidnight(shiftDay(today, -(days - 1)), timeZone),
+    from,
     to: localMidnight(shiftDay(today, 1), timeZone),
-    prevFrom: localMidnight(shiftDay(today, -(2 * days - 1)), timeZone),
+    prevFrom,
+    prevTo: new Date(new Date(prevFrom).getTime() + Math.max(0, elapsedMs)).toISOString(),
   };
 }
 

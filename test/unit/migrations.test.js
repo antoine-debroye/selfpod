@@ -373,6 +373,32 @@ describe('migration 011 classifies the catalogue without losing it', () => {
  * one exists on the column it is for, that it is reached from an empty database and
  * from one migrated step by step, and that the cascades the columns carry still work.
  */
+/**
+ * Migration 013 rebuilds media_access so that deleting an episode no longer deletes
+ * every request ever made for it. The table comes back row for row, index for index.
+ */
+describe('migration 013 keeps request history when an episode goes', () => {
+  it('carries every row and index across the rebuild, and a deleted episode keeps its rows', () => {
+    const db = seededAt008();
+    runMigrations(db, { upTo: 12 });
+    db.prepare("INSERT INTO shows (id, slug, title, author_name, author_email, feed_token, created_at, updated_at) VALUES ('s13','s13','S13','a','a@b.c','tok-013','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')").run();
+    db.prepare("INSERT INTO episodes (id, show_id, filename, identity_key, title, pub_date, file_size_bytes, mime_type, created_at, updated_at) VALUES ('e13','s13','a.mp3','k13','A','2026-01-01T00:00:00Z',10,'audio/mpeg','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')").run();
+    db.prepare("INSERT INTO media_access (episode_id, show_id, requested_at, kind, status_code, bytes_sent, total_bytes, client) VALUES ('e13','s13','2026-01-02T00:00:00Z','download',200,10,10,'Overcast')").run();
+    const before = db.prepare('SELECT * FROM media_access').all();
+
+    runMigrations(db);
+    assert.ok(db.pragma('user_version', { simple: true }) >= 13);
+    assert.deepEqual(db.prepare('SELECT * FROM media_access').all(), before, 'every row survives the rebuild as it was');
+    const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'media_access' ORDER BY name").all().map((r) => r.name);
+    assert.deepEqual(indexes, ['idx_media_access_episode', 'idx_media_access_failures', 'idx_media_access_show', 'idx_media_access_time']);
+
+    db.prepare("DELETE FROM episodes WHERE id = 'e13'").run();
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media_access WHERE show_id = \'s13\'').get().n, 1, 'the download still happened');
+    db.prepare("DELETE FROM shows WHERE id = 's13'").run();
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM media_access WHERE show_id = \'s13\'').get().n, 0, 'forgetting a show still forgets its log');
+  });
+});
+
 describe('migration 012 indexes the advert tables\' foreign keys', () => {
   const EXPECTED = {
     idx_ad_cut_overrides_segment: ['ad_cut_overrides', 'segment_id'],
@@ -396,7 +422,8 @@ describe('migration 012 indexes the advert tables\' foreign keys', () => {
   it('creates each index on its column, from a database seeded at 008 and carried forward', () => {
     const db = seededAt008();
     runMigrations(db);
-    assert.equal(db.pragma('user_version', { simple: true }), 12);
+    // At least 012: later migrations are allowed to exist without this test caring.
+    assert.ok(db.pragma('user_version', { simple: true }) >= 12);
     const found = indexesOf(db);
     for (const [name, [table, column]] of Object.entries(EXPECTED)) {
       assert.deepEqual(found[name], [table, column], `${name} is missing or on the wrong column`);
