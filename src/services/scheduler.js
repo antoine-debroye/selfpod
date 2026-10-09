@@ -1,4 +1,5 @@
 import { SCAN_TRIGGER } from '../constants.js';
+import { optimiseDatabase } from '../db/index.js';
 import { EVENTS } from '../lib/events.js';
 import { SETTING_KEYS } from './settings.js';
 
@@ -18,7 +19,7 @@ import { SETTING_KEYS } from './settings.js';
  * ticks to pile up, and the interval is re-read every tick so a change in the UI
  * takes effect without a restart.
  */
-export function createScheduler({ settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline }) {
+export function createScheduler({ db = null, settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline }) {
   let timer = null;
   let pollTimer = null;
   let polling = false;
@@ -46,6 +47,8 @@ export function createScheduler({ settings, events, logger, scanner, episodes, w
     } catch (err) {
       logger?.warn({ err }, 'could not trim the media access log');
     }
+    // Once a day is what SQLite's own guidance asks for in a long-running process.
+    optimiseDatabase(db, { logger });
   }
 
   function scheduleNext() {

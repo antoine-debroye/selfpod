@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -7,17 +6,19 @@ import { fileURLToPath } from 'node:url';
 import {
   FINGERPRINTABLE_EXTENSIONS,
   MAX_BACKFILL_PER_RUN,
+  MAX_PIPELINE_FILE_BYTES,
   TRANSCRIBE_MODES,
   TRANSCRIPT_VERSION,
 } from '../constants.js';
+import { createAudioWorker } from '../lib/audio-search.js';
+import { framesFromTable } from '../lib/audio-tasks.js';
 import { nowIso } from '../lib/dates.js';
-import { decodeToMono } from '../lib/decode-audio.js';
 import { EVENTS } from '../lib/events.js';
-import { frameIndexToMs, frameProfile, framesForMs } from '../lib/mp3-frames.js';
-import { createEnvelopeBuilder, decodeEnvelope, encodeEnvelope } from '../lib/snap-edges.js';
+import { frameIndexToMs, framesForMs } from '../lib/mp3-frames.js';
+import { gateEpisodeFile } from '../lib/pipeline-file.js';
+import { decodeEnvelope, encodeEnvelope } from '../lib/snap-edges.js';
 import { newId } from '../lib/tokens.js';
 import { filterHallucinations, wordsFromWhisper } from '../lib/transcript.js';
-import { openWavWriter } from '../lib/wav.js';
 import { WhisperError, deviceFromLog, runWhisper, timeoutFor } from '../lib/whisper-runner.js';
 import { pickWhisperBinary } from '../lib/cpu-features.js';
 
@@ -28,6 +29,10 @@ import { pickWhisperBinary } from '../lib/cpu-features.js';
  * 16 kHz mono, hands that to whisper.cpp in a child process, and keeps what came back
  * under /data/.tx next to the fingerprints. Everything about *what* the words mean
  * lives in ad-detect.js; this only hears them.
+ *
+ * The decoding happens in the audio worker, and only the window's own bytes are read
+ * for it: an hour-long episode is not held in memory on the thread serving listeners
+ * for the minutes the recogniser spends on its first five.
  *
  * ## Never holding the feed for a recogniser that is not there
  *
@@ -49,7 +54,10 @@ const DEFAULT_DIR = '/app/whisper';
 const DEFAULT_MODEL = 'ggml-base-q5_1.bin';
 const SMOKE_WAV = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docker', 'fixtures', 'whisper-smoke.wav');
 
-export function createTranscriber({ db, config, events, logger, health, shows, episodes, runner = runWhisper }) {
+export function createTranscriber({ db, config, events, logger, health, shows, episodes, runner = runWhisper, audio = null }) {
+  // Shared with the fingerprinter when the caller passes one, so there is one worker
+  // for the whole pipeline rather than one per stage.
+  const audioWorker = audio ?? createAudioWorker({ logger });
   const selectRow = db.prepare('SELECT * FROM episode_transcripts WHERE episode_id = ?');
   const selectFingerprint = db.prepare('SELECT sha256, bytes FROM episode_fingerprints WHERE episode_id = ?');
   const upsertRow = db.prepare(
@@ -276,45 +284,41 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     return false;
   }
 
-  async function decodeWindow(bytes, profile, window, onSamples) {
-    const frames = profile.frames;
+  /**
+   * Decodes one window of the episode to a WAV file, in the worker.
+   *
+   * Only the window's bytes are read — from a few frames before it, so the decoder's
+   * bit reservoir is primed by the time the window starts; their output is dropped.
+   */
+  async function decodeWindow(source, window, wavPath) {
+    const { frames } = source;
     const first = framesForMs(frames, window.fromMs);
-    const last = window.toMs >= profile.durationMs ? frames.length : framesForMs(frames, window.toMs);
-    // A few frames before the window, so the decoder's bit reservoir is primed by the
-    // time the window starts; their output is dropped.
+    const last = window.toMs >= source.durationMs ? frames.length : framesForMs(frames, window.toMs);
     const primerStart = Math.max(0, first - PRIMER_FRAMES);
     const skipMs = frameIndexToMs(frames, first) - frameIndexToMs(frames, primerStart);
-    let toSkip = Math.round((skipMs * SAMPLE_RATE) / 1000);
-    return decodeToMono(
-      bytes,
-      frames.slice(primerStart, last),
-      (samples) => {
-        if (toSkip >= samples.length) {
-          toSkip -= samples.length;
-          return;
-        }
-        const kept = toSkip ? samples.subarray(toSkip) : samples;
-        toSkip = 0;
-        onSamples(kept);
-      },
-      { targetRate: SAMPLE_RATE, resample: 'average' },
-    );
+    const skipSamples = Math.round((skipMs * SAMPLE_RATE) / 1000);
+    const slice = frames.slice(primerStart, last);
+    if (!slice.length) return { samples: 0, errors: 0, envelope: new Uint8Array(0), hopMs: 10 };
+    const start = slice[0].offset;
+    const end = slice[slice.length - 1].offset + slice[slice.length - 1].length;
+    return audioWorker.decodeWindow({
+      path: source.path,
+      maxBytes: MAX_PIPELINE_FILE_BYTES,
+      start,
+      end,
+      frames: slice.map((frame) => ({ offset: frame.offset - start, length: frame.length })),
+      skipSamples,
+      wavPath,
+      targetRate: SAMPLE_RATE,
+    });
   }
 
-  async function transcribeWindow(bytes, profile, window, index, context) {
+  async function transcribeWindow(source, window, index, context) {
     const id = newId();
     const wavPath = join(config.tempDir, `tx-${id}.wav`);
     const prefix = join(config.tempDir, `tx-${id}`);
-    const envelope = createEnvelopeBuilder(SAMPLE_RATE);
-    const writer = openWavWriter(wavPath, { sampleRate: SAMPLE_RATE });
-    let closed = false;
     try {
-      await decodeWindow(bytes, profile, window, (samples) => {
-        writer.write(samples);
-        envelope.push(samples);
-      });
-      writer.close();
-      closed = true;
+      const decoded = await decodeWindow(source, window, wavPath);
       const { json, elapsedMs } = await runner({
         binary: binaryPath,
         model: modelPath,
@@ -335,14 +339,34 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
         toMs: window.toMs,
         language,
         sentences: filterHallucinations(sentences),
-        envelope: encodeEnvelope(envelope.finish()),
-        hopMs: envelope.hopMs,
+        envelope: encodeEnvelope(decoded.envelope),
+        hopMs: decoded.hopMs,
         elapsedMs,
       };
     } finally {
-      if (!closed) writer.close();
       await rm(wavPath, { force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * What a refusal to read a file becomes here: a quiet skip for a file that is
+   * merely gone, otherwise a banner naming the file and a result the pass records.
+   * The fingerprinter has usually said the same thing already; the banner key is
+   * shared so the owner sees one line about the file, not two.
+   */
+  function refuseToRead(episode, gate) {
+    if (gate.quiet) {
+      logger?.debug({ episodeId: episode.id, reason: gate.refused }, 'could not read episode for transcription');
+      return { skipped: 'unreadable' };
+    }
+    const key = `ad_read_${episode.id}`;
+    const detail = `${gate.message} Nothing will be cut from it; it is published as it is.`;
+    // The banner stays for as long as the file does; the activity log gets one line,
+    // when the refusal is new or says something different, not one every pass.
+    const fresh = health?.get(key)?.detail !== detail;
+    if (fresh) logger?.warn({ episodeId: episode.id, filename: episode.filename, reason: gate.refused }, gate.message);
+    health?.set(key, { level: 'warn', message: `SelfPod will not read “${episode.title}” to look for adverts.`, detail });
+    return { skipped: 'refused', reason: gate.refused, message: gate.message, fresh };
   }
 
   /**
@@ -356,17 +380,22 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     if (!force && !needsTranscript(episode, show)) return { skipped: 'unchanged' };
     if (!available()) return { skipped: 'unavailable' };
 
-    const path = join(shows.dirFor(show), episode.filename);
-    let bytes;
+    const gate = await gateEpisodeFile(shows.dirFor(show), episode.filename, { maxBytes: MAX_PIPELINE_FILE_BYTES });
+    if (gate.refused) return refuseToRead(episode, gate);
+    let profiled;
     try {
-      bytes = await readFile(path);
+      profiled = await audioWorker.profileFile({ path: gate.path, maxBytes: MAX_PIPELINE_FILE_BYTES });
     } catch (error) {
+      if (error?.code === 'refused') return refuseToRead(episode, { refused: error.refused, message: error.message, quiet: false });
       logger?.debug({ err: error, episodeId: episode.id }, 'could not read episode for transcription');
       return { skipped: 'unreadable' };
     }
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const profile = frameProfile(bytes);
-    if (!profile || profile.truncated) return { skipped: profile ? 'too_long' : 'no_frames' };
+    if (profiled.noFrames) return { skipped: 'no_frames' };
+    if (profiled.truncated) return { skipped: 'too_long' };
+    const sha256 = profiled.sha256;
+    const frames = framesFromTable(profiled.table);
+    const profile = { durationMs: profiled.durationMs, sampleRate: profiled.sampleRate, frames };
+    const source = { path: gate.path, frames, durationMs: profiled.durationMs };
 
     const windows = windowsFor(scope, profile.durationMs);
     const previous = selectRow.get(episode.id);
@@ -384,7 +413,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
       attempts,
       attempted_at: nowIso(),
       sha256,
-      bytes: bytes.length,
+      bytes: profiled.bytes,
       created_at: nowIso(),
     };
 
@@ -393,7 +422,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
     try {
       const heard = [];
       for (const [index, window] of windows.entries()) {
-        heard.push(await transcribeWindow(bytes, profile, window, index, { episodeId: episode.id, filename: episode.filename }));
+        heard.push(await transcribeWindow(source, window, index, { episodeId: episode.id, filename: episode.filename }));
       }
       const audioMs = windows.reduce((sum, window) => sum + (window.toMs - window.fromMs), 0);
       const cpuMs = Date.now() - started;
@@ -459,7 +488,7 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
      */
     async transcribeShow(showId) {
       const show = shows.getOrThrow(showId);
-      const counts = { transcribed: 0, failed: 0, skipped: 0, pending: 0, backfilled: 0 };
+      const counts = { transcribed: 0, failed: 0, skipped: 0, pending: 0, backfilled: 0, refused: [] };
       if (scopeFor(show).mode === 'off') return counts;
       if (state === 'unknown') await probe();
       const owed = episodes.listByShow(show.id).filter((episode) => needsTranscript(episode, show));
@@ -476,7 +505,13 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
           counts.pending -= 1;
           if (!episode.publish_hold) counts.backfilled += 1;
         } else if (result.failed) counts.failed += 1;
-        else counts.skipped += 1;
+        else {
+          counts.skipped += 1;
+          // Said out loud by the pass, with the fingerprinter's refusals of the same files.
+          if (result.skipped === 'refused' && result.fresh) {
+            counts.refused.push({ episodeId: episode.id, filename: episode.filename, message: result.message });
+          }
+        }
         events?.emit(EVENTS.TRANSCRIBE_PROGRESS, {
           showId: show.id,
           slug: show.slug,
@@ -541,6 +576,11 @@ export function createTranscriber({ db, config, events, logger, health, shows, e
       await rm(join(config.transcriptDir, showId), { recursive: true, force: true }).catch((error) => {
         logger?.warn({ err: error, showId }, 'could not remove the old transcripts of a show');
       });
+    },
+
+    /** Stops the audio worker, if this instance owns one. Called on shutdown, and by tests. */
+    async close() {
+      if (!audio) await audioWorker.close();
     },
 
     /** The one place the human-readable form of the model name lives. */

@@ -56,13 +56,9 @@ export function encodeFingerprint({ hashes, sampleRate, samplesPerFrame, duratio
  * into a broken feature.
  */
 export function decodeFingerprint(buffer) {
-  if (!buffer || buffer.length < HEADER_BYTES) return null;
-  if (buffer.readUInt32BE(0) !== MAGIC) return null;
-
-  const version = buffer.readUInt32BE(4);
-  if (version !== FINGERPRINT_VERSION) return null;
-
-  const frameCount = buffer.readUInt32BE(8);
+  const header = decodeFingerprintHeader(buffer);
+  if (!header) return null;
+  const { version, frameCount } = header;
   if (buffer.length < HEADER_BYTES + frameCount * 4) return null;
 
   // One copy and one byte swap, rather than a call per sub-fingerprint: a pass reads
@@ -76,6 +72,31 @@ export function decodeFingerprint(buffer) {
   return {
     version,
     hashes,
+    sampleRate: buffer.readUInt32BE(12) || null,
+    samplesPerFrame: buffer.readUInt32BE(16) || null,
+    durationMs: buffer.readUInt32BE(20) || null,
+  };
+}
+
+/** The bytes a caller needs to read to learn a fingerprint's timing without its hashes. */
+export const FINGERPRINT_HEADER_BYTES = HEADER_BYTES;
+
+/**
+ * Reads only the header: the timing, the length, and how many hashes follow.
+ *
+ * An anchor already looked for in an episode needs the episode's sample rate and frame
+ * size to turn a stored hit into a cut, and nothing else — reading half a megabyte of
+ * hashes to get at twelve bytes of header was most of what an unchanged pass spent.
+ * Null for anything unrecognised or written by a different version, as above.
+ */
+export function decodeFingerprintHeader(buffer) {
+  if (!buffer || buffer.length < HEADER_BYTES) return null;
+  if (buffer.readUInt32BE(0) !== MAGIC) return null;
+  const version = buffer.readUInt32BE(4);
+  if (version !== FINGERPRINT_VERSION) return null;
+  return {
+    version,
+    frameCount: buffer.readUInt32BE(8),
     sampleRate: buffer.readUInt32BE(12) || null,
     samplesPerFrame: buffer.readUInt32BE(16) || null,
     durationMs: buffer.readUInt32BE(20) || null,

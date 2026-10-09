@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createWriteStream } from 'node:fs';
+import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { finished } from 'node:stream/promises';
 
-import { TRIMMABLE_EXTENSIONS, TRIM_STATUS } from '../constants.js';
+import { MAX_PIPELINE_FILE_BYTES, TRIMMABLE_EXTENSIONS, TRIM_STATUS } from '../constants.js';
 import { EVENTS } from '../lib/events.js';
-import { cutFrames } from '../lib/mp3-cut.js';
+import { cutFrameParts } from '../lib/mp3-cut.js';
 import { frameProfile } from '../lib/mp3-frames.js';
+import { gateEpisodeFile } from '../lib/pipeline-file.js';
 import { newId } from '../lib/tokens.js';
 
 /**
@@ -101,6 +105,22 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
     return updated;
   }
 
+  /** Writes the pieces of a cut to a file in order, waiting for the disk rather than buffering them. */
+  async function writeParts(path, parts) {
+    const stream = createWriteStream(path);
+    try {
+      for (const part of parts) {
+        // `once` rejects if the stream errors instead, so a full disk is not a wait for ever.
+        if (!stream.write(part)) await once(stream, 'drain');
+      }
+      stream.end();
+      await finished(stream);
+    } catch (err) {
+      stream.destroy();
+      throw err;
+    }
+  }
+
   function fail(episode, reason, detail) {
     logger?.warn({ episodeId: episode.id, reason, detail }, 'could not trim an episode');
     health?.set(`trim_${episode.id}`, {
@@ -182,10 +202,14 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
       return { episode: await discard(episode), trimmed: false, reason: 'nothing_approved' };
     }
 
-    const source = join(shows.dirFor(show), episode.filename);
+    // Proved to be an ordinary file of a size SelfPod will hold, inside the show's
+    // own folder, before a byte is read: the folder is a share others can write to,
+    // and this reads whatever the path names into memory whole.
+    const gate = await gateEpisodeFile(shows.dirFor(show), episode.filename, { maxBytes: MAX_PIPELINE_FILE_BYTES });
+    if (gate.refused) return fail(episode, gate.refused, gate.message);
     let buffer;
     try {
-      buffer = await readFile(source);
+      buffer = await readFile(gate.path);
     } catch (err) {
       return fail(episode, 'unreadable', `The file could not be read: ${err.message}.`);
     }
@@ -205,7 +229,10 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
 
     episodes.setSystemFields(episode.id, { trim_status: TRIM_STATUS.TRIMMING });
 
-    const result = cutFrames(buffer, cuts);
+    // As the pieces of the original it is made of, not a second copy of the episode:
+    // the digest below is taken over the pieces and they are written one after
+    // another, so an hour-long cut holds one episode's worth of memory, not two.
+    const result = cutFrameParts(buffer, cuts);
     if (!result) {
       // `cutFrames` refuses rather than returning something wrong, and there are two
       // ways to get here. Saying which matters: one is a bug upstream, the other is
@@ -233,7 +260,9 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
     // not the length the feed just advertised. Naming the file after its own content
     // means the two can never disagree: the old cut stays readable at its own name
     // until the row has moved, and only then does it go.
-    const version = createHash('sha256').update(result.buffer).digest('hex').slice(0, 12);
+    const digest = createHash('sha256');
+    for (const part of result.parts) digest.update(part);
+    const version = digest.digest('hex').slice(0, 12);
     const filename = `${episode.id}.${version}.mp3`;
     const directory = showDir(episode.show_id);
     const staging = join(directory, `.${newId()}.tmp`);
@@ -241,7 +270,7 @@ export function createTrimmer({ config, events, logger, health, shows, episodes,
     const previous = pathFor(episode);
     try {
       await mkdir(directory, { recursive: true });
-      await writeFile(staging, result.buffer);
+      await writeParts(staging, result.parts);
       await rename(staging, destination);
     } catch (err) {
       await rm(staging, { force: true }).catch(() => {});

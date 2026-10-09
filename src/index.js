@@ -7,6 +7,7 @@ import { buildApp, loggerOptions } from './app.js';
 import { loadConfig } from './config.js';
 import { closeDatabase, openDatabase } from './db/index.js';
 import { describeFsError } from './lib/errors.js';
+import { createAudioWorker } from './lib/audio-search.js';
 import { createEventBus } from './lib/events.js';
 import { createActivity } from './services/activity.js';
 import { bootstrap } from './services/bootstrap.js';
@@ -123,8 +124,11 @@ async function main() {
   });
   const stats = createStats({ db, logger });
   const subscriptions = createSubscriptions({ db, config, events, logger });
-  const transcriber = createTranscriber({ db, config, events, logger, health, shows, episodes });
-  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes, transcriber });
+  // One worker thread for every piece of audio work — decoding, fingerprinting and
+  // the corpus searches — so none of it runs on the thread serving listeners.
+  const audio = createAudioWorker({ logger });
+  const transcriber = createTranscriber({ db, config, events, logger, health, shows, episodes, audio });
+  const adDetect = createAdDetect({ db, config, events, logger, shows, episodes, transcriber, health, audioSearch: audio });
   // Rows an older image wrote after a rollback carry no kind; give them one before any page reads them.
   adDetect.reconcileKinds();
   const remoteFeeds = createRemoteFeeds({
@@ -144,7 +148,7 @@ async function main() {
   const timeline = createTimeline({ db, logger });
   const watcher = createWatcher({ config, settings, events, logger, scanner, shows, health });
   const scheduler = createScheduler({
-    settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline,
+    db, settings, events, logger, scanner, episodes, watcher, activity, stats, remoteFeeds, adPipeline,
   });
 
   const presenters = createPresenters({ settings, shows, episodes, covers, activity, stats, readiness });

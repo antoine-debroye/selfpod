@@ -95,7 +95,16 @@ async function sessionPlugin(fastify, { db, settings, logger }) {
     store,
     cookieName: 'selfpod.sid',
     saveUninitialized: false,
-    rolling: true,
+    /*
+     * Not rolling. Rolling re-saves the session and re-sends the cookie on every
+     * request — one UPSERT per page, per fragment, per stylesheet — to push the
+     * expiry out each time. The session lasts days (see sessionTtlHours), so an admin
+     * who signs in is not going to notice it expiring from when they signed in rather
+     * than from their last click. A session that *changed* — signing in, a flash
+     * message set or read — is still saved: the store writes whenever the data
+     * differs from what it loaded, rolling or not.
+     */
+    rolling: false,
     cookie: {
       path: '/',
       httpOnly: true,

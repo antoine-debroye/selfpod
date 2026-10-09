@@ -280,7 +280,8 @@ function seededAt010() {
 describe('migration 011 classifies the catalogue without losing it', () => {
   it('gives every row the kind its evidence says, and links rules to their rows', () => {
     const db = seededAt010();
-    runMigrations(db);
+    // Up to 011 exactly: this is about what 011 does, whatever comes after it.
+    runMigrations(db, { upTo: 11 });
     assert.equal(db.pragma('user_version', { simple: true }), 11);
 
     const kinds = Object.fromEntries(
@@ -364,5 +365,54 @@ describe('migration 011 classifies the catalogue without losing it', () => {
                 VALUES ('m2', 's1', 'programme_ends', 1, 'a', 'a', ?)`).run(now);
     db.prepare(`DELETE FROM ad_markers WHERE id = 'm2'`).run();
     assert.deepEqual(db.pragma('foreign_key_check'), []);
+  });
+});
+
+/**
+ * Migration 012 adds indexes and nothing else. What has to be proved is that each
+ * one exists on the column it is for, that it is reached from an empty database and
+ * from one migrated step by step, and that the cascades the columns carry still work.
+ */
+describe('migration 012 indexes the advert tables\' foreign keys', () => {
+  const EXPECTED = {
+    idx_ad_cut_overrides_segment: ['ad_cut_overrides', 'segment_id'],
+    idx_ad_segments_marker: ['ad_segments', 'marker_id'],
+    idx_ad_segments_anchor: ['ad_segments', 'anchor_id'],
+    idx_ad_anchors_marker: ['ad_anchors', 'marker_id'],
+  };
+
+  function indexesOf(db) {
+    const found = {};
+    for (const [name, [table]] of Object.entries(EXPECTED)) {
+      const row = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name);
+      if (!row) continue;
+      const columns = db.pragma(`index_info(${name})`).map((info) => info.name);
+      found[name] = [row.tbl_name, ...columns];
+      assert.equal(row.tbl_name, table, `${name} is on the wrong table`);
+    }
+    return found;
+  }
+
+  it('creates each index on its column, from a database seeded at 008 and carried forward', () => {
+    const db = seededAt008();
+    runMigrations(db);
+    assert.equal(db.pragma('user_version', { simple: true }), 12);
+    const found = indexesOf(db);
+    for (const [name, [table, column]] of Object.entries(EXPECTED)) {
+      assert.deepEqual(found[name], [table, column], `${name} is missing or on the wrong column`);
+    }
+  });
+
+  it('creates them from an empty database too, and the planner uses one', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    runMigrations(db);
+    assert.equal(Object.keys(indexesOf(db)).length, 4);
+    const plan = db
+      .prepare('EXPLAIN QUERY PLAN SELECT * FROM ad_segments WHERE anchor_id = ?')
+      .all('x')
+      .map((row) => row.detail)
+      .join(' ');
+    assert.match(plan, /idx_ad_segments_anchor/, `a lookup by anchor does not use the index: ${plan}`);
   });
 });

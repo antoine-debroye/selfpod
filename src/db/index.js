@@ -39,6 +39,10 @@ export function openDatabase(path, { logger, readonly = false } = {}) {
   }
 
   db.pragma('synchronous = NORMAL');
+  // The WAL is truncated back to this once a checkpoint has emptied it, so a burst of
+  // writes — a first scan of a large library — does not leave a file the size of
+  // that burst beside the database for ever.
+  db.pragma('journal_size_limit = 67108864');
 
   const migration = runMigrations(db, { logger });
 
@@ -57,6 +61,7 @@ export function openDatabase(path, { logger, readonly = false } = {}) {
  */
 export function closeDatabase(db, { logger } = {}) {
   if (!db || !db.open) return;
+  optimiseDatabase(db, { logger });
   try {
     db.pragma('wal_checkpoint(TRUNCATE)');
   } catch (err) {
@@ -66,5 +71,20 @@ export function closeDatabase(db, { logger } = {}) {
     db.close();
   } catch (err) {
     logger?.warn({ err }, 'error closing database');
+  }
+}
+
+/**
+ * `PRAGMA optimize`: lets SQLite gather the statistics its planner uses to pick
+ * indexes, for the tables that have changed enough to matter. Cheap — milliseconds —
+ * and SQLite's own documentation asks for it on close and every so often while
+ * running; the scheduler calls it once a day, after the access log is trimmed.
+ */
+export function optimiseDatabase(db, { logger } = {}) {
+  if (!db || !db.open) return;
+  try {
+    db.pragma('optimize');
+  } catch (err) {
+    logger?.debug({ err }, 'PRAGMA optimize failed (harmless)');
   }
 }

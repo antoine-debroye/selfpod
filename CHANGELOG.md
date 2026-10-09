@@ -138,6 +138,48 @@ changes what your listeners see, it says so.
   technology, the current breadcrumb is marked, and a refused sign-in puts the cursor on the
   password.
 
+### Changed — the advert pass no longer gets in the way of listeners
+
+- **Reading an episode no longer stalls everything else.** Decoding an hour-long MP3 to
+  fingerprint it, or to hand its opening minutes to the recogniser, used to happen on the
+  same thread that serves downloads and answers the container's health check — about ten
+  seconds in which a 10 ms timer did not fire once, range requests hung, the live updates
+  stopped, and on a slow NAS the health check could time out three times and have the
+  container restarted in the middle of a pass. That work now runs in the worker thread the
+  corpus searches already used: measured on the same hour of audio, the timer fires one
+  millisecond late instead of ten seconds late, and the fingerprint comes out byte for byte
+  the same. A worker that crashes or wedges on a file is reported as a failure of that
+  episode — a banner, a line in the activity log — and started again for the next one.
+- **A pass over a show nothing has happened to costs almost nothing.** Every few minutes,
+  for every show, the pass used to load every fingerprint into memory, look for the station
+  jingle in every episode again, parse every transcript and match every known read against
+  every episode again — to find exactly what it found last time. It now remembers what it
+  last looked at and skips the detectors while nothing has changed; a new or replaced
+  episode, a transcript arriving, a decision, a boundary taught, a jingle confirmed or
+  forgotten, or a changed setting opens them again. The jingle is looked for only in episodes
+  it has not been looked for in yet, and a fingerprint is read only when it is needed. A
+  taught boundary that agrees with the jingle now links to it in the same pass rather than
+  the one after.
+- **The pipeline will not read anything but an ordinary file inside the show's folder.** The
+  show folder is normally a share others can write to, and the pages that serve files have
+  always refused a link that points outside it. Fingerprinting, listening and cutting read
+  the same files and used to read whatever the path named — a link to `/dev/zero`, a pipe, a
+  file of many gigabytes — and hang or run out of memory, every few minutes, with nothing
+  saying why. All three now refuse a link out of the folder, anything that is not an ordinary
+  file, and anything over 768 MB, before a byte is read; the banner names the file and says
+  which, and the pass's activity entry does too.
+- **Playing a cut no longer reads the whole episode.** The ▶ on the Adverts page used to read
+  the entire file off the share and walk every frame of it to play ten seconds. It now reads
+  only the bytes of those frames, from a table of where they are that is kept per file.
+  Trimming an episode holds one copy of it in memory rather than two.
+- **Pages, stylesheets, scripts and the JSON behind them are compressed over the wire** when
+  the browser asks — around a quarter of the size over a tunnel. Episode audio and the feed
+  are exactly as before: audio is never compressed, and the feed compresses itself once.
+- Smaller things: the session is no longer re-saved on every request; SQLite's planner
+  statistics are refreshed once a day and on shutdown, and its journal is kept from growing
+  without bound; the advert tables' rule and restore columns are indexed; a few statements
+  the scanner runs for every file are prepared once.
+
 ## 1.9.1 — 2026-09-16
 
 ### Fixed

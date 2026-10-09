@@ -785,3 +785,88 @@ describe('per-episode artwork (GET /media/:slug/:token/:episodeId/cover.jpg)', (
     assert.equal(response.statusCode, 404, 'a row pointing at nothing is a 404, not a 500');
   });
 });
+
+describe('compression of the admin UI and the API', () => {
+  it('gzips an HTML page when the browser asks, to exactly the page it would have sent', async () => {
+    const { gunzipSync } = await import('node:zlib');
+    const plain = await server.app.inject({ method: 'GET', url: '/login', headers: { accept: 'text/html' } });
+    assert.equal(plain.statusCode, 200);
+    assert.equal(plain.headers['content-encoding'], undefined, 'nothing is forced on a client');
+
+    const zipped = await server.app.inject({
+      method: 'GET',
+      url: '/login',
+      headers: { accept: 'text/html', 'accept-encoding': 'gzip' },
+    });
+    assert.equal(zipped.statusCode, 200);
+    assert.equal(zipped.headers['content-encoding'], 'gzip');
+    assert.match(zipped.headers.vary ?? '', /accept-encoding/i);
+    assert.equal(gunzipSync(zipped.rawPayload).toString('utf8'), plain.body);
+    assert.ok(zipped.rawPayload.length < Buffer.byteLength(plain.body) / 2, 'it is not meaningfully smaller');
+  });
+
+  it('compresses the stylesheet, the script and API JSON too', async () => {
+    const { gunzipSync } = await import('node:zlib');
+    for (const url of ['/assets/css/app.css', '/assets/js/app.js']) {
+      const response = await server.app.inject({ method: 'GET', url, headers: { 'accept-encoding': 'br, gzip' } });
+      assert.equal(response.statusCode, 200, url);
+      assert.ok(['br', 'gzip'].includes(response.headers['content-encoding']), `${url} went out uncompressed`);
+    }
+    // JSON over the size threshold: the status document carries the whole health list.
+    const status = await server.app.inject({ method: 'GET', url: '/api/status', headers: { 'accept-encoding': 'gzip' } });
+    assert.equal(status.statusCode, 200);
+    const encoding = status.headers['content-encoding'];
+    assert.ok(encoding === undefined || encoding === 'gzip', `unexpected content-encoding ${encoding}`);
+    if (encoding === 'gzip') assert.doesNotThrow(() => JSON.parse(gunzipSync(status.rawPayload).toString('utf8')));
+    await server.login();
+    const bigger = await server.get('/api/activity?limit=100', { 'accept-encoding': 'gzip' });
+    if (bigger.statusCode === 200 && Buffer.byteLength(bigger.rawPayload) > 1024) {
+      assert.equal(bigger.headers['content-encoding'], 'gzip', 'a large JSON answer went out uncompressed');
+    }
+  });
+
+  it('never compresses episode audio, the feed twice, or the audio copy under /api', async () => {
+    const { gunzipSync } = await import('node:zlib');
+    const show = await seedShow('late-night', 'sample.mp3', 'ep.mp3');
+    const episode = server.episodes.listByShow(show.id)[0];
+
+    const media = await server.app.inject({
+      method: 'GET',
+      url: `/media/${show.slug}/${show.feed_token}/${episode.id}/${encodeURIComponent(episode.filename)}`,
+      headers: { 'accept-encoding': 'br, gzip' },
+    });
+    assert.equal(media.statusCode, 200);
+    assert.equal(media.headers['content-encoding'], undefined, 'episode audio was compressed');
+
+    const feed = await server.app.inject({
+      method: 'GET',
+      url: `/feeds/${show.slug}/${show.feed_token}.xml`,
+      headers: { 'accept-encoding': 'gzip' },
+    });
+    assert.equal(feed.headers['content-encoding'], 'gzip');
+    // Pre-compressed once by the feed handler: a second coding on top would leave
+    // gunzip holding still-compressed bytes rather than the document.
+    assert.match(gunzipSync(feed.rawPayload).toString('utf8'), /^<\?xml/);
+
+    await server.login();
+    const original = await server.get(`/api/episodes/${episode.id}/audio?copy=original`, { 'accept-encoding': 'br, gzip' });
+    assert.equal(original.statusCode, 200);
+    assert.equal(original.headers['content-encoding'], undefined, 'the audio copy under /api was compressed');
+    assert.equal(original.headers['content-type'], 'audio/mpeg');
+  });
+
+  it('does not inflate a request body a client chose to compress', async () => {
+    // Request decompression is the plugin's default and a decompression bomb's front
+    // door; it is switched off here, so a gzipped body is simply not JSON.
+    const { gzipSync } = await import('node:zlib');
+    await server.login();
+    const response = await server.request({
+      method: 'POST',
+      url: '/api/shows',
+      payload: gzipSync(JSON.stringify({ title: 'x' })),
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+    });
+    assert.notEqual(response.statusCode, 201, 'the body was inflated and accepted');
+    assert.ok(response.statusCode >= 400 && response.statusCode < 500, `expected a client error, got ${response.statusCode}`);
+  });
+});

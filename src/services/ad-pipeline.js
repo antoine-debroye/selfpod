@@ -34,6 +34,27 @@ export function createAdPipeline({
    * downloads is two hundred scans; it must not become two hundred passes.
    */
   const waiting = new Map();
+  /**
+   * What each show's detectors last ran against (`adDetect.detectionInputs`). In
+   * memory on purpose: after a restart every show is looked at once, which is cheap
+   * next to being wrong about having looked.
+   */
+  const detectedAgainst = new Map();
+
+  /** One answer from the jingle search run more than once in a pass: totals from the latest, firsts kept. */
+  function mergeAnchored(first, again) {
+    if (!first || first.skipped === 'unchanged') return again;
+    return {
+      ...first,
+      ...again,
+      proposed: Boolean(first.proposed || again.proposed),
+      autoConfirmed: Boolean(first.autoConfirmed || again.autoConfirmed),
+      linked: Boolean(first.linked || again.linked),
+      newlyMissed: (first.newlyMissed ?? 0) + (again.newlyMissed ?? 0),
+      located: (first.located ?? 0) + (again.located ?? 0),
+      changed: Boolean(first.changed || again.changed),
+    };
+  }
 
   /** Queues work behind everything already queued. Failures do not break the chain. */
   function serialise(label, work) {
@@ -59,11 +80,14 @@ export function createAdPipeline({
     return queued;
   }
 
-  const countUndecided = db.prepare(
-    `SELECT COUNT(*) AS n
+  // Per show in one query, not one query per episode: this runs after every stage
+  // of every pass, and a show is hundreds of episodes.
+  const countUndecidedByEpisode = db.prepare(
+    `SELECT o.episode_id, COUNT(*) AS n
        FROM ad_segment_occurrences o
        JOIN ad_segments s ON s.id = o.segment_id
-      WHERE o.episode_id = ? AND s.status = '${SEGMENT_STATUS.CANDIDATE}'`,
+      WHERE s.show_id = ? AND s.status = '${SEGMENT_STATUS.CANDIDATE}'
+      GROUP BY o.episode_id`,
   );
   const countFingerprinted = db.prepare(
     `SELECT COUNT(*) AS n
@@ -86,6 +110,7 @@ export function createAdPipeline({
 
   function settleHolds(show) {
     const corpusSize = countFingerprinted.get(show.id)?.n ?? 0;
+    const undecided = new Map(countUndecidedByEpisode.all(show.id).map((row) => [row.episode_id, row.n]));
     let released = 0;
     let held = 0;
     let untrimmable = 0;
@@ -98,7 +123,7 @@ export function createAdPipeline({
         mode: show.ad_trim_mode,
         corpusSize,
         minEpisodes: show.ad_auto_min_episodes ?? 3,
-        undecidedSegments: countUndecided.get(episode.id)?.n ?? 0,
+        undecidedSegments: undecided.get(episode.id) ?? 0,
         trimStatus: episode.trim_status,
         canBeTrimmed: isTrimmable(episode),
         // Only an episode already held waits for its words (see resolvePublishHold),
@@ -181,10 +206,12 @@ export function createAdPipeline({
    */
   function recordActivity(show, counts) {
     if (!activity) return;
+    const refused = counts.refused ?? [];
     if (
       !counts.found && !counts.trimmed && !counts.failed && !counts.released &&
       !counts.transcribed && !counts.heard && !counts.rememberedCuts && !counts.markerCuts &&
-      !counts.transcriptionFailed && !counts.foldedIn && !counts.anchorProposed && !counts.anchorMissed
+      !counts.transcriptionFailed && !counts.foldedIn && !counts.anchorProposed && !counts.anchorMissed &&
+      !refused.length
     ) return;
 
     const parts = [];
@@ -213,6 +240,13 @@ export function createAdPipeline({
       updated: counts.trimmed,
       note: `${show.title} — ${parts.join(', ')}.`,
       warnings: [
+        // A file the pass would not read is a file nothing will ever be cut from, and
+        // the folder is a share: the owner may not have put it there. Named here,
+        // once per file, however many stages refused it.
+        ...refused.map((entry) => ({
+          file: entry.filename,
+          message: `${entry.message} Nothing will be cut from it.`,
+        })),
         ...(counts.failed
           ? [
               {
@@ -341,11 +375,27 @@ export function createAdPipeline({
 
         const fingerprinted = await adDetect.fingerprintShow(showId);
 
+        /*
+         * The detectors run only when there is something new to look at.
+         *
+         * This runs every few minutes for every show, and nearly every run finds
+         * exactly what it found last time — yet each one used to load every
+         * fingerprint of the show into memory, look for the jingle in every episode
+         * again, parse every transcript and match every known read against every
+         * episode again. `detectionInputs` is everything the detectors read that they
+         * do not write themselves (fingerprints, transcripts, episodes, settings) plus
+         * a count of what the owner has done; while it matches what the last pass
+         * detected against, the answer cannot have changed. Compared twice, because
+         * the jingle search runs before the words are read and the others after.
+         */
+        const keyFor = (inputs) => `${inputs}#${adDetect.catalogueDigest(showId)}`;
+        const skipAnchors = detectedAgainst.get(showId) === keyFor(adDetect.detectionInputs(showId));
+
         // Before either detector, and before the words: it needs no transcript at
         // all, so it must not wait behind whisper, and it has to claim the head of an
         // episode before detectForShow and detectFromTranscripts get a look at the
         // same ground (spec §19.6).
-        const anchored = await adDetect.detectAnchors(showId);
+        let anchored = skipAnchors ? { skipped: 'unchanged', changed: false } : await adDetect.detectAnchors(showId);
 
         // Hearing the words comes before either detector, so the acoustic one's finds
         // can be read against them in the same run (a pre-roll found by ear is let go
@@ -360,8 +410,42 @@ export function createAdPipeline({
         // settling on that would release the whole show untrimmed for as long as
         // detection takes, which is the one thing the hold exists to prevent. "Nothing
         // to decide" and "not yet asked" are not the same answer.
-        const detected = await adDetect.detectForShow(showId);
-        const heard = transcriber ? await adDetect.detectFromTranscripts(showId) : null;
+        const inputs = adDetect.detectionInputs(showId);
+        let detected = { skipped: 'unchanged' };
+        let heard = transcriber ? { skipped: 'unchanged' } : null;
+        // 'ran' when any detector did: the jingle search alone can be what a pass
+        // needed, and what it wrote can settle the catalogue before the others look.
+        let detection = skipAnchors ? 'skipped' : 'ran';
+        if (detectedAgainst.get(showId) !== keyFor(inputs)) {
+          detection = 'ran';
+          let settled = false;
+          /*
+           * Twice at most. The jingle search reads what the words found (a taught
+           * boundary whose located words agree with the jingle links to it) and the
+           * words read what the jingle search decided (a confirmed jingle claims the
+           * head of every episode it was heard in). Each used to wait for the next
+           * pass to see the other's result; now the pass asks again when the jingle
+           * search changed something, and stops when it did not.
+           */
+          for (let round = 0; round < 2; round += 1) {
+            detected = await adDetect.detectForShow(showId);
+            heard = transcriber ? await adDetect.detectFromTranscripts(showId) : null;
+            const again = await adDetect.detectAnchors(showId);
+            anchored = mergeAnchored(anchored, again);
+            if (!again.changed) {
+              settled = true;
+              break;
+            }
+          }
+          /*
+           * Remembered — as the catalogue stands now that the detectors have written
+           * it — only if nothing else arrived while they ran. A decision made from the
+           * page meanwhile is looked at again next pass, not folded in as though it had
+           * been seen; so is a round that still had something to say.
+           */
+          const undisturbed = settled && adDetect.detectionInputs(showId) === inputs;
+          detectedAgainst.set(showId, undisturbed ? keyFor(inputs) : null);
+        }
 
         // Now it means something, and an episode that turned out to need nothing is
         // released here rather than waiting behind the cutting of episodes that do.
@@ -370,8 +454,15 @@ export function createAdPipeline({
         const trimmed = await trimmer.trimShow(showId);
         const holds = settleHolds(show);
 
+        // One entry per file, whichever stages refused it.
+        const refused = new Map();
+        for (const entry of [...(fingerprinted?.refused ?? []), ...(transcribed?.refused ?? [])]) {
+          if (!refused.has(entry.episodeId)) refused.set(entry.episodeId, entry);
+        }
+
         recordActivity(show, {
           examined: fingerprinted?.fingerprinted ?? 0,
+          refused: [...refused.values()],
           corpus: holds.corpusSize,
           found: detected?.newSegments ?? 0,
           transcribed: transcribed?.transcribed ?? 0,
@@ -395,6 +486,8 @@ export function createAdPipeline({
             showId,
             slug: show.slug,
             mode: show.ad_trim_mode,
+            detection,
+            work: adDetect.workDone?.(),
             fingerprinted: fingerprinted?.fingerprinted ?? 0,
             transcribed: transcribed?.transcribed ?? 0,
             segments: detected?.segments ?? 0,
@@ -407,7 +500,7 @@ export function createAdPipeline({
           'ran advert detection for a show',
         );
         events?.emit(EVENTS.SHOW_CHANGED, { showId, slug: show.slug });
-        return { ...holds, foldedIn, fingerprinted, anchored, transcribed, detected, heard, trimmed };
+        return { ...holds, foldedIn, fingerprinted, anchored, transcribed, detected, heard, trimmed, detection };
       });
       waiting.set(showId, run);
       // A pass that failed must not stay the answer to "is one waiting?".
