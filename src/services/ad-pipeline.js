@@ -288,6 +288,22 @@ export function createAdPipeline({
     },
 
     /**
+     * Resolves once nothing is running or queued.
+     *
+     * A pass started from a page is not awaited by the request that started it, so a
+     * test — or anything else tearing the app down — has to be able to wait for it:
+     * closing the database under a pass that is half-way through cutting an episode
+     * is how a test run came to hang at exit. Loops because a pass can queue another.
+     */
+    async idle() {
+      // eslint-disable-next-line no-unmodified-loop-condition
+      while (active !== null || waiting.size) {
+        await chain;
+        await Promise.allSettled([...waiting.values()]);
+      }
+    },
+
+    /**
      * Everything a show needs, in order: fingerprint, detect, cut, publish.
      *
      * Idempotent. Running it twice on an unchanged show fingerprints nothing, finds

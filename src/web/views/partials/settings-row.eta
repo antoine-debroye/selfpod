@@ -1,21 +1,26 @@
 <%
   /* Two variants of the same row: a display view, and an inline edit form swapped
      in over it. Keeping both here means the "Edit → save → display" cycle can
-     never drift out of visual sync. */
+     never drift out of visual sync.
+
+     The Edit button has a stable id, so after a save or a cancel — which swap the
+     whole row — app.js can put keyboard focus back on it rather than on <body>. */
   const editing = it.editing;
   const errors = it.errors || {};
+  const invalid = Boolean(errors[it.key]);
 %>
 <div class="set-row<%= it.last ? ' set-row--last' : '' %>">
   <div class="info">
     <div class="t"><%= it.title %></div>
     <% if (it.description) { %><div class="d"><%= it.description %></div><% } %>
-    <% if (errors[it.key]) { %><div class="field-error"><%= errors[it.key] %></div><% } %>
+    <% if (invalid) { %><div class="field-error" id="set-<%= it.key %>-error"><%= errors[it.key] %></div><% } %>
   </div>
 
   <% if (editing) { %>
     <form class="set-row__form" method="post" action="/ui/settings/<%= it.key %>"
           hx-post="/ui/settings/<%= it.key %>"
-          hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">
+          hx-target="#setting-<%= it.key %>" hx-swap="innerHTML"
+          hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
       <label class="sr-only" for="set-<%= it.key %>"><%= it.title %></label>
       <%
         /* A row supplies `options` when its value is one of a fixed set. That used to
@@ -23,7 +28,7 @@
            definition means the next such setting needs no edit here. */
       %>
       <% if (it.options) { %>
-        <select id="set-<%= it.key %>" name="value">
+        <select id="set-<%= it.key %>" name="value"<%~ invalid ? ' aria-invalid="true" aria-describedby="set-' + it.key + '-error"' : '' %>>
           <% for (const option of it.options) { %>
             <option value="<%= option.value %>"<%= String(it.rawValue ?? '') === String(option.value) ? ' selected' : '' %>><%= option.label %></option>
           <% } %>
@@ -31,20 +36,21 @@
       <% } else { %>
         <input id="set-<%= it.key %>" name="value" value="<%= it.rawValue === null || it.rawValue === undefined ? '' : it.rawValue %>"
                class="<%= it.mono ? 'mono mono-input' : '' %>"
-               <%= it.inputType ? 'type="' + it.inputType + '"' : '' %>
-               <%= it.placeholder ? 'placeholder="' + it.placeholder + '"' : '' %> autofocus>
+               <%~ it.inputType ? 'type="' + it.inputType + '"' : '' %>
+               <%~ it.placeholder ? 'placeholder="' + it.placeholder + '"' : '' %>
+               <%~ invalid ? 'aria-invalid="true" aria-describedby="set-' + it.key + '-error"' : '' %> autofocus>
       <% } %>
       <% if (it.hint) { %><div class="hint"><%= it.hint %></div><% } %>
       <div class="set-row__actions">
-        <button class="btn btn-ghost btn-sm" type="button"
+        <button class="btn btn-ghost btn-sm" type="button" id="set-cancel-<%= it.key %>"
                 hx-get="/ui/settings/<%= it.key %>" hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">Cancel</button>
-        <button class="btn btn-primary btn-sm" type="submit">Save</button>
+        <button class="btn btn-primary btn-sm" type="submit" id="set-save-<%= it.key %>">Save</button>
       </div>
     </form>
   <% } else { %>
     <div class="val<%= it.mono ? ' mono' : '' %>">
       <%= it.value %>
-      <button class="btn btn-ghost btn-sm set-row__edit" type="button"
+      <button class="btn btn-ghost btn-sm set-row__edit" type="button" id="set-edit-<%= it.key %>"
               hx-get="/ui/settings/<%= it.key %>?edit=1"
               hx-target="#setting-<%= it.key %>" hx-swap="innerHTML">Edit</button>
     </div>

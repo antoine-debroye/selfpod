@@ -26,6 +26,9 @@
 
   document.addEventListener('htmx:responseError', function (event) {
     var xhr = event.detail.xhr;
+    // A session that has run out answers 401 with HX-Redirect to the sign-in page.
+    // htmx follows it; saying "something went wrong" first would be untrue.
+    if (xhr && xhr.getResponseHeader && xhr.getResponseHeader('HX-Redirect')) return;
     var message = 'Something went wrong.';
     try {
       var parsed = JSON.parse(xhr.responseText);
@@ -40,14 +43,209 @@
     toast(message, 'err');
   });
 
+  /*
+   * No response at all: offline, a tunnel that dropped, a request an extension
+   * blocked. htmx raises this instead of responseError, and until it was handled
+   * these failed in silence — the button un-pressed itself and nothing said why.
+   */
+  document.addEventListener('htmx:sendError', function () {
+    toast('SelfPod could not be reached. Check your connection, or that the container is still running, and try again.', 'err');
+  });
+
+  /* ------------------------------------------- background refreshes & focus */
+
+  /**
+   * Whether a request was started by the page rather than by a person: a server-sent
+   * event, a `load` trigger, or script. Those are the refreshes that may not throw
+   * away what someone is in the middle of typing.
+   */
+  function isBackgroundRequest(detail) {
+    var config = detail && detail.requestConfig;
+    var trigger = config && config.triggeringEvent;
+    if (!trigger || !trigger.type) return true;
+    return String(trigger.type).indexOf('sse:') === 0 || trigger.type === 'load';
+  }
+
+  /** A field someone has focused, or has changed and not yet submitted. */
+  function fieldInUse(field) {
+    if (field === document.activeElement) return true;
+    if (field.type === 'checkbox' || field.type === 'radio') return field.checked !== field.defaultChecked;
+    if (field.tagName === 'SELECT') {
+      // A select with no `selected` attribute shows its first option, and that is
+      // its default too — comparing each option's selected flag with defaultSelected
+      // would call every such select dirty from the moment it was rendered.
+      var defaultIndex = -1;
+      for (var i = 0; i < field.options.length; i += 1) {
+        if (field.multiple && field.options[i].selected !== field.options[i].defaultSelected) return true;
+        if (defaultIndex === -1 && field.options[i].defaultSelected) defaultIndex = i;
+      }
+      if (field.multiple) return false;
+      if (defaultIndex === -1 && field.options.length) defaultIndex = 0;
+      return field.selectedIndex !== defaultIndex;
+    }
+    if (field.type === 'hidden' || field.type === 'submit' || field.type === 'button') return false;
+    return field.value !== field.defaultValue;
+  }
+
+  function beingEdited(root) {
+    if (!root || !root.querySelectorAll) return false;
+    var fields = root.querySelectorAll('input, select, textarea');
+    for (var i = 0; i < fields.length; i += 1) {
+      if (fieldInUse(fields[i])) return true;
+    }
+    return false;
+  }
+
+  /*
+   * A refresh the page asked for itself is held back while a field inside the
+   * region it would replace is in use, and taken again once it is not. The Adverts
+   * panel and the episode's cuts card re-read themselves whenever a pass finishes —
+   * scheduled passes included — and used to wipe a half-typed boundary and close the
+   * settings fold under the person using them.
+   */
+  document.addEventListener('htmx:beforeSwap', function (event) {
+    if (!isBackgroundRequest(event.detail)) return;
+    var target = event.detail.target;
+    if (!target || !beingEdited(target)) return;
+    event.detail.shouldSwap = false;
+    target.setAttribute('data-refresh-pending', '1');
+  });
+
+  function takePendingRefreshes() {
+    var pending = document.querySelectorAll('[data-refresh-pending]');
+    Array.prototype.forEach.call(pending, function (el) {
+      if (beingEdited(el) || !window.htmx) return;
+      el.removeAttribute('data-refresh-pending');
+      var url = el.getAttribute('hx-get');
+      if (!url) return;
+      window.htmx.ajax('GET', url, { source: el, target: el, swap: el.getAttribute('hx-swap') || 'innerHTML' });
+    });
+  }
+
+  document.addEventListener('focusout', function () {
+    // After the browser has moved focus, so the next field in the same region counts.
+    setTimeout(takePendingRefreshes, 0);
+  });
+
+  /*
+   * A decision posts and swaps the panel; the server also announces the change over
+   * SSE, which made the panel fetch itself a second time for the same state. While a
+   * person's own request is in flight to a target, the stream's refresh of that
+   * target is dropped — the response on its way is at least as fresh.
+   */
+  var userRequestsInFlight = {};
+
+  document.addEventListener('htmx:beforeRequest', function (event) {
+    var target = event.detail.target;
+    var key = target && target.id;
+    if (isBackgroundRequest(event.detail)) {
+      if (key && userRequestsInFlight[key]) event.preventDefault();
+      return;
+    }
+    if (key) userRequestsInFlight[key] = (userRequestsInFlight[key] || 0) + 1;
+  });
+
+  document.addEventListener('htmx:afterRequest', function (event) {
+    if (isBackgroundRequest(event.detail)) return;
+    var target = event.detail.target;
+    var key = target && target.id;
+    if (key && userRequestsInFlight[key]) userRequestsInFlight[key] -= 1;
+  });
+
+  /*
+   * A <details> someone opened or closed stays that way across a swap of the region
+   * it sits in — the server renders it in its default state every time.
+   */
+  var detailsState = {};
+
+  function detailsKey(details) {
+    return details.id || details.className || null;
+  }
+
+  document.addEventListener('toggle', function (event) {
+    var details = event.target;
+    if (!details || details.tagName !== 'DETAILS') return;
+    var key = detailsKey(details);
+    if (key) detailsState[key] = details.open;
+  }, true);
+
+  /**
+   * The element a swap left in the document. After an outerHTML swap htmx still
+   * reports the element it replaced, which is out of the document by then; the one
+   * that took its place carries the same id.
+   */
+  function swappedTarget(detail) {
+    var target = detail && detail.target;
+    if (target && target.id && !document.body.contains(target)) return document.getElementById(target.id);
+    return target;
+  }
+
+  document.addEventListener('htmx:afterSwap', function (event) {
+    var target = swappedTarget(event.detail);
+    if (!target || !target.querySelectorAll) return;
+    Array.prototype.forEach.call(target.querySelectorAll('details'), function (details) {
+      var key = detailsKey(details);
+      if (key && Object.prototype.hasOwnProperty.call(detailsState, key)) details.open = detailsState[key];
+    });
+  });
+
+  /*
+   * Keyboard focus survives a swap. htmx replaces the element that had it, and the
+   * browser then puts focus on <body>: after saving a setting, sorting the log or
+   * closing a modal, a keyboard user was back at the top of the page. The control's
+   * id is remembered before the request and looked up again after the settle; when
+   * it is gone, the first control in what was swapped in takes its place.
+   */
+  var focusBeforeRequest = null;
+
+  document.addEventListener('htmx:beforeRequest', function (event) {
+    if (isBackgroundRequest(event.detail)) return;
+    var active = document.activeElement;
+    var target = event.detail.target;
+    if (!active || active === document.body) {
+      focusBeforeRequest = null;
+      return;
+    }
+    focusBeforeRequest = {
+      id: active.id || null,
+      inTarget: Boolean(target && target.contains && target.contains(active)),
+    };
+  });
+
+  document.addEventListener('htmx:afterSettle', function (event) {
+    var remembered = focusBeforeRequest;
+    if (!remembered || isBackgroundRequest(event.detail)) return;
+    focusBeforeRequest = null;
+    var active = document.activeElement;
+    if (active && active !== document.body) return; // focus survived, or was placed on purpose
+    var again = remembered.id ? document.getElementById(remembered.id) : null;
+    if (again && document.body.contains(again)) {
+      again.focus({ preventScroll: true });
+      return;
+    }
+    if (!remembered.inTarget) return;
+    var target = swappedTarget(event.detail);
+    if (!target || !document.body.contains(target) || !target.querySelector) return;
+    var first = target.querySelector('[autofocus], button:not([disabled]), input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]');
+    if (first) first.focus({ preventScroll: true });
+  });
+
   /* ---------------------------------------------------------------- toasts */
+
+  /**
+   * A notice stays long enough to be read: six seconds and fifty milliseconds a
+   * character, which gives the reachability verdicts their twenty. An error stays
+   * until it is dismissed, and is announced as an alert rather than a status.
+   */
+  var TOAST_BASE_MS = 6000;
+  var TOAST_PER_CHAR_MS = 50;
 
   function toast(message, level) {
     var root = document.getElementById('toast-root');
     if (!root) return;
     var el = document.createElement('div');
     el.className = 'toast toast--' + (level || 'ok');
-    el.setAttribute('role', 'status');
+    el.setAttribute('role', level === 'err' ? 'alert' : 'status');
     var body = document.createElement('div');
     body.className = 'toast__body';
     body.textContent = message;
@@ -55,6 +253,7 @@
     close.type = 'button';
     close.className = 'toast__close';
     close.setAttribute('aria-label', 'Dismiss');
+    close.setAttribute('data-toast-close', '');
     close.textContent = '×';
     el.appendChild(body);
     el.appendChild(close);
@@ -62,21 +261,46 @@
     scheduleToastDismissal(el);
   }
 
+  function dismissToast(el) {
+    if (!el || !el.parentNode) return;
+    el.classList.add('toast--leaving');
+    setTimeout(function () {
+      el.remove();
+    }, 240);
+  }
+
   function scheduleToastDismissal(el) {
-    var timer = setTimeout(function () {
-      el.classList.add('toast--leaving');
-      setTimeout(function () {
-        el.remove();
-      }, 240);
-    }, 6000);
-    el.addEventListener('mouseenter', function () {
+    if (el.classList.contains('toast--err')) return; // stays until dismissed
+    var remaining = TOAST_BASE_MS + TOAST_PER_CHAR_MS * (el.textContent || '').length;
+    var timer = null;
+    var startedAt = 0;
+
+    function start() {
+      if (timer !== null) return;
+      startedAt = Date.now();
+      timer = setTimeout(function () {
+        timer = null;
+        dismissToast(el);
+      }, remaining);
+    }
+    function pause() {
+      if (timer === null) return;
       clearTimeout(timer);
-    });
+      timer = null;
+      // Whatever is left, and at least a moment to finish reading after the pointer leaves.
+      remaining = Math.max(1500, remaining - (Date.now() - startedAt));
+    }
+
+    el.addEventListener('mouseenter', pause);
+    el.addEventListener('mouseleave', start);
+    el.addEventListener('focusin', pause);
+    el.addEventListener('focusout', start);
+    start();
   }
 
   document.addEventListener('click', function (event) {
     var close = event.target.closest('[data-toast-close]');
-    if (close) close.closest('.toast').remove();
+    if (close) dismissToast(close.closest('.toast'));
   });
 
   // Toasts raised out-of-band by an htmx response need the same auto-dismiss.
@@ -100,9 +324,29 @@
   }
 
   document.addEventListener('htmx:afterSwap', function (event) {
-    if (event.detail.target && event.detail.target.id === 'modal-root') {
-      openModalIn(event.detail.target);
+    var target = event.detail.target;
+    if (!target || target.id !== 'modal-root') return;
+    if (target.querySelector('dialog.modal')) {
+      openModalIn(target);
+    } else {
+      // A successful modal action answers with an empty root: the dialog is gone
+      // without closeModal() running, so focus is handed back here.
+      restoreFocusTo(modalOpener);
+      modalOpener = null;
     }
+  });
+
+  /*
+   * The control that opened the modal, so closing it can hand focus back. Only a
+   * request from outside the modal counts: the form inside posts to the same target.
+   */
+  var modalOpener = null;
+
+  document.addEventListener('htmx:beforeRequest', function (event) {
+    var target = event.detail.target;
+    if (!target || target.id !== 'modal-root') return;
+    var elt = event.detail.elt;
+    if (elt && !target.contains(elt)) modalOpener = elt;
   });
 
   document.addEventListener('click', function (event) {
@@ -117,12 +361,31 @@
 
   document.body.addEventListener('selfpod:modal-close', closeModal);
 
+  // Escape closes a native dialog on its own; the root still has to be emptied and
+  // focus returned, the same as for Cancel.
+  document.addEventListener('close', function (event) {
+    var dialog = event.target;
+    if (dialog && dialog.tagName === 'DIALOG' && dialog.closest('#modal-root')) closeModal();
+  }, true);
+
   function closeModal() {
     var root = document.getElementById('modal-root');
     if (!root) return;
     var dialog = root.querySelector('dialog.modal');
-    if (dialog && typeof dialog.close === 'function') dialog.close();
+    if (dialog && typeof dialog.close === 'function' && dialog.open) dialog.close();
     root.innerHTML = '';
+    restoreFocusTo(modalOpener);
+    modalOpener = null;
+  }
+
+  function restoreFocusTo(opener) {
+    if (!opener) return;
+    var active = document.activeElement;
+    if (active && active !== document.body) return;
+    // The opener may have been swapped away with the table it sat in; the same
+    // control, re-rendered, carries the same id.
+    var again = document.body.contains(opener) ? opener : opener.id ? document.getElementById(opener.id) : null;
+    if (again && typeof again.focus === 'function') again.focus({ preventScroll: true });
   }
 
   /* --------------------------------------------------- confirm gate helpers */
@@ -417,9 +680,12 @@
     if (!form) return;
     var from = form.querySelector('[data-range-from]');
     var to = form.querySelector('[data-range-to]');
-    if (!from || !to || !track.clientWidth) return;
-    var rect = track.getBoundingClientRect();
-    var share = Math.max(0, Math.min(1, (event.clientX - rect.left) / track.clientWidth));
+    // The tap lands on a wrapper with room around the bar (a thumb needs it); the
+    // position is read off the drawn track inside it, so the geometry is the bar's.
+    var rail = track.querySelector('[data-cutbar-rail]') || track;
+    if (!from || !to || !rail.clientWidth) return;
+    var rect = rail.getBoundingClientRect();
+    var share = Math.max(0, Math.min(1, (event.clientX - rect.left) / rail.clientWidth));
     var ms = share * (Number(track.getAttribute('data-duration-ms')) || 0);
     // From, then To; a third tap starts a new range.
     var target = !from.value ? from : !to.value ? to : null;
@@ -999,6 +1265,8 @@
       row.querySelector('[data-pct]').textContent = 'done';
       var message = row.querySelector('[data-message]');
       message.hidden = false;
+      // `.msg` is styled as a problem; `.ok` is what makes this one read as good news.
+      message.classList.add('ok');
       message.textContent = 'Uploaded — scanning now.';
     }
 

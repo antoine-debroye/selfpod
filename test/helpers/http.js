@@ -175,6 +175,9 @@ export async function createTestServer({ env = {}, completeSetup = true, whisper
     },
 
     async cleanup() {
+      // A pass a page started is still running until it says so; closing the database
+      // underneath it left the process with a handle it could never release.
+      await adPipeline.idle();
       await adDetect.close();
       await app.close();
       shows.stop?.();

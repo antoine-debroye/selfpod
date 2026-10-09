@@ -2,6 +2,8 @@
   const step = it.step;
   const errors = it.errors || {};
   const err = (field) => errors[field] ? ' is-invalid' : '';
+  /* A refused field is marked invalid and names its error text as its description. */
+  const aria = (field) => errors[field] ? ` aria-invalid="true" aria-describedby="${field}-error"` : '';
 %>
 <main class="setup">
   <div class="setup-brand">
@@ -34,17 +36,17 @@
       <form method="post" action="/setup/1">
         <div class="field<%= err('password') %>">
           <label for="password">New password</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" required minlength="10" autofocus>
+          <input id="password" name="password" type="password" autocomplete="new-password" required minlength="10" autofocus<%~ aria('password') %>>
           <% if (errors.password) { %>
-            <div class="field-error"><%= errors.password %></div>
+            <div class="field-error" id="password-error"><%= errors.password %></div>
           <% } else { %>
             <div class="hint">At least 10 characters.</div>
           <% } %>
         </div>
         <div class="field<%= err('passwordConfirm') %>">
           <label for="passwordConfirm">Confirm password</label>
-          <input id="passwordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required>
-          <% if (errors.passwordConfirm) { %><div class="field-error"><%= errors.passwordConfirm %></div><% } %>
+          <input id="passwordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required<%~ aria('passwordConfirm') %>>
+          <% if (errors.passwordConfirm) { %><div class="field-error" id="passwordConfirm-error"><%= errors.passwordConfirm %></div><% } %>
         </div>
         <div class="setup-actions">
           <button class="btn btn-primary" type="submit">Continue</button>
@@ -62,8 +64,8 @@
         <div class="field<%= err('publicBaseUrl') %>">
           <label for="publicBaseUrl">Public base URL</label>
           <input id="publicBaseUrl" name="publicBaseUrl" class="mono mono-input" autofocus
-                 value="<%= it.publicBaseUrl || '' %>" placeholder="https://podcast.example.com" required>
-          <% if (errors.publicBaseUrl) { %><div class="field-error"><%= errors.publicBaseUrl %></div><% } %>
+                 value="<%= it.publicBaseUrl || '' %>" placeholder="https://podcast.example.com" required<%~ aria('publicBaseUrl') %>>
+          <% if (errors.publicBaseUrl) { %><div class="field-error" id="publicBaseUrl-error"><%= errors.publicBaseUrl %></div><% } %>
         </div>
         <% if (it.envPrefilled) { %>
           <div class="notice info" style="margin:6px 0 22px">
@@ -93,9 +95,9 @@
         <div class="field<%= err('defaultAuthorEmail') %>">
           <label for="defaultAuthorEmail">Author email</label>
           <input id="defaultAuthorEmail" name="defaultAuthorEmail" type="email" class="mono mono-input"
-                 value="<%= it.defaultAuthorEmail || '' %>">
+                 value="<%= it.defaultAuthorEmail || '' %>"<%~ aria('defaultAuthorEmail') %>>
           <% if (errors.defaultAuthorEmail) { %>
-            <div class="field-error"><%= errors.defaultAuthorEmail %></div>
+            <div class="field-error" id="defaultAuthorEmail-error"><%= errors.defaultAuthorEmail %></div>
           <% } else { %>
             <div class="hint">Podcast directories require an owner email to verify who owns a show.</div>
           <% } %>

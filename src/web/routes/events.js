@@ -56,33 +56,48 @@ export default async function eventRoutes(fastify, { events, logger, shows, adPi
       reply.raw.write(`event: ${event}\ndata: ${payload}\n\n`);
     };
 
+    /*
+     * The strip is the same partial the rescan button swaps in, rendered here rather
+     * than assembled by hand. The partial carries the slow poll of /ui/scan-status
+     * that clears the strip when the stream dies mid-scan; the hand-built copy used
+     * to leave that out, so the first SSE message replaced a strip that could clear
+     * itself with one that could not. Rendering is asynchronous, so each strip goes
+     * out through one queue and a later event can never overtake an earlier one.
+     */
+    let queue = Promise.resolve();
+    const sendStrip = (event, scope, label) => {
+      queue = queue
+        .then(() => renderStrip(fastify, scope, label))
+        .then((html) => send(event, html))
+        .catch((err) => logger?.debug({ err }, 'could not render the scan-progress strip for the live stream'));
+    };
+    const sendAfterStrips = (event, data) => {
+      queue = queue.then(() => send(event, data)).catch(() => {});
+    };
+
     const onScanStarted = (payload) => {
       const label =
         payload.scope === 'all'
           ? 'Scanning your whole library…'
           : `Scanning ${payload.slug ?? 'show'}…`;
-      send(
-        payload.scope === 'all' ? 'scan-progress-all' : `scan-progress-${payload.showId}`,
-        progressHtml(payload.scope === 'all' ? 'all' : payload.showId, label),
-      );
+      const scope = payload.scope === 'all' ? 'all' : payload.showId;
+      sendStrip(`scan-progress-${scope}`, scope, label);
     };
 
     const onScanProgress = (payload) => {
       if (payload.scope !== 'all') return;
-      send(
-        'scan-progress-all',
-        progressHtml('all', `Scanning ${payload.title ?? payload.slug} (${payload.index} of ${payload.total})…`),
-      );
+      sendStrip('scan-progress-all', 'all', `Scanning ${payload.title ?? payload.slug} (${payload.index} of ${payload.total})…`);
     };
 
     const onScanFinished = (payload) => {
       const scope = payload.scope === 'all' ? 'all' : payload.showId;
-      // An empty swap clears the strip once the scan is done.
-      send(`scan-progress-${scope}`, '');
+      // An empty swap clears the strip once the scan is done — queued behind any
+      // strip still rendering, or the clear would arrive before what it clears.
+      sendAfterStrips(`scan-progress-${scope}`, '');
       // These are used as triggers (hx-trigger="sse:scan-finished-…"), where the
       // payload is irrelevant — only the event name matters.
-      if (payload.showId) send(`scan-finished-${payload.showId}`, 'done');
-      if (payload.scope === 'all') send('scan-finished-all', 'done');
+      if (payload.showId) sendAfterStrips(`scan-finished-${payload.showId}`, 'done');
+      if (payload.scope === 'all') sendAfterStrips('scan-finished-all', 'done');
     };
 
     /*
@@ -147,10 +162,24 @@ export default async function eventRoutes(fastify, { events, logger, shows, adPi
   });
 }
 
+/**
+ * The scan-progress strip for the stream: partials/scan-progress.eta, the one the
+ * rescan buttons use, so the two cannot drift apart. The hand-written copy below is
+ * the fallback if rendering fails, and carries the same polling backstop.
+ */
+export async function renderStrip(fastify, scope, label) {
+  try {
+    return await fastify.view('partials/scan-progress.eta', { scope, label });
+  } catch {
+    return progressHtml(scope, label);
+  }
+}
+
 function progressHtml(scope, label) {
-  return `<div class="scan-progress" id="scan-progress" role="status" aria-live="polite" sse-swap="scan-progress-${escapeHtml(
+  const safeScope = escapeHtml(String(scope));
+  return `<div class="scan-progress" id="scan-progress" role="status" aria-live="polite" sse-swap="scan-progress-${safeScope}" hx-get="/ui/scan-status?scope=${encodeURIComponent(
     String(scope),
-  )}" hx-swap="outerHTML"><span class="scan-progress__dot" aria-hidden="true"></span><span class="scan-progress__status">${escapeHtml(
+  )}" hx-trigger="load delay:2500ms" hx-swap="outerHTML"><span class="scan-progress__dot" aria-hidden="true"></span><span class="scan-progress__status">${escapeHtml(
     label,
   )}</span><span class="scan-progress__bar" aria-hidden="true"><i></i></span></div>`;
 }

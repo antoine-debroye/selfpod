@@ -13,7 +13,7 @@
   });
 %>
 <div class="form-card" style="margin-bottom:18px">
-  <div class="ftitle">Requests over time</div>
+  <h2 class="ftitle">Requests over time</h2>
   <div class="fdesc">
     Downloads and streams stacked, <%= it.range.lede %>. Still requests, not listens.
   </div>

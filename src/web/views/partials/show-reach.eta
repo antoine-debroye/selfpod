@@ -6,7 +6,7 @@
 <section class="form-card reach-card">
   <div class="episode-table__head" style="justify-content:space-between">
     <div>
-      <div class="ftitle" style="margin:0">Reach</div>
+      <h2 class="ftitle" style="margin:0">Reach</h2>
       <div class="fdesc" style="margin:2px 0 0">
         <% if (s.lastAt) { %>
           Last episode fetch <%= it.helpers.relativeTime(s.lastAt) %>.

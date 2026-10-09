@@ -9,7 +9,7 @@
   </div>
 <% } else if (preview) { %>
   <div class="form-card" style="margin-top:18px">
-    <div class="ftitle"><%= preview.feed.title || 'That feed' %></div>
+    <h2 class="ftitle"><%= preview.feed.title || 'That feed' %></h2>
     <div class="fdesc">
       <%= preview.matchCount %> of the <%= preview.items.length %> most recent
       <%= preview.items.length === 1 ? 'episode' : 'episodes' %> match your rules.

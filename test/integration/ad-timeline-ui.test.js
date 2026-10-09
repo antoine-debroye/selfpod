@@ -324,7 +324,7 @@ describe('the rest of the app', () => {
     assert.match(table, /<th scope="col">Adverts<\/th>/);
     for (const episode of server.episodes.listByShow(show.id)) {
       assert.ok(
-        table.includes(`<a class="cut-pill cut-pill--waiting" href="/shows/${show.slug}/adverts#ep-${episode.id}"`),
+        table.includes(`<a class="cut-pill cut-pill--waiting" href="/shows/${show.slug}/episodes/${episode.id}#episode-cuts"`),
         `no pill for ${episode.filename}`,
       );
     }

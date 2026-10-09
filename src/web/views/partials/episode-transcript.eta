@@ -14,7 +14,7 @@
          hx-get="<%= base %>"
          hx-trigger="sse:transcript-<%= episode.id %> from:body<%= tx.state === 'listening' ? ', load delay:10s' : '' %>"
          hx-swap="outerHTML"><% } %>
-  <div class="<%= embedded ? 'ds-caption' : 'ftitle' %>">What SelfPod heard</div>
+  <% if (embedded) { %><div class="ds-caption">What SelfPod heard</div><% } else { %><h2 class="ftitle">What SelfPod heard</h2><% } %>
   <% if (tx.state === 'off') { %>
     <p class="muted">SelfPod is not listening to this show. Turn it on from the show's <a href="/shows/<%= encodeURIComponent(show.slug) %>/adverts">Adverts</a> page.</p>
   <% } else if (tx.state === 'unsupported') { %>
@@ -39,7 +39,8 @@
       <% } %>
       <% if (allWords.length) { %>
         <form class="tx__teach" method="post" action="<%= base %>/teach" hx-post="<%= base %>/teach"
-              hx-target="<%= embedded ? '#episode-cuts' : '#episode-transcript' %>" hx-swap="outerHTML">
+              hx-target="<%= embedded ? '#episode-cuts' : '#episode-transcript' %>" hx-swap="outerHTML"
+              hx-indicator="find [type=submit]" hx-disabled-elt="find [type=submit]" hx-sync="this:drop">
           <div class="tx__range muted" data-tx-range aria-live="polite"></div>
           <div class="tx__teach-row">
             <label for="teach-start-<%= episode.id %>">From</label>

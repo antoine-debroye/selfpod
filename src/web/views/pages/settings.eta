@@ -10,7 +10,7 @@
 </div>
 
 <section class="form-card">
-  <div class="ftitle">Public address</div>
+  <h2 class="ftitle">Public address</h2>
   <div class="fdesc">Every URL in every feed is built from this. It is the address your reverse proxy or
     tunnel serves SelfPod on.</div>
   <div id="setting-publicBaseUrl">
@@ -51,7 +51,7 @@
 </section>
 
 <section class="form-card">
-  <div class="ftitle">Library</div>
+  <h2 class="ftitle">Library</h2>
   <div class="fdesc">How SelfPod notices new audio.</div>
 
   <div id="setting-rescanIntervalSeconds">
@@ -76,7 +76,7 @@
 
   <div class="set-row">
     <div class="info">
-      <div class="t">Live file detection</div>
+      <div class="t" id="watcher-enabled-title">Live file detection</div>
       <div class="d">
         Watches the folder for changes so new files appear within seconds. Falls back to periodic
         scanning on its own when a volume does not deliver file events.
@@ -103,7 +103,12 @@
     <form method="post" action="/ui/settings/watcher"
           hx-post="/ui/settings/watcher" hx-target="closest .set-row" hx-swap="outerHTML">
       <div class="toggle<%= s.watcherEnabled ? ' on' : '' %>">
+        <%
+          /* The visible switch is a styled label that is hidden from assistive
+             technology, so the row's title is the switch's name. */
+        %>
         <input type="checkbox" id="watcher-enabled" name="watcherEnabled" role="switch" class="switch-input"
+               aria-labelledby="watcher-enabled-title"
                value="1"<%= s.watcherEnabled ? ' checked' : '' %> data-submit-on-change>
         <label class="switch" for="watcher-enabled" aria-hidden="true"></label>
         <span class="tl" data-toggle-label>
@@ -116,7 +121,7 @@
 
   <div class="set-row">
     <div class="info">
-      <div class="t">Follow podcast feeds</div>
+      <div class="t" id="subscriptions-enabled-title">Follow podcast feeds</div>
       <div class="d">
         Lets SelfPod check a remote podcast feed and download the episodes matching rules you set,
         into a show of your own. You choose the rules per show, on that show's page.
@@ -129,7 +134,8 @@
           hx-post="/ui/settings/subscriptions" hx-target="closest .set-row" hx-swap="outerHTML">
       <div class="toggle<%= s.subscriptionsEnabled ? ' on' : '' %>">
         <input type="checkbox" id="subscriptions-enabled" name="subscriptionsEnabled" role="switch"
-               class="switch-input" value="1"<%= s.subscriptionsEnabled ? ' checked' : '' %>
+               class="switch-input" aria-labelledby="subscriptions-enabled-title"
+               value="1"<%= s.subscriptionsEnabled ? ' checked' : '' %>
                data-submit-on-change>
         <label class="switch" for="subscriptions-enabled" aria-hidden="true"></label>
         <span class="tl" data-toggle-label><%= s.subscriptionsEnabled ? 'On' : 'Off' %></span>
@@ -144,7 +150,7 @@
       <div class="d">Re-reads every file, including a full content re-check. Use this if a file changed
         without its size or timestamp changing.</div>
     </div>
-    <button class="btn btn-ghost btn-sm" type="button"
+    <button class="btn btn-ghost btn-sm" type="button" hx-disabled-elt="this" hx-sync="this:drop"
             hx-post="/ui/rescan-all" hx-target="#scan-progress-slot" hx-swap="innerHTML">Rescan all</button>
   </div>
 </section>
@@ -152,7 +158,7 @@
 <div id="scan-progress-slot"></div>
 
 <section class="form-card">
-  <div class="ftitle">Defaults for new shows</div>
+  <h2 class="ftitle">Defaults for new shows</h2>
   <div class="fdesc">Used when a folder appears without a <span class="mono">show.json</span>.</div>
   <div id="setting-defaultAuthorName">
     <%~ include('../partials/settings-row', {
@@ -195,7 +201,7 @@
 </section>
 
 <section class="form-card">
-  <div class="ftitle">Security</div>
+  <h2 class="ftitle">Security</h2>
   <div class="set-row">
     <div class="info">
       <div class="t">Admin password</div>
@@ -222,7 +228,7 @@
 </section>
 
 <section class="form-card">
-  <div class="ftitle">This container</div>
+  <h2 class="ftitle">This container</h2>
   <div class="fdesc">Read-only. These come from the environment, and everything stateful lives in one volume —
     copy <code><%= r.dataDir %></code> to another machine and your instance moves with it.</div>
   <div class="set-row">

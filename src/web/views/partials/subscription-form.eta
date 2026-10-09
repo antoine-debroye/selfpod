@@ -4,6 +4,8 @@
   const errors = it.errors || {};
   const values = it.values || {};
   const err = (field) => errors[field] ? ' is-invalid' : '';
+  /* A refused field is marked invalid and names its error text as its description. */
+  const aria = (field, id) => errors[field] ? ` aria-invalid="true" aria-describedby="${id}-error"` : '';
   const action = `/ui/shows/${encodeURIComponent(show.slug)}/subscription`;
   /* Minutes in the form, seconds in the database. Nobody thinks about episode
      length in seconds, and asking them to is how a 20-minute minimum gets typed
@@ -14,7 +16,7 @@
 <form class="form-card" id="subscription-form"
       method="post" action="<%= action %>"
       hx-post="<%= action %>" hx-target="#subscription-form" hx-swap="outerHTML">
-  <div class="ftitle"><%= sub ? 'Following a feed' : 'Follow a feed' %></div>
+  <h2 class="ftitle"><%= sub ? 'Following a feed' : 'Follow a feed' %></h2>
   <div class="fdesc">
     SelfPod checks this feed on a schedule and downloads only the episodes that match your
     rules, into this show's folder. Everything it takes becomes an ordinary episode —
@@ -25,9 +27,9 @@
     <label for="f-feed-url">Feed address</label>
     <input id="f-feed-url" name="feedUrl" class="mono mono-input" required maxlength="2048"
            placeholder="https://example.com/feed.xml"
-           value="<%= val('feedUrl', sub ? sub.feedUrl : '') %>">
+           value="<%= val('feedUrl', sub ? sub.feedUrl : '') %>"<%~ aria('feedUrl', 'f-feed-url') %>>
     <% if (errors.feedUrl) { %>
-      <div class="field-error"><%= errors.feedUrl %></div>
+      <div class="field-error" id="f-feed-url-error"><%= errors.feedUrl %></div>
     <% } else { %>
       <div class="hint">
         The address of the feed itself, not the show's home page. Use this only for feeds you
@@ -57,23 +59,23 @@
     <div class="field<%= err('minDurationMinutes') %>" style="margin:0">
       <label for="f-min">Shortest episode (minutes)</label>
       <input id="f-min" name="minDurationMinutes" type="number" min="0" max="1440"
-             value="<%= val('minDurationMinutes', sub ? toMinutes(sub.minDurationSeconds) : '') %>">
-      <% if (errors.minDurationMinutes) { %><div class="field-error"><%= errors.minDurationMinutes %></div><% } %>
+             value="<%= val('minDurationMinutes', sub ? toMinutes(sub.minDurationSeconds) : '') %>"<%~ aria('minDurationMinutes', 'f-min') %>>
+      <% if (errors.minDurationMinutes) { %><div class="field-error" id="f-min-error"><%= errors.minDurationMinutes %></div><% } %>
     </div>
     <div class="field<%= err('maxDurationMinutes') %>" style="margin:0">
       <label for="f-max">Longest episode (minutes)</label>
       <input id="f-max" name="maxDurationMinutes" type="number" min="0" max="1440"
-             value="<%= val('maxDurationMinutes', sub ? toMinutes(sub.maxDurationSeconds) : '') %>">
-      <% if (errors.maxDurationMinutes) { %><div class="field-error"><%= errors.maxDurationMinutes %></div><% } %>
+             value="<%= val('maxDurationMinutes', sub ? toMinutes(sub.maxDurationSeconds) : '') %>"<%~ aria('maxDurationMinutes', 'f-max') %>>
+      <% if (errors.maxDurationMinutes) { %><div class="field-error" id="f-max-error"><%= errors.maxDurationMinutes %></div><% } %>
     </div>
   </div>
 
   <div class="field<%= err('backfillCount') %>">
     <label for="f-backfill">On the first check, fetch this many existing episodes</label>
     <input id="f-backfill" name="backfillCount" type="number" min="0" max="100" style="max-width:120px"
-           value="<%= val('backfillCount', sub ? sub.backfillCount : 5) %>">
+           value="<%= val('backfillCount', sub ? sub.backfillCount : 5) %>"<%~ aria('backfillCount', 'f-backfill') %>>
     <% if (errors.backfillCount) { %>
-      <div class="field-error"><%= errors.backfillCount %></div>
+      <div class="field-error" id="f-backfill-error"><%= errors.backfillCount %></div>
     <% } else { %>
       <div class="hint">
         The most recent ones that match your rules.

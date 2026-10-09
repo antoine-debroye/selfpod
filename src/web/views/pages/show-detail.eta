@@ -84,7 +84,7 @@
 <%~ include('../partials/episode-table', { show, episodes: show.episodes, cuts: it.cuts, helpers: it.helpers }) %>
 
 <section class="form-card danger-zone">
-  <div class="ftitle">Danger zone</div>
+  <h2 class="ftitle">Danger zone</h2>
   <div class="fdesc">Nothing here touches your audio unless you explicitly ask it to.</div>
 
   <div class="set-row">

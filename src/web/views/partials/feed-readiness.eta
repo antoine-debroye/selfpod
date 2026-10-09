@@ -37,7 +37,7 @@
      hx-swap="outerHTML">
   <div class="episode-table__head" style="justify-content:space-between">
     <div>
-      <div class="ftitle" style="margin:0">Directory readiness</div>
+      <h2 class="ftitle" style="margin:0">Directory readiness</h2>
       <div class="fdesc" style="margin:2px 0 0">
         <% if (blocking.length) { %>
           <%= blocking.length %> thing<%= blocking.length === 1 ? '' : 's' %> here would stop Apple

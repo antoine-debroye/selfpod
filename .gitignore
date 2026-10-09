@@ -1,5 +1,7 @@
 node_modules/
 .devdata/
+# A second dev instance beside the first (another port, another data folder).
+.devdata-*/
 .dockerdata/
 *.log
 .DS_Store

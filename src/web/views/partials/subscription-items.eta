@@ -18,7 +18,7 @@
 %>
 <div class="form-card" id="subscription-items">
   <div class="episode-table__head">
-    <div class="ftitle" style="margin:0">Every episode SelfPod has seen</div>
+    <h2 class="ftitle" style="margin:0">Every episode SelfPod has seen</h2>
     <span class="badge badge-mute"><%= counts.total || 0 %></span>
     <span class="episode-table__order">newest first ↓</span>
   </div>

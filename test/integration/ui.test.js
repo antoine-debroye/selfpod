@@ -1012,3 +1012,203 @@ describe('defaults for new shows', () => {
     );
   });
 });
+
+/*
+ * The audit of 2026-10-09, section 4: things a person could do on these pages that
+ * gave no visible answer, or the wrong one. Each test here asserts on the behaviour
+ * of the response — the header that moves the browser, the toast that rides along,
+ * the flag that lights the sidebar — rather than on the markup being there.
+ */
+describe('an action taken on the page it then has to leave', () => {
+  it('removing an episode from its own page sends the browser to the show, with the message', async () => {
+    const show = await seed('leaving', ['sample.mp3']);
+    const episode = server.episodes.listByShow(show.id)[0];
+    await server.login();
+
+    // The modal opened on the episode page carries where it came from; the one opened
+    // from the table does not.
+    const fromEpisode = await server.get(`/ui/modals/delete-episode/${episode.id}?from=episode`, { 'hx-request': 'true' });
+    assert.ok(fromEpisode.body.includes(`name="returnTo" value="episode:${episode.id}"`), 'the modal should say it was opened on the episode page');
+    const fromTable = await server.get(`/ui/modals/delete-episode/${episode.id}`, { 'hx-request': 'true' });
+    assert.ok(!fromTable.body.includes('name="returnTo"'), 'opened from the table, there is nowhere to go');
+
+    const response = await server.post(`/ui/episodes/${episode.id}/remove`, { returnTo: `episode:${episode.id}` }, { 'hx-request': 'true' });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['hx-redirect'], `/shows/${show.slug}`, 'the episode page is about something that is now gone');
+    assert.equal(response.headers['hx-retarget'], undefined, 'no re-target at #episode-table, which that page does not have');
+    assert.equal(server.episodes.get(episode.id).status, 'removed');
+
+    const landed = await server.get(`/shows/${show.slug}`, { accept: 'text/html' });
+    assert.ok(landed.body.includes('id="flash-data"'), 'the message waits on the flash for the page the browser goes to');
+    assert.ok(landed.body.includes('Removed from the feed'));
+  });
+
+  it('deleting the file from the episode page does the same; from the table it swaps the table', async () => {
+    const show = await seed('leaving-too', ['sample.mp3', 'sample.m4a']);
+    const [first, second] = server.episodes.listByShow(show.id);
+    await server.login();
+
+    const fromPage = await server.post(`/ui/episodes/${first.id}/delete-file`, { confirm: '1', returnTo: `episode:${first.id}` }, { 'hx-request': 'true' });
+    assert.equal(fromPage.statusCode, 200);
+    assert.equal(fromPage.headers['hx-redirect'], `/shows/${show.slug}`);
+    assert.equal(server.episodes.get(first.id), null, 'and the file really went');
+    const landed = await server.get(`/shows/${show.slug}`, { accept: 'text/html' });
+    assert.ok(landed.body.includes('Deleted'), 'the warning-level message reaches the show page');
+
+    const fromTable = await server.post(`/ui/episodes/${second.id}/delete-file`, { confirm: '1' }, { 'hx-request': 'true' });
+    assert.equal(fromTable.headers['hx-retarget'], '#episode-table', 'the show page keeps its in-place table swap');
+    assert.equal(fromTable.headers['hx-redirect'], undefined);
+  });
+});
+
+describe('the password-changed notice', () => {
+  it('arrives as a real toast, inside the container that out-of-band swaps need', async () => {
+    await server.login();
+    const response = await server.post(
+      '/ui/settings/password',
+      { currentPassword: 'test-password-1234', password: 'a-brand-new-password', passwordConfirm: 'a-brand-new-password' },
+      { 'hx-request': 'true' },
+    );
+    assert.equal(response.statusCode, 200);
+    // htmx inserts the *children* of an oob element. The oob attribute therefore has
+    // to sit on a wrapper around the toast, not on the toast itself — which is what
+    // this response used to do, leaving bare text and a × with nothing to close.
+    assert.match(response.body, /<div id="toast-root" hx-swap-oob="beforeend:#toast-root">\s*<div class="toast toast--ok" role="status">/);
+    assert.ok(response.body.includes('Password changed.'));
+    assert.ok(response.body.includes('data-toast-close'), 'the × is wired to the dismiss handler');
+    assert.ok(!/class="toast[^"]*"[^>]*hx-swap-oob/.test(response.body), 'the oob attribute must not be on the toast itself');
+  });
+});
+
+describe('the new-show form', () => {
+  it('opens with an empty name, and keeps what was typed when it is refused', async () => {
+    await server.login();
+    const fresh = await server.get('/shows/new', { accept: 'text/html' });
+    assert.match(fresh.body, /<input id="title" name="title" value=""/, 'the page title must not leak into the field');
+
+    const refused = await server.request({
+      method: 'POST',
+      url: '/shows/new',
+      payload: { title: 'My Typed Show', slug: 'not a folder name' },
+      headers: { accept: 'text/html' },
+    });
+    assert.equal(refused.statusCode, 400, refused.body.slice(0, 200));
+    assert.ok(refused.body.includes('value="My Typed Show"'), 'the name typed is still in the field');
+    assert.ok(refused.body.includes('value="not a folder name"'), 'and so is the folder name');
+    assert.ok(refused.body.includes('aria-invalid="true"'), 'the refused field says so to assistive technology');
+  });
+});
+
+describe('the sidebar', () => {
+  it('highlights the dashboard on the dashboard, and nowhere else', async () => {
+    await server.login();
+    const home = await server.get('/', { accept: 'text/html' });
+    assert.match(home.body, /class="nav-item active" href="\/" aria-current="page"/);
+    const settings = await server.get('/settings', { accept: 'text/html' });
+    assert.doesNotMatch(settings.body, /class="nav-item active" href="\/"/);
+    assert.match(settings.body, /class="nav-item active" href="\/settings" aria-current="page"/);
+  });
+});
+
+describe('the scan-progress strip sent over the live stream', () => {
+  it('is the same strip the rescan button gets, polling backstop included', async () => {
+    const { renderStrip } = await import('../../src/web/routes/events.js');
+    const streamed = await renderStrip(server.app, 'all', 'Scanning your whole library…');
+    assert.match(streamed, /hx-get="\/ui\/scan-status\?scope=all"/, 'without the poll a dropped stream leaves the strip forever');
+    assert.match(streamed, /hx-trigger="load delay:2500ms"/);
+    assert.match(streamed, /sse-swap="scan-progress-all"/);
+    assert.ok(streamed.includes('Scanning your whole library…'));
+
+    await server.login();
+    const clicked = await server.post('/ui/rescan-all', {}, { 'hx-request': 'true' });
+    for (const attribute of ['hx-get="/ui/scan-status?scope=all"', 'hx-trigger="load delay:2500ms"', 'sse-swap="scan-progress-all"', 'id="scan-progress"']) {
+      assert.ok(clicked.body.includes(attribute), `the button's strip has ${attribute}`);
+      assert.ok(streamed.includes(attribute), `the streamed strip has ${attribute}`);
+    }
+  });
+});
+
+describe('settings say when they were saved', () => {
+  it('a toggle sets the message before the refresh it asks for', async () => {
+    await server.login();
+    const response = await server.post('/ui/settings/watcher', { watcherEnabled: '1' }, { 'hx-request': 'true' });
+    assert.equal(response.headers['hx-refresh'], 'true');
+    const reloaded = await server.get('/settings', { accept: 'text/html' });
+    assert.ok(reloaded.body.includes('id="flash-data"'), 'the refresh used to arrive with nothing to say');
+    assert.ok(reloaded.body.includes('Live file detection switched on.'));
+
+    const off = await server.post('/ui/settings/subscriptions', { subscriptionsEnabled: '0' }, { 'hx-request': 'true' });
+    assert.equal(off.headers['hx-refresh'], 'true');
+    assert.ok((await server.get('/settings', { accept: 'text/html' })).body.includes('Feed following switched off.'));
+  });
+
+  it('an inline save comes back with the row and a toast', async () => {
+    await server.login();
+    const saved = await server.post('/ui/settings/rescanIntervalSeconds', { value: '10m' }, { 'hx-request': 'true' });
+    assert.equal(saved.statusCode, 200);
+    assert.ok(saved.body.includes('id="set-edit-rescanIntervalSeconds"'), 'back to the display row');
+    assert.ok(saved.body.includes('hx-swap-oob="beforeend:#toast-root"'), 'with a toast riding along');
+    assert.ok(saved.body.includes('Fallback rescan interval updated.'));
+  });
+});
+
+describe('a check started from the Adverts page', () => {
+  it('answers at once with the panel and a note, and runs the pass behind it', async () => {
+    const show = await seed('checked', ['sample.mp3']);
+    server.db.prepare('UPDATE shows SET ad_trim_mode = ? WHERE id = ?').run('review', show.id);
+    await server.login();
+
+    const response = await server.post(`/ui/shows/${show.slug}/ad-detect`, {}, { 'hx-request': 'true' });
+    assert.equal(response.statusCode, 200);
+    assert.ok(response.body.includes('id="cuts-panel"'), 'the panel comes back');
+    assert.ok(response.body.includes('Checking this show now'), 'and says the check has started');
+    assert.ok(response.body.includes('hx-swap-oob="beforeend:#toast-root"'));
+    assert.ok(response.body.includes('id="cuts-check-now"'), 'the button is there to be held while it works');
+
+    // The pass was started, not skipped: the pipeline is busy with this show, or has
+    // already recorded a run for it, by the time the response is out.
+    const ran = await server.adPipeline.processShow(show.id);
+    assert.ok(ran && !ran.skipped, 'the pass over this show ran');
+    const after = await server.get(`/ui/shows/${show.slug}/ad-panel`, { 'hx-request': 'true' });
+    assert.equal(after.statusCode, 200);
+  });
+});
+
+describe('what assistive technology is told', () => {
+  it('names the settings switches after their rows', async () => {
+    await server.login();
+    const body = (await server.get('/settings', { accept: 'text/html' })).body;
+    for (const key of ['watcher-enabled', 'subscriptions-enabled']) {
+      assert.match(body, new RegExp(`id="${key}"[^>]*aria-labelledby="${key}-title"`), `${key} has no accessible name`);
+      assert.ok(body.includes(`id="${key}-title"`), `the title ${key} points at must exist`);
+    }
+  });
+
+  it('uses real headings for card titles, so a page is not an h1 and nothing else', async () => {
+    const show = await seed();
+    await server.login();
+    for (const [url, heading] of [['/settings', 'Library'], [`/shows/${show.slug}`, 'Episodes'], ['/stats', 'Access log']]) {
+      const body = (await server.get(url, { accept: 'text/html' })).body;
+      assert.ok(body.includes(`<h2 class="ftitle">${heading}</h2>`) || body.includes(`<h2 class="ftitle" style="margin:0">${heading}</h2>`), `${url}: "${heading}" should be an h2`);
+      assert.ok(!body.includes('<div class="ftitle'), `${url} still has a div for a card title`);
+    }
+  });
+
+  it('marks the current breadcrumb, and puts the cursor on the password after a refused sign-in', async () => {
+    await server.login();
+    const settings = await server.get('/settings', { accept: 'text/html' });
+    assert.ok(settings.body.includes('<b aria-current="page">Settings</b>'));
+
+    const refused = await server.app.inject({
+      method: 'POST',
+      url: '/login',
+      payload: { username: 'admin', password: 'not-the-password', next: '/' },
+      headers: { accept: 'text/html', 'sec-fetch-site': 'same-origin' },
+    });
+    assert.equal(refused.statusCode, 401);
+    assert.match(refused.body, /id="password"[^>]*autofocus/, 'the field that was wrong gets the cursor');
+    assert.match(refused.body, /id="password"[^>]*aria-invalid="true"/);
+    assert.match(refused.body, /id="password"[^>]*aria-describedby="login-error"/);
+    assert.doesNotMatch(refused.body, /id="username"[^>]*autofocus/, 'and the username, already filled in, does not');
+  });
+});

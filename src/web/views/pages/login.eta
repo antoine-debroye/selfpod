@@ -22,7 +22,7 @@
     </p>
 
     <% if (it.error) { %>
-      <div class="notice err" role="alert" style="margin-bottom:18px">
+      <div class="notice err" role="alert" id="login-error" style="margin-bottom:18px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
         <div><%= it.error %></div>
       </div>
@@ -30,13 +30,18 @@
 
     <form method="post" action="/login">
       <input type="hidden" name="next" value="<%= it.next || '/' %>">
+      <%
+        /* After a refused sign-in the username is already filled in, so the cursor
+           goes to the password — the field that is empty and almost always the one
+           that was wrong. */
+      %>
       <div class="field">
         <label for="username">Username</label>
-        <input id="username" name="username" value="<%= it.username || '' %>" autocomplete="username" autofocus required>
+        <input id="username" name="username" value="<%= it.username || '' %>" autocomplete="username"<%= it.error ? '' : ' autofocus' %> required>
       </div>
-      <div class="field">
+      <div class="field<%= it.error ? ' is-invalid' : '' %>">
         <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <input id="password" name="password" type="password" autocomplete="current-password"<%~ it.error ? ' autofocus aria-invalid="true" aria-describedby="login-error"' : '' %> required>
       </div>
       <button class="btn btn-primary login-submit" type="submit">Sign in</button>
     </form>

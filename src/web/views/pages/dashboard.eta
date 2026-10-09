@@ -21,7 +21,7 @@
 
 <% if (it.pausedShows.length) { %>
   <section class="form-card danger-zone" style="margin-top:22px">
-    <div class="ftitle">Paused shows</div>
+    <h2 class="ftitle">Paused shows</h2>
     <div class="fdesc">
       These folders are no longer in <code><%= it.showsDir %></code>. Their feeds are paused, but nothing has
       been deleted — put the folder back and they resume with the same episode identities.
