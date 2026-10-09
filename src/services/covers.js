@@ -276,6 +276,7 @@ export function createCovers({ config, logger }) {
       }
       const tmp = join(dir, `.${safeScope}-${width}-${randomUUID()}.tmp`);
       try {
+        const sharp = await loadSharp();
         await mkdir(dir, { recursive: true });
         await sharp(filePath, SHARP_LIMITS)
           .rotate()
