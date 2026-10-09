@@ -28,9 +28,10 @@ export async function buildApp(services) {
     loggerInstance: logger,
     // The app always runs behind the user's own reverse proxy or tunnel, so
     // X-Forwarded-Proto has to be honoured for Secure cookies and correct URLs.
-    // Note this makes `request.ip` client-influenced — see plugins/auth.js for why
-    // rate limiting deliberately does not use it.
-    trustProxy: true,
+    // Every hop is trusted by default, which makes `request.ip` client-influenced —
+    // see plugins/auth.js for why rate limiting deliberately does not use it — and
+    // TRUST_PROXY narrows it to the proxy's own address (config.js).
+    trustProxy: config.trustProxy,
     bodyLimit: 2 * 1024 * 1024, // form posts only; uploads stream via multipart
 
     // Episode filenames are route parameters, and Fastify rejects any parameter

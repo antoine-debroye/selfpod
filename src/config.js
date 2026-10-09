@@ -94,6 +94,63 @@ function readAllowedPrivateHosts(raw, { name }) {
   return { value: Object.freeze(allowed), warnings };
 }
 
+/** The range names proxy-addr (what Fastify's `trustProxy` is built on) understands. */
+const TRUST_PROXY_RANGE_NAMES = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+/**
+ * Parses TRUST_PROXY into what Fastify's `trustProxy` option takes: `true` (every hop
+ * is trusted — the default, and what SelfPod always did), `false` (no hop is), or a
+ * list of the addresses and CIDR ranges that proxies arrive from.
+ *
+ * Why it exists: with every hop trusted, whoever can open a connection to port 8080
+ * directly — anyone on the LAN, given compose publishes it on every interface — can
+ * set X-Forwarded-Proto and X-Forwarded-For themselves, and SelfPod believes them.
+ * Nothing security-relevant keys off those headers today (plugins/auth.js explains
+ * why rate limiting never used `request.ip`), so the default stays open; narrowing it
+ * to the tunnel's or reverse proxy's address closes the door anyway.
+ *
+ * A list with an entry that is not an address drops that entry and says so. A list
+ * with nothing usable in it trusts no hop at all rather than falling back to every
+ * hop: the operator plainly meant to stop trusting everyone, and trusting nobody
+ * costs only the Secure flag on a tunnel's cookie, which browsers do not need.
+ */
+function readTrustProxy(raw, { name }) {
+  const value = String(raw ?? '').trim();
+  if (value === '' || value.toLowerCase() === 'true') return { value: true, warnings: [] };
+  if (value.toLowerCase() === 'false') return { value: false, warnings: [] };
+
+  const warnings = [];
+  const entries = [];
+  for (const entry of value.split(',')) {
+    const item = entry.trim();
+    if (!item) continue;
+    if (TRUST_PROXY_RANGE_NAMES.has(item.toLowerCase())) {
+      entries.push(item.toLowerCase());
+      continue;
+    }
+    const [address, prefix, ...rest] = item.split('/');
+    const bare = address.startsWith('[') && address.endsWith(']') ? address.slice(1, -1) : address;
+    const family = isIP(bare);
+    const prefixOk =
+      prefix === undefined || (/^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128));
+    if (family === 0 || rest.length > 0 || !prefixOk) {
+      warnings.push(
+        `${name} entry "${item}" is not an IP address or CIDR range and was ignored. List the addresses your proxy connects from, like 172.18.0.5 or 10.0.0.0/8, or use true or false.`,
+      );
+      continue;
+    }
+    entries.push(prefix === undefined ? bare : `${bare}/${prefix}`);
+  }
+
+  if (entries.length === 0) {
+    warnings.push(
+      `${name} ("${value}") names no usable address, so no proxy is trusted: forwarded headers are ignored and every request is treated as arriving directly. Fix the value, or set TRUST_PROXY=true to trust every hop as before.`,
+    );
+    return { value: false, warnings };
+  }
+  return { value: Object.freeze(entries), warnings };
+}
+
 const LOG_LEVELS = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']);
 
 export function loadConfig(env = process.env) {
@@ -274,6 +331,12 @@ export function loadConfig(env = process.env) {
   });
   warnings.push(...privateHosts.warnings);
   config.allowedPrivateFeedHosts = privateHosts.value;
+
+  // Env-only for the same reason: it decides whose word on "this came over HTTPS from
+  // that address" is believed, and that should not be changeable from a web page.
+  const trustProxy = readTrustProxy(env.TRUST_PROXY, { name: 'TRUST_PROXY' });
+  warnings.push(...trustProxy.warnings);
+  config.trustProxy = trustProxy.value;
 
   if (!isAbsolute(config.dataDir)) {
     throw new Error(`DATA_DIR must be an absolute path (got "${config.dataDir}").`);

@@ -272,11 +272,12 @@ of it can be changed later in **Settings** without touching the container.
 | `SUBSCRIPTIONS_ENABLED` | off | Lets SelfPod follow remote feeds. Off by default: it is the only thing that makes SelfPod fetch from the internet. Seeds the setting on first run; after that the Settings page wins. |
 | `REMOTE_POLL_INTERVAL_SECONDS` | `3600` | How often to check a followed feed. Clamped to 15 minutes – 24 hours — this is someone else's server. |
 | `ALLOW_PRIVATE_FEED_HOSTS` | *(empty)* | Comma-separated **IP addresses** that may be followed despite being private, e.g. a feed on your own NAS. Exempts only the addresses listed, and only from the address and port rules. Env-only on purpose: it weakens a guarantee, so changing it should mean touching the container. |
+| `TRUST_PROXY` | `true` | Whose `X-Forwarded-*` headers to believe: `true` (every connection — what SelfPod always did), `false` (none), or a comma-separated list of the addresses and ranges your proxy connects from, e.g. `172.18.0.0/16` or `loopback`. Narrow it when something other than your proxy can reach port 8080 directly — the default compose file publishes it on every interface — so a LAN client cannot claim to have arrived over HTTPS from somewhere else. Env-only, for the same reason as the row above. |
 | `ADMIN_USERNAME` | `admin` | First-run only. |
 | `ADMIN_PASSWORD` | — | First-run only. If unset, a random password is generated and printed once to the logs. |
 | `SESSION_SECRET` | generated | First-run only; afterwards it lives in the database. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
-| `WHISPER_MODEL` | `base` | Which speech model hears the words: `base` or `small` (both ship in the image), or a path to a whisper.cpp model file. `small` is about twice the work and markedly better in French. |
+| `WHISPER_MODEL` | `base` | Which speech model hears the words: `base` or `small` (both ship in the published image; see [Building your own image](#building-your-own-image) to ship one), or a path to a whisper.cpp model file. `small` is about twice the work and markedly better in French. |
 | `WHISPER_CLI` | *(the image's own)* | Path to a `whisper-cli` binary, for a build of your own. The image picks its AVX2 or SSE4.2 build for the CPU at boot. |
 | `WHISPER_THREADS` | half the logical cores, less one (at least 2) | Threads the recogniser may use. An eight-core, sixteen-thread i7 gets 7. |
 | `WHISPER_NICE` | `10` | How politely the recogniser yields the processor, 0 (normal) to 19. It only matters when something else wants the processor — on a NAS, usually a listener's download. |
@@ -751,6 +752,24 @@ npm run dev                    # http://localhost:8080, data in ./.devdata
 docker build -t selfpod:test .
 ./test/acceptance/run.sh       # 32 end-to-end checks against a real container
 ```
+
+### Building your own image
+
+The published image carries both speech models, `base` (60 MB) and `small` (190 MB),
+so one image serves everyone. An image built for one box that will only ever use one
+of them can leave the other out:
+
+```bash
+docker build --build-arg WHISPER_MODELS=small --build-arg WHISPER_DEFAULT_MODEL=small -t selfpod:small .
+```
+
+`WHISPER_MODELS` is the comma-separated list to bake in (default `base,small`), and
+`WHISPER_DEFAULT_MODEL` is what the container uses unless `WHISPER_MODEL` says otherwise
+(default `base`; `small` in `Dockerfile.cuda`). The default has to be one of the models
+baked in, or the build refuses and says so — an image whose default model is missing
+would start, report the recogniser unavailable, and publish every episode unheard.
+Every model that is baked in is checked against a pinned digest and proved on a
+one-second recording during the build.
 
 The acceptance script checks the behaviours that matter most: an `.m4a` appearing
 with no restart, a filename containing an emoji and curly quotes surviving into a

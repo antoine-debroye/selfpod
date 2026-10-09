@@ -15,17 +15,23 @@
 # mounts into the container at start. The build proves the CPU builds on real audio,
 # and that the CUDA build links against everything but that one library.
 # ---------------------------------------------------------------------------
-ARG CUDA_VERSION=12.6.3
-ARG UBUNTU=ubuntu22.04
-
-FROM nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU} AS build
+# CUDA 12.6.3 on Ubuntu 22.04, pinned by digest so a rebuild gets the base images that
+# were reviewed rather than whatever the tags point at that day. To bump, pick the new
+# tags and run `docker buildx imagetools inspect nvidia/cuda:<tag> --format
+# '{{.Manifest.Digest}}'` for the devel image here and the runtime image below.
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1 AS build
 
 ARG NODE_VERSION=22.23.2
 ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 # The RTX 3050 is Ampere, compute capability 8.6. Building for every architecture takes
 # several times as long and is several times the size; override for other cards.
 ARG CUDA_ARCHITECTURES=86
-ARG WHISPER_CPP_TAG=b4938
+# The commit tag b4938 pointed at when it was reviewed; the Dockerfile says how to bump
+# it, and the two must stay the same commit.
+ARG WHISPER_CPP_COMMIT=371b5a7561823ab2bb32142d2751e35e7534727b
+# Which models to bake in (the Dockerfile explains). Both by default; the GPU makes
+# `small` cheap, so an image for one GPU box could carry only that one.
+ARG WHISPER_MODELS=base,small
 ARG WHISPER_BASE_SHA256=422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898
 ARG WHISPER_SMALL_SHA256=ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb
 
@@ -44,9 +50,15 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # glibc prebuilds for better-sqlite3 and sharp; never --omit=optional (sharp's binaries are optional deps).
 RUN npm ci --omit=dev
+# Drops what better-sqlite3 carries for other platforms (the Dockerfile explains);
+# before the check, so the check proves the module loads with only what is kept.
+COPY docker/trim-node-modules.mjs ./docker/
+RUN node docker/trim-node-modules.mjs node_modules
 RUN node -e "require('better-sqlite3'); require('sharp'); console.log('native modules OK')"
 
-RUN git clone --depth 1 --branch "$WHISPER_CPP_TAG" https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp
+RUN git init -q /tmp/whisper.cpp \
+ && git -C /tmp/whisper.cpp fetch -q --depth 1 https://github.com/ggml-org/whisper.cpp "$WHISPER_CPP_COMMIT" \
+ && git -C /tmp/whisper.cpp checkout -q FETCH_HEAD
 
 ENV WHISPER_CMAKE="-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
   -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_SDL2=OFF -DWHISPER_CURL=OFF"
@@ -66,15 +78,25 @@ RUN set -e; mkdir -p /app/whisper; \
     && cp /tmp/wb2/bin/whisper-cli /app/whisper/whisper-cli-v2; \
   rm -rf /tmp/wbc /tmp/wb3 /tmp/wb2 /tmp/whisper.cpp
 
-RUN curl -fsSLo /app/whisper/ggml-base-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin \
- && echo "$WHISPER_BASE_SHA256  /app/whisper/ggml-base-q5_1.bin" | sha256sum -c - \
- && curl -fsSLo /app/whisper/ggml-small-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin \
- && echo "$WHISPER_SMALL_SHA256  /app/whisper/ggml-small-q5_1.bin" | sha256sum -c -
+# Each model named in WHISPER_MODELS is fetched and checked against its pinned digest;
+# a name with no digest here fails the build, and so does an empty list.
+RUN set -e; \
+  for model in $(printf '%s' "$WHISPER_MODELS" | tr ',' ' '); do \
+    case "$model" in \
+      base) sum="$WHISPER_BASE_SHA256";; \
+      small) sum="$WHISPER_SMALL_SHA256";; \
+      *) echo "WHISPER_MODELS names \"$model\", which this Dockerfile has no digest for (it knows base and small)." >&2; exit 1;; \
+    esac; \
+    curl -fsSLo "/app/whisper/ggml-$model-q5_1.bin" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model-q5_1.bin" \
+      && echo "$sum  /app/whisper/ggml-$model-q5_1.bin" | sha256sum -c -; \
+  done; \
+  ls /app/whisper/ggml-*.bin >/dev/null 2>&1 || { echo "WHISPER_MODELS=\"$WHISPER_MODELS\" baked no model into the image." >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Runtime stage: CUDA runtime libraries (cuBLAS, the CUDA runtime), no compilers.
 # ---------------------------------------------------------------------------
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-${UBUNTU}
+# The runtime twin of the devel image above; bump both together.
+FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04@sha256:63a18dd805367dacfb077aeced8384ab2fb569598ec5f5f5220c3f90a5c23650
 
 ENV DEBIAN_FRONTEND=noninteractive
 # util-linux: setpriv, which drops privileges as su-exec does on Alpine.
@@ -92,7 +114,8 @@ COPY --from=build /opt/node /opt/node
 ENV PATH=/opt/node/bin:$PATH
 
 WORKDIR /app
-COPY --from=build /app/node_modules ./node_modules
+# Owned by the default PUID/PGID from the start, so a default run never chowns it at boot.
+COPY --from=build --chown=1000:1000 /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/whisper ./whisper
 COPY src ./src
@@ -107,17 +130,22 @@ RUN WHISPER_SMOKE_SKIP=whisper-cli-cuda node docker/whisper-smoke.mjs \
  && if [ -n "$missing" ]; then echo "whisper-cli-cuda is missing libraries: $missing"; exit 1; fi \
  && echo "whisper-cli-cuda links (libcuda.so.1 comes from the driver at run time)"
 
+# `small` by default here: the GPU makes it cheap, and it hears French markedly better.
+# It has to be one of the models baked in, or the build refuses (the Dockerfile explains).
+ARG WHISPER_DEFAULT_MODEL=small
+RUN test -f "/app/whisper/ggml-${WHISPER_DEFAULT_MODEL}-q5_1.bin" \
+ || { echo "WHISPER_DEFAULT_MODEL=${WHISPER_DEFAULT_MODEL} is not among the models baked in ($(ls /app/whisper | grep '^ggml-' | tr '\n' ' ')). Add it to WHISPER_MODELS, or set WHISPER_DEFAULT_MODEL to one of them." >&2; exit 1; }
+
 RUN chmod +x docker/entrypoint.sh \
  && mkdir -p /data \
  && chown selfpod:selfpod /app
 
-# `small` by default here: the GPU makes it cheap, and it hears French markedly better.
 ENV NODE_ENV=production \
     PORT=8080 \
     DATA_DIR=/data \
     PUID=1000 \
     PGID=1000 \
-    WHISPER_MODEL=small \
+    WHISPER_MODEL=${WHISPER_DEFAULT_MODEL} \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 

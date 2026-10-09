@@ -524,6 +524,7 @@ the prototype by hand:
 | `SESSION_SECRET` | No | random, generated on first run and persisted in the DB | Signs admin session cookies |
 | `LOG_LEVEL` | No | `info` | `debug`/`info`/`warn`/`error` |
 | `MAX_UPLOAD_SIZE_MB` | No | `1024` | Cap for UI-based file uploads (§11.4) |
+| `TRUST_PROXY` | No | `true` | Whose `X-Forwarded-*` headers are believed: `true` (every hop), `false` (none), or a comma-separated list of the proxy's addresses and CIDR ranges (passed to Fastify's `trustProxy`). Narrow it to the tunnel's or reverse proxy's address when anything else can reach the port directly, so a LAN client cannot forge the protocol or source address. Env-only, never a setting in the UI. |
 
 Only one required volume:
 

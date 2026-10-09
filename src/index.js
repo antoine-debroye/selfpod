@@ -243,7 +243,7 @@ async function startDegradedServer(cause) {
 
   logger.error({ err: cause }, `SelfPod cannot open its database. ${detail}`);
 
-  const app = Fastify({ loggerInstance: logger, trustProxy: true });
+  const app = Fastify({ loggerInstance: logger, trustProxy: config.trustProxy });
 
   app.get('/health', async (request, reply) => {
     reply.header('access-control-allow-origin', '*').header('cache-control', 'no-store');

@@ -12,7 +12,7 @@
  * it in the shape SelfPod reads, not that it spelled the name.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const dir = process.env.WHISPER_DIR ?? '/app/whisper';
@@ -33,18 +33,21 @@ if (!binaries.length) {
 }
 
 /*
- * Every binary is proved with the default model. The larger model is proved only with
- * the fastest binary: on the SSE4.2-only build a quantised model runs through scalar
- * code and takes minutes even on a one-second file, and no box that needs that build
- * should be running the larger model — the README says so — so proving the pairing
- * would only prove the build host's patience.
+ * Every binary is proved with the smallest model shipped (`base`, unless the image was
+ * built without it — WHISPER_MODELS in the Dockerfile). Any larger model is proved only
+ * with the fastest binary: on the SSE4.2-only build a quantised model runs through
+ * scalar code and takes minutes even on a one-second file, and no box that needs that
+ * build should be running the larger model — the README says so — so proving the
+ * pairing would only prove the build host's patience.
  */
 const fastest = binaries.includes('whisper-cli-v3') ? 'whisper-cli-v3' : binaries[0];
+const smallest = [...models].sort((a, b) => statSync(join(dir, a)).size - statSync(join(dir, b)).size)[0];
 const pairs = binaries.flatMap((binary) =>
   models
-    .filter((model) => model.includes('base') || binary === fastest)
+    .filter((model) => model === smallest || binary === fastest)
     .map((model) => [binary, model]),
 );
+console.log(`models: ${models.join(', ')}; every binary is proved with ${smallest}`);
 
 let failed = 0;
 for (const [name, modelName] of pairs) {
